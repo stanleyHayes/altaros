@@ -1,0 +1,14 @@
+{
+  "name": "@altar-os/shared-types",
+  "private": true,
+  "version": "0.0.0",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "scripts": {
+    "lint": "eslint src/",
+    "test": "echo 'no tests yet'"
+  },
+  "devDependencies": {
+    "@altar-os/tsconfig": "*"
+  }
+}

@@ -1,0 +1,215 @@
+import React, { useState, useEffect } from 'react';
+import {
+  View,
+  Text,
+  FlatList,
+  StyleSheet,
+  TouchableOpacity,
+  ActivityIndicator,
+} from 'react-native';
+import { Card } from '../../components/common/Card';
+import { colors, typography, spacing, borderRadius } from '../../theme';
+import type { Sermon } from '../../services/spiritual.service';
+
+// TODO: Replace with real API call
+const mockSermons: Sermon[] = [
+  {
+    id: '1',
+    title: 'Walking in Faith',
+    speaker: 'Pastor James',
+    date: '2026-03-23',
+    duration: '42:15',
+    series: 'Faith Series',
+    description: 'Exploring what it means to truly walk by faith.',
+  },
+  {
+    id: '2',
+    title: 'The Power of Grace',
+    speaker: 'Pastor Sarah',
+    date: '2026-03-16',
+    duration: '38:30',
+    series: 'Grace Unbound',
+    description: 'Understanding the transformative power of God\'s grace.',
+  },
+  {
+    id: '3',
+    title: 'Hope in Uncertain Times',
+    speaker: 'Pastor James',
+    date: '2026-03-09',
+    duration: '45:00',
+    description: 'Finding hope when the world feels uncertain.',
+  },
+  {
+    id: '4',
+    title: 'Living with Purpose',
+    speaker: 'Guest Speaker Dr. Williams',
+    date: '2026-03-02',
+    duration: '35:45',
+    series: 'Purpose Driven',
+    description: 'Discovering your God-given purpose.',
+  },
+];
+
+export function SermonsScreen() {
+  const [sermons, setSermons] = useState<Sermon[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+
+  useEffect(() => {
+    // TODO: Replace with spiritualService.getSermons()
+    const loadSermons = async () => {
+      try {
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        setSermons(mockSermons);
+      } catch (error) {
+        console.error('Failed to load sermons:', error);
+      } finally {
+        setIsLoading(false);
+      }
+    };
+    loadSermons();
+  }, []);
+
+  const renderSermon = ({ item }: { item: Sermon }) => (
+    <Card style={styles.sermonCard}>
+      <View style={styles.sermonRow}>
+        <TouchableOpacity style={styles.playButton} activeOpacity={0.7}>
+          <Text style={styles.playIcon}>{'\u25B6'}</Text>
+        </TouchableOpacity>
+        <View style={styles.sermonInfo}>
+          <Text style={styles.sermonTitle}>{item.title}</Text>
+          <Text style={styles.sermonSpeaker}>{item.speaker}</Text>
+          <View style={styles.sermonMeta}>
+            <Text style={styles.metaText}>{item.date}</Text>
+            <Text style={styles.metaDot}>{'\u2022'}</Text>
+            <Text style={styles.metaText}>{item.duration}</Text>
+          </View>
+          {item.series && (
+            <View style={styles.seriesBadge}>
+              <Text style={styles.seriesText}>{item.series}</Text>
+            </View>
+          )}
+        </View>
+      </View>
+      {item.description && (
+        <Text style={styles.description} numberOfLines={2}>
+          {item.description}
+        </Text>
+      )}
+    </Card>
+  );
+
+  if (isLoading) {
+    return (
+      <View style={styles.loading}>
+        <ActivityIndicator size="large" color={colors.primary} />
+      </View>
+    );
+  }
+
+  return (
+    <FlatList
+      style={styles.container}
+      data={sermons}
+      keyExtractor={(item) => item.id}
+      renderItem={renderSermon}
+      contentContainerStyle={styles.list}
+      showsVerticalScrollIndicator={false}
+      ListEmptyComponent={
+        <View style={styles.empty}>
+          <Text style={styles.emptyText}>No sermons available yet.</Text>
+        </View>
+      }
+    />
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: colors.background,
+  },
+  loading: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: colors.background,
+  },
+  list: {
+    padding: spacing.xl,
+  },
+  sermonCard: {
+    marginBottom: spacing.md,
+  },
+  sermonRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+  },
+  playButton: {
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    backgroundColor: colors.primary,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: spacing.md,
+  },
+  playIcon: {
+    color: '#FFFFFF',
+    fontSize: 18,
+    marginLeft: 3,
+  },
+  sermonInfo: {
+    flex: 1,
+  },
+  sermonTitle: {
+    fontSize: typography.sizes.base,
+    fontWeight: typography.weights.semibold,
+    color: colors.text,
+  },
+  sermonSpeaker: {
+    fontSize: typography.sizes.md,
+    color: colors.textSecondary,
+    marginTop: 2,
+  },
+  sermonMeta: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: spacing.xs,
+  },
+  metaText: {
+    fontSize: typography.sizes.sm,
+    color: colors.muted,
+  },
+  metaDot: {
+    fontSize: typography.sizes.sm,
+    color: colors.muted,
+    marginHorizontal: spacing.xs,
+  },
+  seriesBadge: {
+    backgroundColor: colors.primaryLight + '20',
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 2,
+    borderRadius: borderRadius.sm,
+    alignSelf: 'flex-start',
+    marginTop: spacing.xs,
+  },
+  seriesText: {
+    fontSize: typography.sizes.xs,
+    color: colors.primary,
+    fontWeight: typography.weights.medium,
+  },
+  description: {
+    fontSize: typography.sizes.md,
+    color: colors.muted,
+    marginTop: spacing.sm,
+    lineHeight: 20,
+  },
+  empty: {
+    alignItems: 'center',
+    paddingTop: spacing['4xl'],
+  },
+  emptyText: {
+    fontSize: typography.sizes.base,
+    color: colors.muted,
+  },
+});

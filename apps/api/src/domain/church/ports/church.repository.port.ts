@@ -1,0 +1,32 @@
+import type { Church, PaginationQuery } from "@altar-os/shared-types";
+
+export interface CreateChurchData {
+  name: string;
+  slug: string;
+  address: string;
+  city: string;
+  country: string;
+  phone: string;
+  email: string;
+  website?: string;
+  logoUrl?: string;
+  bannerUrl?: string;
+  timezone: string;
+  currency: string;
+}
+
+export interface UpdateChurchData extends Partial<CreateChurchData> {}
+
+export interface PaginatedResult<T> {
+  data: T[];
+  total: number;
+}
+
+export interface IChurchRepository {
+  findById(id: string): Promise<Church | null>;
+  findBySlug(slug: string): Promise<Church | null>;
+  findAll(query: PaginationQuery): Promise<PaginatedResult<Church>>;
+  create(data: CreateChurchData): Promise<Church>;
+  update(id: string, data: UpdateChurchData): Promise<Church | null>;
+  delete(id: string): Promise<boolean>;
+}

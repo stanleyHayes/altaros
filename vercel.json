@@ -1,0 +1,6 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "buildCommand": "turbo run build --filter=@altar-os/dashboard --filter=@altar-os/web",
+  "installCommand": "npm install",
+  "framework": null
+}

@@ -1,0 +1,33 @@
+{
+  "name": "altar-os",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "turbo run dev --filter=@altar-os/api --filter=@altar-os/dashboard --filter=@altar-os/web --filter=@altar-os/marketing",
+    "dev:api": "turbo run dev --filter=@altar-os/api",
+    "dev:dashboard": "turbo run dev --filter=@altar-os/dashboard",
+    "dev:web": "turbo run dev --filter=@altar-os/web",
+    "dev:marketing": "turbo run dev --filter=@altar-os/marketing",
+    "dev:mobile": "npm run dev --workspace=@altar-os/mobile",
+    "build": "turbo run build",
+    "lint": "turbo run lint",
+    "test": "turbo run test",
+    "format": "prettier --write \"**/*.{ts,tsx,js,jsx,json,md}\""
+  },
+  "devDependencies": {
+    "turbo": "^2.8.21",
+    "prettier": "^3.8.1"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "overrides": {
+    "react-native": {
+      "react": "$react"
+    }
+  },
+  "packageManager": "npm@11.12.1"
+}
