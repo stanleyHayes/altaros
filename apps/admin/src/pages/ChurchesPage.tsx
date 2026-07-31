@@ -59,7 +59,7 @@ export default function ChurchesPage() {
 
   return (
     <Box>
-      <Typography variant="h4" fontWeight={700} sx={{ mb: 3 }}>
+      <Typography variant="h4" sx={{ fontWeight: 700, mb: 3 }}>
         Churches
       </Typography>
 
@@ -87,7 +87,9 @@ export default function ChurchesPage() {
                   {churches.map((church) => (
                     <TableRow key={church.id} hover>
                       <TableCell>
-                        <Typography fontWeight={600}>{church.name}</Typography>
+                        <Typography sx={{ fontWeight: 600 }}>
+                          {church.name}
+                        </Typography>
                         <Typography variant="caption" color="text.secondary">
                           {church.slug}
                         </Typography>

@@ -7,7 +7,6 @@
     "allowImportingTsExtensions": true,
     "noEmit": true,
     "strict": true,
-    "baseUrl": ".",
     "paths": {
       "@/*": ["./src/*"]
     }

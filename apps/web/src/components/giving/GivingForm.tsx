@@ -89,10 +89,12 @@ export default function GivingForm({ onSubmit }: GivingFormProps) {
             type="number"
             error={!!errors.amount}
             helperText={errors.amount?.message}
-            InputProps={{
-              startAdornment: (
-                <InputAdornment position="start">$</InputAdornment>
-              ),
+            slotProps={{
+              input: {
+                startAdornment: (
+                  <InputAdornment position="start">$</InputAdornment>
+                ),
+              },
             }}
             {...register("amount")}
           />

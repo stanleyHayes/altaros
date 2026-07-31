@@ -101,7 +101,7 @@ export default function CreatePostDialog({
               rows={4}
               error={!!errors.content}
               helperText={errors.content?.message}
-              inputProps={{ maxLength: MAX_CHARS }}
+              slotProps={{ htmlInput: { maxLength: MAX_CHARS } }}
               {...register("content")}
             />
             <Typography

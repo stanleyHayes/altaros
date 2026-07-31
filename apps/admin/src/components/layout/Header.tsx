@@ -31,7 +31,7 @@ export default function Header({ onMenuToggle }: HeaderProps) {
           <MenuIcon />
         </IconButton>
 
-        <Typography variant="h6" fontWeight={600} sx={{ flexGrow: 1 }}>
+        <Typography variant="h6" sx={{ fontWeight: 600, flexGrow: 1 }}>
           Platform Admin
         </Typography>
 
@@ -52,7 +52,11 @@ export default function Header({ onMenuToggle }: HeaderProps) {
             {user?.name?.charAt(0) ?? "A"}
           </Avatar>
           <Box sx={{ display: { xs: "none", sm: "block" } }}>
-            <Typography variant="body2" fontWeight={600} color="text.primary">
+            <Typography
+              variant="body2"
+              color="text.primary"
+              sx={{ fontWeight: 600 }}
+            >
               {user?.name ?? "Admin"}
             </Typography>
             <Typography variant="caption" color="text.secondary">

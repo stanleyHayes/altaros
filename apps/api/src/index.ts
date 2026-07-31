@@ -10,7 +10,13 @@ const app = express();
 
 // Security & parsing middleware
 app.use(helmet());
-app.use(cors({ origin: env.CORS_ORIGIN, credentials: true }));
+// CORS_ORIGIN may hold a single origin or a comma-separated list, so the
+// dashboard, web, admin, marketing and Expo dev servers can all call the API.
+const corsOrigins = env.CORS_ORIGIN.split(",")
+  .map((origin) => origin.trim())
+  .filter(Boolean);
+
+app.use(cors({ origin: corsOrigins, credentials: true }));
 app.use(express.json());
 
 // Health check

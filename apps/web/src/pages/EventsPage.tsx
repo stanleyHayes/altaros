@@ -70,7 +70,7 @@ const mockEvents = [
 export default function EventsPage() {
   return (
     <Box sx={{ py: 2 }}>
-      <Typography variant="h5" fontWeight={700} sx={{ mb: 0.5 }}>
+      <Typography variant="h5" sx={{ fontWeight: 700, mb: 0.5 }}>
         Events
       </Typography>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>

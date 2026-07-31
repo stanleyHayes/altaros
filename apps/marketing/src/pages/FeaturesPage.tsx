@@ -194,8 +194,8 @@ export default function FeaturesPage() {
             <Grid
               container
               spacing={6}
-              alignItems="center"
               direction={index % 2 === 0 ? "row" : "row-reverse"}
+              sx={{ alignItems: "center" }}
             >
               {/* Text side */}
               <Grid size={{ xs: 12, md: 6 }}>
@@ -233,9 +233,13 @@ export default function FeaturesPage() {
                       </ListItemIcon>
                       <ListItemText
                         primary={bullet}
-                        primaryTypographyProps={{
-                          fontSize: "0.95rem",
-                          color: "text.secondary",
+                        slotProps={{
+                          primary: {
+                            sx: {
+                              fontSize: "0.95rem",
+                              color: "text.secondary",
+                            },
+                          },
                         }}
                       />
                     </ListItem>

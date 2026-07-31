@@ -207,7 +207,7 @@ export default function EventsPage() {
           mb: 3,
         }}
       >
-        <Typography variant="h4" fontWeight={700}>
+        <Typography variant="h4" sx={{ fontWeight: 700 }}>
           Events
         </Typography>
         <Box sx={{ display: "flex", gap: 2 }}>

@@ -69,7 +69,7 @@ export function GivingHistoryScreen() {
     // TODO: Replace with givingService.getHistory()
     const loadHistory = async () => {
       try {
-        await new Promise((resolve) => setTimeout(resolve, 500));
+        await new Promise<void>((resolve) => { setTimeout(() => resolve(), 500); });
         setRecords(mockHistory);
       } catch (error) {
         console.error('Failed to load giving history:', error);

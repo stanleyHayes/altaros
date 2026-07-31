@@ -135,7 +135,7 @@ const upcomingEvents = [
 export default function DashboardPage() {
   return (
     <Box>
-      <Typography variant="h4" fontWeight={700} sx={{ mb: 3 }}>
+      <Typography variant="h4" sx={{ fontWeight: 700, mb: 3 }}>
         Dashboard
       </Typography>
 
@@ -192,7 +192,7 @@ export default function DashboardPage() {
         <Grid size={{ xs: 12, md: 7 }}>
           <Card sx={{ height: "100%" }}>
             <CardContent>
-              <Typography variant="h6" fontWeight={600} sx={{ mb: 0.5 }}>
+              <Typography variant="h6" sx={{ fontWeight: 600, mb: 0.5 }}>
                 Giving Trends
               </Typography>
               <Typography
@@ -255,7 +255,7 @@ export default function DashboardPage() {
         <Grid size={{ xs: 12, md: 5 }}>
           <Card sx={{ height: "100%" }}>
             <CardContent>
-              <Typography variant="h6" fontWeight={600} sx={{ mb: 0.5 }}>
+              <Typography variant="h6" sx={{ fontWeight: 600, mb: 0.5 }}>
                 Attendance Trends
               </Typography>
               <Typography
@@ -296,7 +296,7 @@ export default function DashboardPage() {
         <Grid size={{ xs: 12, md: 7 }}>
           <Card>
             <CardContent>
-              <Typography variant="h6" fontWeight={600} sx={{ mb: 2 }}>
+              <Typography variant="h6" sx={{ fontWeight: 600, mb: 2 }}>
                 Recent Members
               </Typography>
               <Table size="small">
@@ -328,7 +328,7 @@ export default function DashboardPage() {
                               .map((n) => n[0])
                               .join("")}
                           </Avatar>
-                          <Typography variant="body2" fontWeight={500}>
+                          <Typography variant="body2" sx={{ fontWeight: 500 }}>
                             {member.name}
                           </Typography>
                         </Box>
@@ -363,7 +363,7 @@ export default function DashboardPage() {
         <Grid size={{ xs: 12, md: 5 }}>
           <Card sx={{ height: "100%" }}>
             <CardContent>
-              <Typography variant="h6" fontWeight={600} sx={{ mb: 2 }}>
+              <Typography variant="h6" sx={{ fontWeight: 600, mb: 2 }}>
                 Upcoming Events
               </Typography>
               <List disablePadding>
@@ -392,7 +392,7 @@ export default function DashboardPage() {
                     </ListItemAvatar>
                     <ListItemText
                       primary={
-                        <Typography variant="body2" fontWeight={600}>
+                        <Typography variant="body2" sx={{ fontWeight: 600 }}>
                           {event.title}
                         </Typography>
                       }

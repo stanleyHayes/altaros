@@ -29,7 +29,7 @@ export function CreatePostScreen() {
     setIsSubmitting(true);
     try {
       // TODO: Replace with socialService.createPost({ content })
-      await new Promise((resolve) => setTimeout(resolve, 500));
+      await new Promise<void>((resolve) => { setTimeout(() => resolve(), 500); });
       Alert.alert('Posted!', 'Your post has been shared with the community.', [
         { text: 'OK', onPress: () => navigation.goBack() },
       ]);

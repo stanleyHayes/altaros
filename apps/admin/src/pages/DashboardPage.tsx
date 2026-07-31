@@ -4,7 +4,7 @@ import {
   Church as ChurchIcon,
   People as PeopleIcon,
   AttachMoney as MoneyIcon,
-  PersonOutline as UserIcon,
+  PersonOutlined as UserIcon,
 } from "@mui/icons-material";
 import StatCard from "@/components/ui/StatCard";
 import AdminService, { type PlatformStats } from "@/services/admin.service";
@@ -30,7 +30,7 @@ export default function DashboardPage() {
 
   return (
     <Box>
-      <Typography variant="h4" fontWeight={700} sx={{ mb: 3 }}>
+      <Typography variant="h4" sx={{ fontWeight: 700, mb: 3 }}>
         Platform Overview
       </Typography>
 
@@ -77,31 +77,31 @@ export default function DashboardPage() {
         <Grid size={{ xs: 12, md: 6 }}>
           <Card>
             <CardContent sx={{ p: 3 }}>
-              <Typography variant="h6" fontWeight={600} sx={{ mb: 2 }}>
+              <Typography variant="h6" sx={{ fontWeight: 600, mb: 2 }}>
                 Quick Stats
               </Typography>
               <Box sx={{ display: "flex", flexDirection: "column", gap: 2 }}>
                 <Box sx={{ display: "flex", justifyContent: "space-between" }}>
                   <Typography color="text.secondary">Active Churches</Typography>
-                  <Typography fontWeight={600}>
+                  <Typography sx={{ fontWeight: 600 }}>
                     {stats?.activeChurches ?? 0} / {stats?.totalChurches ?? 0}
                   </Typography>
                 </Box>
                 <Box sx={{ display: "flex", justifyContent: "space-between" }}>
                   <Typography color="text.secondary">Total Users</Typography>
-                  <Typography fontWeight={600}>
+                  <Typography sx={{ fontWeight: 600 }}>
                     {stats?.totalUsers ?? 0}
                   </Typography>
                 </Box>
                 <Box sx={{ display: "flex", justifyContent: "space-between" }}>
                   <Typography color="text.secondary">Active Users</Typography>
-                  <Typography fontWeight={600}>
+                  <Typography sx={{ fontWeight: 600 }}>
                     {stats?.activeUsers ?? 0}
                   </Typography>
                 </Box>
                 <Box sx={{ display: "flex", justifyContent: "space-between" }}>
                   <Typography color="text.secondary">Total Members</Typography>
-                  <Typography fontWeight={600}>
+                  <Typography sx={{ fontWeight: 600 }}>
                     {(stats?.totalMembers ?? 0).toLocaleString()}
                   </Typography>
                 </Box>
@@ -112,25 +112,25 @@ export default function DashboardPage() {
         <Grid size={{ xs: 12, md: 6 }}>
           <Card>
             <CardContent sx={{ p: 3 }}>
-              <Typography variant="h6" fontWeight={600} sx={{ mb: 2 }}>
+              <Typography variant="h6" sx={{ fontWeight: 600, mb: 2 }}>
                 Platform Health
               </Typography>
               <Box sx={{ display: "flex", flexDirection: "column", gap: 2 }}>
                 <Box sx={{ display: "flex", justifyContent: "space-between" }}>
                   <Typography color="text.secondary">API Status</Typography>
-                  <Typography fontWeight={600} color="success.main">
+                  <Typography color="success.main" sx={{ fontWeight: 600 }}>
                     Operational
                   </Typography>
                 </Box>
                 <Box sx={{ display: "flex", justifyContent: "space-between" }}>
                   <Typography color="text.secondary">Database</Typography>
-                  <Typography fontWeight={600} color="success.main">
+                  <Typography color="success.main" sx={{ fontWeight: 600 }}>
                     Connected
                   </Typography>
                 </Box>
                 <Box sx={{ display: "flex", justifyContent: "space-between" }}>
                   <Typography color="text.secondary">Revenue (Total)</Typography>
-                  <Typography fontWeight={600}>
+                  <Typography sx={{ fontWeight: 600 }}>
                     ${((stats?.totalRevenue ?? 0) / 100).toLocaleString()}
                   </Typography>
                 </Box>

@@ -80,7 +80,7 @@ export default function TransactionFormDialog({
 
   return (
     <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth>
-      <DialogTitle fontWeight={600}>Add Transaction</DialogTitle>
+      <DialogTitle sx={{ fontWeight: 600 }}>Add Transaction</DialogTitle>
       <form onSubmit={handleSubmit(handleFormSubmit)}>
         <DialogContent dividers>
           <Grid container spacing={2}>

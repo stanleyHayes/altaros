@@ -198,7 +198,7 @@ export default function WelfarePage() {
 
   return (
     <Box sx={{ py: 2 }}>
-      <Typography variant="h5" fontWeight={700} sx={{ mb: 2 }}>
+      <Typography variant="h5" sx={{ fontWeight: 700, mb: 2 }}>
         Welfare &amp; Support
       </Typography>
 
@@ -370,7 +370,7 @@ export default function WelfarePage() {
               <Typography variant="h6" sx={{ mb: 1 }}>
                 Church Emergency Line
               </Typography>
-              <Typography variant="h4" fontWeight={700} sx={{ mb: 1 }}>
+              <Typography variant="h4" sx={{ fontWeight: 700, mb: 1 }}>
                 (555) 123-4567
               </Typography>
               <Typography variant="body2" sx={{ opacity: 0.85 }}>
@@ -414,7 +414,7 @@ export default function WelfarePage() {
               severity={alert.isActive ? "error" : "info"}
               sx={{ mb: 2, borderRadius: 3 }}
             >
-              <Typography variant="subtitle2" fontWeight={600}>
+              <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
                 {alert.title}
               </Typography>
               <Typography variant="body2">{alert.description}</Typography>
@@ -434,7 +434,7 @@ export default function WelfarePage() {
             <CardContent>
               <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                 <Box>
-                  <Typography variant="subtitle1" fontWeight={600}>
+                  <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>
                     Volunteer Availability
                   </Typography>
                   <Typography variant="body2" color="text.secondary">
@@ -467,7 +467,7 @@ export default function WelfarePage() {
           {mockVolunteerOpportunities.map((opp) => (
             <Card key={opp.id} sx={{ mb: 2 }}>
               <CardContent>
-                <Typography variant="subtitle1" fontWeight={600} sx={{ mb: 0.5 }}>
+                <Typography variant="subtitle1" sx={{ fontWeight: 600, mb: 0.5 }}>
                   {opp.title}
                 </Typography>
                 <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>

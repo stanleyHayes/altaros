@@ -84,7 +84,7 @@ export default function LoginPage() {
           >
             <AdminIcon sx={{ color: "#FFB300", fontSize: 36 }} />
           </Box>
-          <Typography variant="h4" fontWeight={700} color="#E5E7EB">
+          <Typography variant="h4" color="#E5E7EB" sx={{ fontWeight: 700 }}>
             ALTAR OS
           </Typography>
           <Typography variant="body2" color="#9CA3AF" sx={{ mt: 0.5 }}>

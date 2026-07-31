@@ -177,7 +177,7 @@ export default function MembersPage() {
       label: "Name",
       minWidth: 180,
       render: (row) => (
-        <Typography variant="body2" fontWeight={500}>
+        <Typography variant="body2" sx={{ fontWeight: 500 }}>
           {row.firstName} {row.lastName}
         </Typography>
       ),
@@ -259,7 +259,7 @@ export default function MembersPage() {
           mb: 3,
         }}
       >
-        <Typography variant="h4" fontWeight={700}>
+        <Typography variant="h4" sx={{ fontWeight: 700 }}>
           Members
         </Typography>
         <Button

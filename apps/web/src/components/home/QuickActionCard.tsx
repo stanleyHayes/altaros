@@ -51,9 +51,8 @@ export default function QuickActionCard({
         </Box>
         <Typography
           variant="caption"
-          fontWeight={600}
           color="text.primary"
-          textAlign="center"
+          sx={{ fontWeight: 600, textAlign: "center" }}
         >
           {label}
         </Typography>

@@ -89,7 +89,7 @@ export function EventsScreen() {
     // TODO: Replace with eventService.getEvents()
     const loadEvents = async () => {
       try {
-        await new Promise((resolve) => setTimeout(resolve, 500));
+        await new Promise<void>((resolve) => { setTimeout(() => resolve(), 500); });
         setEvents(mockEvents);
       } catch (error) {
         console.error('Failed to load events:', error);

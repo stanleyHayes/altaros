@@ -47,7 +47,7 @@ export default function SystemHealthPage() {
 
   return (
     <Box>
-      <Typography variant="h4" fontWeight={700} sx={{ mb: 3 }}>
+      <Typography variant="h4" sx={{ fontWeight: 700, mb: 3 }}>
         System Health
       </Typography>
 
@@ -55,7 +55,7 @@ export default function SystemHealthPage() {
         <Grid size={{ xs: 12, md: 6 }}>
           <Card>
             <CardContent sx={{ p: 3 }}>
-              <Typography variant="h6" fontWeight={600} sx={{ mb: 3 }}>
+              <Typography variant="h6" sx={{ fontWeight: 600, mb: 3 }}>
                 Status
               </Typography>
               <Box sx={{ display: "flex", flexDirection: "column", gap: 2.5 }}>
@@ -87,13 +87,13 @@ export default function SystemHealthPage() {
                 </Box>
                 <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                   <Typography color="text.secondary">Uptime</Typography>
-                  <Typography fontWeight={600}>
+                  <Typography sx={{ fontWeight: 600 }}>
                     {health ? formatUptime(health.uptime) : "—"}
                   </Typography>
                 </Box>
                 <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                   <Typography color="text.secondary">Node Version</Typography>
-                  <Typography fontWeight={600}>
+                  <Typography sx={{ fontWeight: 600 }}>
                     {health?.nodeVersion ?? "—"}
                   </Typography>
                 </Box>
@@ -105,31 +105,31 @@ export default function SystemHealthPage() {
         <Grid size={{ xs: 12, md: 6 }}>
           <Card>
             <CardContent sx={{ p: 3 }}>
-              <Typography variant="h6" fontWeight={600} sx={{ mb: 3 }}>
+              <Typography variant="h6" sx={{ fontWeight: 600, mb: 3 }}>
                 Memory Usage
               </Typography>
               <Box sx={{ display: "flex", flexDirection: "column", gap: 2.5 }}>
                 <Box sx={{ display: "flex", justifyContent: "space-between" }}>
                   <Typography color="text.secondary">Heap Used</Typography>
-                  <Typography fontWeight={600}>
+                  <Typography sx={{ fontWeight: 600 }}>
                     {health?.memory.heapUsed ?? 0} MB
                   </Typography>
                 </Box>
                 <Box sx={{ display: "flex", justifyContent: "space-between" }}>
                   <Typography color="text.secondary">Heap Total</Typography>
-                  <Typography fontWeight={600}>
+                  <Typography sx={{ fontWeight: 600 }}>
                     {health?.memory.heapTotal ?? 0} MB
                   </Typography>
                 </Box>
                 <Box sx={{ display: "flex", justifyContent: "space-between" }}>
                   <Typography color="text.secondary">RSS</Typography>
-                  <Typography fontWeight={600}>
+                  <Typography sx={{ fontWeight: 600 }}>
                     {health?.memory.rss ?? 0} MB
                   </Typography>
                 </Box>
                 <Box sx={{ display: "flex", justifyContent: "space-between" }}>
                   <Typography color="text.secondary">Last Check</Typography>
-                  <Typography fontWeight={600}>
+                  <Typography sx={{ fontWeight: 600 }}>
                     {health
                       ? new Date(health.timestamp).toLocaleTimeString()
                       : "—"}

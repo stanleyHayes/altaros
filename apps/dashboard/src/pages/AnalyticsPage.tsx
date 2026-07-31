@@ -111,7 +111,7 @@ export default function AnalyticsPage() {
 
   return (
     <Box>
-      <Typography variant="h4" fontWeight={700} sx={{ mb: 3 }}>
+      <Typography variant="h4" sx={{ fontWeight: 700, mb: 3 }}>
         Analytics
       </Typography>
 
@@ -168,7 +168,7 @@ export default function AnalyticsPage() {
         <Grid size={{ xs: 12, md: 8 }}>
           <Card sx={{ height: "100%" }}>
             <CardContent>
-              <Typography variant="h6" fontWeight={600} sx={{ mb: 0.5 }}>
+              <Typography variant="h6" sx={{ fontWeight: 600, mb: 0.5 }}>
                 Attendance Trends
               </Typography>
               <Typography
@@ -217,7 +217,7 @@ export default function AnalyticsPage() {
         <Grid size={{ xs: 12, md: 4 }}>
           <Card sx={{ height: "100%" }}>
             <CardContent>
-              <Typography variant="h6" fontWeight={600} sx={{ mb: 0.5 }}>
+              <Typography variant="h6" sx={{ fontWeight: 600, mb: 0.5 }}>
                 Giving Breakdown
               </Typography>
               <Typography
@@ -254,7 +254,7 @@ export default function AnalyticsPage() {
                 </PieChart>
               </ResponsiveContainer>
               <Box sx={{ textAlign: "center", mt: 1 }}>
-                <Typography variant="h5" fontWeight={700}>
+                <Typography variant="h5" sx={{ fontWeight: 700 }}>
                   ${totalGiving.toLocaleString()}
                 </Typography>
                 <Typography variant="body2" color="text.secondary">
@@ -271,7 +271,7 @@ export default function AnalyticsPage() {
         <Grid size={{ xs: 12 }}>
           <Card>
             <CardContent>
-              <Typography variant="h6" fontWeight={600} sx={{ mb: 0.5 }}>
+              <Typography variant="h6" sx={{ fontWeight: 600, mb: 0.5 }}>
                 Member Growth
               </Typography>
               <Typography
@@ -360,7 +360,7 @@ export default function AnalyticsPage() {
                 py: 4,
               }}
             >
-              <Typography variant="h6" fontWeight={600} sx={{ mb: 3 }}>
+              <Typography variant="h6" sx={{ fontWeight: 600, mb: 3 }}>
                 Average Engagement
               </Typography>
               <Box sx={{ position: "relative", display: "inline-flex", mb: 2 }}>
@@ -384,7 +384,7 @@ export default function AnalyticsPage() {
                     justifyContent: "center",
                   }}
                 >
-                  <Typography variant="h3" fontWeight={700}>
+                  <Typography variant="h3" sx={{ fontWeight: 700 }}>
                     {avgEngagementScore}
                   </Typography>
                   <Typography variant="caption" color="text.secondary">
@@ -392,7 +392,7 @@ export default function AnalyticsPage() {
                   </Typography>
                 </Box>
               </Box>
-              <Typography variant="body2" color="text.secondary" textAlign="center">
+              <Typography variant="body2" color="text.secondary" sx={{ textAlign: "center" }}>
                 Based on attendance, giving, participation, and spiritual growth
               </Typography>
             </CardContent>
@@ -402,7 +402,7 @@ export default function AnalyticsPage() {
         <Grid size={{ xs: 12, md: 8 }}>
           <Card sx={{ height: "100%" }}>
             <CardContent>
-              <Typography variant="h6" fontWeight={600} sx={{ mb: 0.5 }}>
+              <Typography variant="h6" sx={{ fontWeight: 600, mb: 0.5 }}>
                 Top Engaged Members
               </Typography>
               <Typography
@@ -452,13 +452,13 @@ export default function AnalyticsPage() {
                             mb: 0.5,
                           }}
                         >
-                          <Typography variant="body1" fontWeight={600}>
+                          <Typography variant="body1" sx={{ fontWeight: 600 }}>
                             {member.name}
                           </Typography>
                           <Typography
                             variant="body2"
-                            fontWeight={700}
                             color="primary.main"
+                            sx={{ fontWeight: 700 }}
                           >
                             {member.score}/100
                           </Typography>
@@ -485,7 +485,7 @@ export default function AnalyticsPage() {
                                 <Typography variant="caption">
                                   {item.label}
                                 </Typography>
-                                <Typography variant="caption" fontWeight={600}>
+                                <Typography variant="caption" sx={{ fontWeight: 600 }}>
                                   {item.value}
                                 </Typography>
                               </Box>

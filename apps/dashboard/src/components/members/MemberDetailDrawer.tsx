@@ -78,7 +78,7 @@ export default function MemberDetailDrawer({
       anchor="right"
       open={open}
       onClose={onClose}
-      PaperProps={{ sx: { width: { xs: "100%", sm: 420 } } }}
+      slotProps={{ paper: { sx: { width: { xs: "100%", sm: 420 } } } }}
     >
       <Box sx={{ p: 3 }}>
         {/* Header */}
@@ -90,7 +90,7 @@ export default function MemberDetailDrawer({
             mb: 3,
           }}
         >
-          <Typography variant="h6" fontWeight={600}>
+          <Typography variant="h6" sx={{ fontWeight: 600 }}>
             Member Details
           </Typography>
           <IconButton onClick={onClose} size="small">
@@ -118,7 +118,7 @@ export default function MemberDetailDrawer({
           >
             {initials}
           </Avatar>
-          <Typography variant="h6" fontWeight={600}>
+          <Typography variant="h6" sx={{ fontWeight: 600 }}>
             {fullName}
           </Typography>
           <Box sx={{ display: "flex", gap: 1, mt: 1 }}>
@@ -142,7 +142,7 @@ export default function MemberDetailDrawer({
         <Divider sx={{ mb: 2 }} />
 
         {/* Contact Information */}
-        <Typography variant="subtitle2" fontWeight={600} sx={{ mb: 1 }}>
+        <Typography variant="subtitle2" sx={{ fontWeight: 600, mb: 1 }}>
           Contact Information
         </Typography>
         <List dense disablePadding>
@@ -156,7 +156,7 @@ export default function MemberDetailDrawer({
                   </Typography>
                 }
                 secondary={
-                  <Typography variant="body2" fontWeight={500}>
+                  <Typography variant="body2" sx={{ fontWeight: 500 }}>
                     {item.value}
                   </Typography>
                 }
@@ -173,7 +173,7 @@ export default function MemberDetailDrawer({
         <Divider sx={{ my: 2 }} />
 
         {/* Departments / Groups */}
-        <Typography variant="subtitle2" fontWeight={600} sx={{ mb: 1 }}>
+        <Typography variant="subtitle2" sx={{ fontWeight: 600, mb: 1 }}>
           Departments
         </Typography>
         {member.groups && member.groups.length > 0 ? (
@@ -195,7 +195,7 @@ export default function MemberDetailDrawer({
         <Divider sx={{ my: 2 }} />
 
         {/* Giving History Summary */}
-        <Typography variant="subtitle2" fontWeight={600} sx={{ mb: 1.5 }}>
+        <Typography variant="subtitle2" sx={{ fontWeight: 600, mb: 1.5 }}>
           Recent Giving
         </Typography>
         <Table size="small">
@@ -218,7 +218,7 @@ export default function MemberDetailDrawer({
                   <Typography variant="body2">{entry.type}</Typography>
                 </TableCell>
                 <TableCell sx={{ py: 0.5 }} align="right">
-                  <Typography variant="body2" fontWeight={500}>
+                  <Typography variant="body2" sx={{ fontWeight: 500 }}>
                     {entry.amount}
                   </Typography>
                 </TableCell>

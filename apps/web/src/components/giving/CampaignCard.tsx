@@ -38,7 +38,7 @@ export default function CampaignCard({
         />
       )}
       <CardContent sx={{ p: 2.5 }}>
-        <Typography variant="subtitle1" fontWeight={700} gutterBottom>
+        <Typography variant="subtitle1" gutterBottom sx={{ fontWeight: 700 }}>
           {title}
         </Typography>
         <Typography
@@ -62,7 +62,7 @@ export default function CampaignCard({
               mb: 0.5,
             }}
           >
-            <Typography variant="caption" fontWeight={600} color="primary.main">
+            <Typography variant="caption" color="primary.main" sx={{ fontWeight: 600 }}>
               ${raisedAmount.toLocaleString()} raised
             </Typography>
             <Typography variant="caption" color="text.secondary">

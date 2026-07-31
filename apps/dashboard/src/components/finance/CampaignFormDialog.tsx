@@ -82,7 +82,7 @@ export default function CampaignFormDialog({
 
   return (
     <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth>
-      <DialogTitle fontWeight={600}>
+      <DialogTitle sx={{ fontWeight: 600 }}>
         {isEdit ? "Edit Campaign" : "Add Campaign"}
       </DialogTitle>
       <form onSubmit={handleSubmit(handleFormSubmit)}>

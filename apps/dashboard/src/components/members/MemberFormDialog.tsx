@@ -97,7 +97,7 @@ export default function MemberFormDialog({
 
   return (
     <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth>
-      <DialogTitle fontWeight={600}>
+      <DialogTitle sx={{ fontWeight: 600 }}>
         {isEdit ? "Edit Member" : "Add Member"}
       </DialogTitle>
       <form onSubmit={handleSubmit(handleFormSubmit)}>

@@ -84,7 +84,7 @@ const authService = {
     } catch {
       // Proceed with local logout even if API call fails
     }
-    await AsyncStorage.multiRemove(['accessToken', 'refreshToken', 'user']);
+    await Promise.all(['accessToken', 'refreshToken', 'user'].map((k) => AsyncStorage.removeItem(k)));
   },
 
   async getStoredUser(): Promise<User | null> {

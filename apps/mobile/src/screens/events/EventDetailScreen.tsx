@@ -52,7 +52,7 @@ export function EventDetailScreen() {
     // TODO: Replace with eventService.getEvent(eventId)
     const loadEvent = async () => {
       try {
-        await new Promise((resolve) => setTimeout(resolve, 500));
+        await new Promise<void>((resolve) => { setTimeout(() => resolve(), 500); });
         setEvent(mockEvent);
       } catch (error) {
         console.error('Failed to load event:', error);

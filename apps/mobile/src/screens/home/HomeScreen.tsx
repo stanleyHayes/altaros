@@ -118,7 +118,10 @@ export function HomeScreen() {
           <TouchableOpacity
             key={action.label}
             style={styles.quickAction}
-            onPress={() => navigation.navigate(action.screen)}
+            // `screen` is a union of route names, so the params type cannot be
+            // narrowed statically. `as never` is React Navigation's documented
+            // escape hatch for dynamically-chosen routes that take no params.
+            onPress={() => navigation.navigate(action.screen as never)}
             activeOpacity={0.7}
           >
             <View

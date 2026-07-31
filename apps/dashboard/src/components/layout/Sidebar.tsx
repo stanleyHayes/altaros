@@ -90,7 +90,7 @@ export default function Sidebar({
         {!collapsed && (
           <Box sx={{ display: "flex", alignItems: "center", gap: 1.5 }}>
             <ChurchIcon sx={{ color: "primary.main", fontSize: 32 }} />
-            <Typography variant="h6" color="primary" fontWeight={700}>
+            <Typography variant="h6" color="primary" sx={{ fontWeight: 700 }}>
               ALTAR OS
             </Typography>
           </Box>
@@ -134,9 +134,13 @@ export default function Sidebar({
               {!collapsed && (
                 <ListItemText
                   primary={item.label}
-                  primaryTypographyProps={{
-                    fontSize: "0.9375rem",
-                    fontWeight: isActive ? 600 : 400,
+                  slotProps={{
+                    primary: {
+                      sx: {
+                        fontSize: "0.9375rem",
+                        fontWeight: isActive ? 600 : 400,
+                      },
+                    },
                   }}
                 />
               )}

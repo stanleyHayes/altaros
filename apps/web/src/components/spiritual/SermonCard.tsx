@@ -59,7 +59,7 @@ export default function SermonCard({
             )}
           </Box>
           <Box sx={{ flex: 1, minWidth: 0 }}>
-            <Typography variant="subtitle2" fontWeight={700} noWrap>
+            <Typography variant="subtitle2" noWrap sx={{ fontWeight: 700 }}>
               {title}
             </Typography>
             <Typography variant="caption" color="text.secondary">
@@ -77,7 +77,7 @@ export default function SermonCard({
               <Typography
                 variant="caption"
                 color="primary.main"
-                fontWeight={500}
+                sx={{ fontWeight: 500 }}
               >
                 {series}
               </Typography>

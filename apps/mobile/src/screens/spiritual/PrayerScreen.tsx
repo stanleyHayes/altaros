@@ -65,7 +65,7 @@ export function PrayerScreen() {
     setIsSubmitting(true);
     try {
       // TODO: Replace with spiritualService.createPrayerRequest()
-      await new Promise((resolve) => setTimeout(resolve, 500));
+      await new Promise<void>((resolve) => { setTimeout(() => resolve(), 500); });
       Alert.alert('Prayer Request Submitted', 'Your prayer request has been shared with the community.');
       setTitle('');
       setDescription('');

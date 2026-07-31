@@ -25,7 +25,7 @@ export function validate(schemas: ValidationSchemas) {
         res.status(400).json({
           success: false,
           message: "Validation failed",
-          errors: error.errors.map(
+          errors: error.issues.map(
             (e) => `${e.path.join(".")}: ${e.message}`,
           ),
         });

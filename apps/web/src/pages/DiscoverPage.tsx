@@ -164,7 +164,7 @@ export default function DiscoverPage() {
     <Box sx={{ py: 2 }}>
       {/* Header */}
       <Box sx={{ mb: 2.5 }}>
-        <Typography variant="h5" fontWeight={700}>
+        <Typography variant="h5" sx={{ fontWeight: 700 }}>
           Discover Churches
         </Typography>
         <Typography variant="body2" color="text.secondary">
@@ -266,8 +266,8 @@ export default function DiscoverPage() {
                     >
                       <Typography
                         variant="subtitle2"
-                        fontWeight={600}
                         noWrap
+                        sx={{ fontWeight: 600 }}
                       >
                         {church.churchName}
                       </Typography>

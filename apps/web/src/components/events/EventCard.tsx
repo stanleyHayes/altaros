@@ -85,7 +85,7 @@ export default function EventCard({
           <Typography variant="caption" sx={{ opacity: 0.8, lineHeight: 1 }}>
             {dayOfWeek}
           </Typography>
-          <Typography variant="h5" fontWeight={700} sx={{ lineHeight: 1.2 }}>
+          <Typography variant="h5" sx={{ fontWeight: 700, lineHeight: 1.2 }}>
             {dayNum}
           </Typography>
           <Typography variant="caption" sx={{ opacity: 0.8, lineHeight: 1 }}>
@@ -96,7 +96,7 @@ export default function EventCard({
         {/* Details */}
         <Box sx={{ flex: 1, minWidth: 0 }}>
           <Box sx={{ display: "flex", alignItems: "center", gap: 1, mb: 0.5 }}>
-            <Typography variant="subtitle1" fontWeight={700} noWrap sx={{ flex: 1 }}>
+            <Typography variant="subtitle1" noWrap sx={{ fontWeight: 700, flex: 1 }}>
               {title}
             </Typography>
             <Chip label={category} size="small" variant="outlined" />
@@ -188,7 +188,9 @@ export default function EventCard({
             value={checkInCode}
             onChange={(e) => setCheckInCode(e.target.value.toUpperCase())}
             placeholder="e.g. A1B2C3D4"
-            inputProps={{ style: { letterSpacing: 2, fontFamily: "monospace" } }}
+            slotProps={{
+              htmlInput: { style: { letterSpacing: 2, fontFamily: "monospace" } },
+            }}
           />
         </DialogContent>
         <DialogActions>

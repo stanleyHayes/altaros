@@ -51,7 +51,7 @@ export default function GivingHistoryList({ records }: GivingHistoryListProps) {
             >
               <Box>
                 <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-                  <Typography variant="subtitle2" fontWeight={600}>
+                  <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
                     {record.type.charAt(0).toUpperCase() + record.type.slice(1)}
                   </Typography>
                   <Chip
@@ -66,7 +66,7 @@ export default function GivingHistoryList({ records }: GivingHistoryListProps) {
                   {record.date} &middot; Ref: {record.reference}
                 </Typography>
               </Box>
-              <Typography variant="subtitle1" fontWeight={700} color="primary.main">
+              <Typography variant="subtitle1" color="primary.main" sx={{ fontWeight: 700 }}>
                 ${record.amount.toFixed(2)}
               </Typography>
             </Box>

@@ -173,8 +173,7 @@ export default function OtpPage() {
         <Typography
           component="span"
           variant="body2"
-          fontWeight={600}
-          sx={{ color: "#6B4C9A" }}
+          sx={{ fontWeight: 600, color: "#6B4C9A" }}
         >
           {contact}
         </Typography>

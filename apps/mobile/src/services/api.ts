@@ -67,7 +67,7 @@ api.interceptors.response.use(
 );
 
 async function clearTokens() {
-  await AsyncStorage.multiRemove(['accessToken', 'refreshToken', 'user']);
+  await Promise.all(['accessToken', 'refreshToken', 'user'].map((k) => AsyncStorage.removeItem(k)));
 }
 
 export { clearTokens };

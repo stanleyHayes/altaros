@@ -104,7 +104,7 @@ export default function ProfilePage() {
           >
             {fullName.charAt(0)}
           </Avatar>
-          <Typography variant="h5" fontWeight={700}>
+          <Typography variant="h5" sx={{ fontWeight: 700 }}>
             {fullName}
           </Typography>
           <Typography variant="body2" color="text.secondary">
@@ -169,7 +169,7 @@ export default function ProfilePage() {
             <Typography variant="body2" sx={{ opacity: 0.8 }}>
               Total this year
             </Typography>
-            <Typography variant="h4" fontWeight={700}>
+            <Typography variant="h4" sx={{ fontWeight: 700 }}>
               ${mockGivingTotal.toLocaleString(undefined, { minimumFractionDigits: 2 })}
             </Typography>
           </Box>
@@ -376,7 +376,7 @@ export default function ProfilePage() {
             </ListItemIcon>
             <ListItemText
               primary="Sign Out"
-              primaryTypographyProps={{ color: "error" }}
+              slotProps={{ primary: { color: "error" } }}
             />
           </ListItemButton>
         </List>

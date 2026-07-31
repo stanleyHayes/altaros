@@ -157,7 +157,7 @@ export default function Header({
 
           {user && (
             <Box sx={{ display: { xs: "none", sm: "block" }, ml: 1 }}>
-              <Typography variant="body2" fontWeight={600} lineHeight={1.2}>
+              <Typography variant="body2" sx={{ fontWeight: 600, lineHeight: 1.2 }}>
                 {user.firstName} {user.lastName}
               </Typography>
               <Typography variant="caption" color="text.secondary">

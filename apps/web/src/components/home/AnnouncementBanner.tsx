@@ -57,7 +57,7 @@ export default function AnnouncementBanner({
             {date}
           </Typography>
         </Box>
-        <Typography variant="subtitle1" fontWeight={700} gutterBottom>
+        <Typography variant="subtitle1" gutterBottom sx={{ fontWeight: 700 }}>
           {title}
         </Typography>
         <Typography

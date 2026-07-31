@@ -78,7 +78,7 @@ export default function AnnouncementFormDialog({
 
   return (
     <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth>
-      <DialogTitle fontWeight={600}>
+      <DialogTitle sx={{ fontWeight: 600 }}>
         {isEdit ? "Edit Announcement" : "Create Announcement"}
       </DialogTitle>
       <form onSubmit={handleSubmit(handleFormSubmit)}>

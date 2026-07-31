@@ -81,7 +81,7 @@ export default function ComposeMessageDialog({
 
   return (
     <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth>
-      <DialogTitle fontWeight={600}>Compose Message</DialogTitle>
+      <DialogTitle sx={{ fontWeight: 600 }}>Compose Message</DialogTitle>
       <form onSubmit={handleSubmit(handleFormSubmit)}>
         <DialogContent dividers>
           <Grid container spacing={2}>

@@ -211,7 +211,7 @@ export default function ChatsPage() {
           }}
         >
           <Box sx={{ p: 2, pb: 1 }}>
-            <Typography variant="h6" fontWeight={700}>
+            <Typography variant="h6" sx={{ fontWeight: 700 }}>
               Chats
             </Typography>
           </Box>
@@ -229,7 +229,7 @@ export default function ChatsPage() {
                 </ListItemAvatar>
                 <ListItemText
                   primary={
-                    <Typography variant="body1" fontWeight={600} noWrap>
+                    <Typography variant="body1" noWrap sx={{ fontWeight: 600 }}>
                       {group.name}
                     </Typography>
                   }
@@ -301,7 +301,7 @@ export default function ChatsPage() {
                   {selectedGroup.name.charAt(0)}
                 </Avatar>
                 <Box>
-                  <Typography variant="subtitle1" fontWeight={600}>
+                  <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>
                     {selectedGroup.name}
                   </Typography>
                   <Typography variant="caption" color="text.secondary">
@@ -345,8 +345,8 @@ export default function ChatsPage() {
                         {!isMe && (
                           <Typography
                             variant="caption"
-                            fontWeight={700}
                             sx={{
+                              fontWeight: 700,
                               color: isMe ? "primary.light" : "primary.main",
                               display: "block",
                               mb: 0.25,

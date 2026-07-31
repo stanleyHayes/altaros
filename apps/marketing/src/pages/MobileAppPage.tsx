@@ -82,7 +82,7 @@ export default function MobileAppPage() {
           }}
         />
         <Container maxWidth="lg" sx={{ position: "relative", zIndex: 1 }}>
-          <Grid container spacing={6} alignItems="center">
+          <Grid container spacing={6} sx={{ alignItems: "center" }}>
             <Grid size={{ xs: 12, md: 6 }}>
               <Typography
                 variant="overline"
@@ -106,7 +106,7 @@ export default function MobileAppPage() {
                 Give, connect, grow, and stay informed — all from the ALTAR OS
                 mobile app, available on iOS and Android.
               </Typography>
-              <Stack direction="row" spacing={2} flexWrap="wrap">
+              <Stack direction="row" spacing={2} sx={{ flexWrap: "wrap" }}>
                 {/* App Store badge placeholder */}
                 <Box
                   sx={{
@@ -286,9 +286,13 @@ export default function MobileAppPage() {
                 </ListItemIcon>
                 <ListItemText
                   primary={item}
-                  primaryTypographyProps={{
-                    fontSize: "1.05rem",
-                    color: "text.secondary",
+                  slotProps={{
+                    primary: {
+                      sx: {
+                        fontSize: "1.05rem",
+                        color: "text.secondary",
+                      },
+                    },
                   }}
                 />
               </ListItem>

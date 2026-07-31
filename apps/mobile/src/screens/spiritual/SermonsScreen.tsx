@@ -58,7 +58,7 @@ export function SermonsScreen() {
     // TODO: Replace with spiritualService.getSermons()
     const loadSermons = async () => {
       try {
-        await new Promise((resolve) => setTimeout(resolve, 500));
+        await new Promise<void>((resolve) => { setTimeout(() => resolve(), 500); });
         setSermons(mockSermons);
       } catch (error) {
         console.error('Failed to load sermons:', error);

@@ -1,5 +1,13 @@
 import React from 'react';
-import { View, Text, Image, StyleSheet, ViewStyle } from 'react-native';
+import {
+  View,
+  Text,
+  Image,
+  StyleSheet,
+  type ImageStyle,
+  type StyleProp,
+  type ViewStyle,
+} from 'react-native';
 import { colors, typography } from '../../theme';
 
 type AvatarSize = 'sm' | 'md' | 'lg' | 'xl';
@@ -8,7 +16,8 @@ interface AvatarProps {
   uri?: string;
   name: string;
   size?: AvatarSize;
-  style?: ViewStyle;
+  /** Accepts either shape — this renders an Image when `uri` is set, a View otherwise. */
+  style?: StyleProp<ViewStyle & ImageStyle>;
 }
 
 const sizeMap: Record<AvatarSize, number> = {

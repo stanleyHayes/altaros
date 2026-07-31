@@ -84,7 +84,7 @@ export default function HomePage() {
     <Box sx={{ py: 2 }}>
       {/* Welcome */}
       <Box sx={{ mb: 3 }}>
-        <Typography variant="h5" fontWeight={700}>
+        <Typography variant="h5" sx={{ fontWeight: 700 }}>
           Good morning, {firstName}
         </Typography>
         <Typography variant="body2" color="text.secondary">
@@ -188,7 +188,7 @@ export default function HomePage() {
                 <CalendarTodayRoundedIcon fontSize="small" />
               </Box>
               <Box sx={{ flex: 1, minWidth: 0 }}>
-                <Typography variant="subtitle2" fontWeight={600} noWrap>
+                <Typography variant="subtitle2" noWrap sx={{ fontWeight: 600 }}>
                   {event.title}
                 </Typography>
                 <Typography variant="caption" color="text.secondary">
@@ -241,7 +241,7 @@ export default function HomePage() {
                 />
               </Box>
               <Box sx={{ flex: 1, minWidth: 0 }}>
-                <Typography variant="subtitle2" fontWeight={600} noWrap>
+                <Typography variant="subtitle2" noWrap sx={{ fontWeight: 600 }}>
                   {sermon.title}
                 </Typography>
                 <Typography variant="caption" color="text.secondary">
@@ -272,7 +272,7 @@ export default function HomePage() {
           <Typography variant="body2" sx={{ opacity: 0.85 }}>
             Total Given
           </Typography>
-          <Typography variant="h4" fontWeight={700} sx={{ my: 0.5 }}>
+          <Typography variant="h4" sx={{ fontWeight: 700, my: 0.5 }}>
             $250.00
           </Typography>
           <Box sx={{ display: "flex", gap: 2, mt: 1 }}>
@@ -280,7 +280,7 @@ export default function HomePage() {
               <Typography variant="caption" sx={{ opacity: 0.7 }}>
                 Tithe
               </Typography>
-              <Typography variant="subtitle2" fontWeight={600}>
+              <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
                 $200.00
               </Typography>
             </Box>
@@ -288,7 +288,7 @@ export default function HomePage() {
               <Typography variant="caption" sx={{ opacity: 0.7 }}>
                 Offering
               </Typography>
-              <Typography variant="subtitle2" fontWeight={600}>
+              <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
                 $50.00
               </Typography>
             </Box>

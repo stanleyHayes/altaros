@@ -55,7 +55,7 @@ export default function CommentSection({
               flex: 1,
             }}
           >
-            <Typography variant="caption" fontWeight={600}>
+            <Typography variant="caption" sx={{ fontWeight: 600 }}>
               {comment.authorName}
             </Typography>
             <Typography variant="body2">{comment.content}</Typography>

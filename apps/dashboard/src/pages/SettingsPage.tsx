@@ -134,7 +134,7 @@ export default function SettingsPage() {
           mb: 3,
         }}
       >
-        <Typography variant="h4" fontWeight={700}>
+        <Typography variant="h4" sx={{ fontWeight: 700 }}>
           Settings
         </Typography>
         <Button
@@ -151,7 +151,7 @@ export default function SettingsPage() {
         {/* Church Profile */}
         <Card sx={{ mb: 3 }}>
           <CardContent sx={{ p: 3 }}>
-            <Typography variant="h6" fontWeight={600} sx={{ mb: 3 }}>
+            <Typography variant="h6" sx={{ fontWeight: 600, mb: 3 }}>
               Church Profile
             </Typography>
             <Grid container spacing={2}>
@@ -282,7 +282,7 @@ export default function SettingsPage() {
         {/* Logo & Banner Upload */}
         <Card sx={{ mb: 3 }}>
           <CardContent sx={{ p: 3 }}>
-            <Typography variant="h6" fontWeight={600} sx={{ mb: 3 }}>
+            <Typography variant="h6" sx={{ fontWeight: 600, mb: 3 }}>
               Branding
             </Typography>
             <Grid container spacing={3}>
@@ -309,7 +309,7 @@ export default function SettingsPage() {
                   <Button size="small" startIcon={<UploadIcon />}>
                     Upload Logo
                   </Button>
-                  <Typography variant="caption" color="text.secondary" display="block">
+                  <Typography variant="caption" color="text.secondary" sx={{ display: "block" }}>
                     PNG, JPG up to 2MB
                   </Typography>
                 </Box>
@@ -349,7 +349,7 @@ export default function SettingsPage() {
         {/* General Settings */}
         <Card sx={{ mb: 3 }}>
           <CardContent sx={{ p: 3 }}>
-            <Typography variant="h6" fontWeight={600} sx={{ mb: 3 }}>
+            <Typography variant="h6" sx={{ fontWeight: 600, mb: 3 }}>
               General Settings
             </Typography>
             <Grid container spacing={2}>
@@ -457,7 +457,7 @@ export default function SettingsPage() {
                     />
                   )}
                 />
-                <Typography variant="caption" color="text.secondary" display="block" sx={{ ml: 6 }}>
+                <Typography variant="caption" color="text.secondary" sx={{ display: "block", ml: 6 }}>
                   When enabled, new members can register themselves through the public website
                 </Typography>
               </Grid>
@@ -468,12 +468,12 @@ export default function SettingsPage() {
         {/* Subscription Plan */}
         <Card sx={{ mb: 3 }}>
           <CardContent sx={{ p: 3 }}>
-            <Typography variant="h6" fontWeight={600} sx={{ mb: 2 }}>
+            <Typography variant="h6" sx={{ fontWeight: 600, mb: 2 }}>
               Subscription Plan
             </Typography>
             <Divider sx={{ mb: 2 }} />
             <Box sx={{ display: "flex", alignItems: "center", gap: 2, mb: 2 }}>
-              <Typography variant="h5" fontWeight={700}>
+              <Typography variant="h5" sx={{ fontWeight: 700 }}>
                 Pro Plan
               </Typography>
               <Chip label="Active" color="success" size="small" />

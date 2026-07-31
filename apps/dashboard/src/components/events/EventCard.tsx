@@ -13,6 +13,7 @@ import {
   People as PeopleIcon,
   Edit as EditIcon,
   Delete as DeleteIcon,
+  HowToReg as AttendanceIcon,
 } from "@mui/icons-material";
 
 interface EventCardProps {
@@ -27,6 +28,8 @@ interface EventCardProps {
   status: "upcoming" | "ongoing" | "completed" | "cancelled";
   onEdit?: (id: string) => void;
   onDelete?: (id: string) => void;
+  /** Opens the attendance / check-in dialog for this event. */
+  onAttendance?: (id: string) => void;
 }
 
 const statusColorMap: Record<string, "info" | "success" | "default" | "error"> = {
@@ -47,6 +50,7 @@ export default function EventCard({
   status,
   onEdit,
   onDelete,
+  onAttendance,
 }: EventCardProps) {
   const dateObj = new Date(startDate);
   const month = dateObj.toLocaleString("default", { month: "short" });
@@ -86,13 +90,11 @@ export default function EventCard({
           >
             <Typography
               variant="caption"
-              fontWeight={700}
-              textTransform="uppercase"
-              lineHeight={1}
+              sx={{ fontWeight: 700, textTransform: "uppercase", lineHeight: 1 }}
             >
               {month}
             </Typography>
-            <Typography variant="h5" fontWeight={700} lineHeight={1.2}>
+            <Typography variant="h5" sx={{ fontWeight: 700, lineHeight: 1.2 }}>
               {day}
             </Typography>
           </Box>
@@ -106,7 +108,7 @@ export default function EventCard({
                 gap: 1,
               }}
             >
-              <Typography variant="subtitle1" fontWeight={600} noWrap>
+              <Typography variant="subtitle1" noWrap sx={{ fontWeight: 600 }}>
                 {title}
               </Typography>
               <Chip
@@ -162,9 +164,24 @@ export default function EventCard({
       <CardActions
         sx={{ px: 2, pb: 2, pt: 0, justifyContent: "flex-end" }}
       >
+        {onAttendance && (
+          <Tooltip title="Attendance">
+            <IconButton
+              size="small"
+              aria-label={`View attendance for ${title}`}
+              onClick={() => onAttendance(id)}
+            >
+              <AttendanceIcon fontSize="small" />
+            </IconButton>
+          </Tooltip>
+        )}
         {onEdit && (
           <Tooltip title="Edit">
-            <IconButton size="small" onClick={() => onEdit(id)}>
+            <IconButton
+              size="small"
+              aria-label={`Edit ${title}`}
+              onClick={() => onEdit(id)}
+            >
               <EditIcon fontSize="small" />
             </IconButton>
           </Tooltip>

@@ -200,7 +200,7 @@ export default function IntegrationsPage() {
       {/* API Access */}
       <Box sx={{ py: { xs: 8, md: 12 }, backgroundColor: "#F8F9FC" }}>
         <Container maxWidth="lg">
-          <Grid container spacing={6} alignItems="center">
+          <Grid container spacing={6} sx={{ alignItems: "center" }}>
             <Grid size={{ xs: 12, md: 6 }}>
               <Box
                 sx={{

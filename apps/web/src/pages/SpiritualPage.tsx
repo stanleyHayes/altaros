@@ -86,7 +86,7 @@ export default function SpiritualPage() {
 
   return (
     <Box sx={{ py: 2 }}>
-      <Typography variant="h5" fontWeight={700} sx={{ mb: 2 }}>
+      <Typography variant="h5" sx={{ fontWeight: 700, mb: 2 }}>
         Spiritual Growth
       </Typography>
 
@@ -394,10 +394,10 @@ function AiPrayerChat() {
                     >
                       <Typography
                         variant="caption"
-                        fontWeight={700}
                         color={
                           msg.role === "user" ? "inherit" : "primary.main"
                         }
+                        sx={{ fontWeight: 700 }}
                       >
                         {s.reference}
                       </Typography>
@@ -451,7 +451,7 @@ function AiPrayerChat() {
               }}
             >
               <CircularProgress size={14} />
-              <Typography variant="body2" color="text.secondary" fontSize="0.8125rem">
+              <Typography variant="body2" color="text.secondary" sx={{ fontSize: "0.8125rem" }}>
                 Reflecting on Scripture...
               </Typography>
             </Box>

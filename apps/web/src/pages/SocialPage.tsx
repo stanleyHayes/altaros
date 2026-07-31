@@ -133,7 +133,7 @@ export default function SocialPage() {
 
   return (
     <Box sx={{ py: 2, position: "relative", minHeight: "80vh" }}>
-      <Typography variant="h5" fontWeight={700} sx={{ mb: 2 }}>
+      <Typography variant="h5" sx={{ fontWeight: 700, mb: 2 }}>
         Community
       </Typography>
 

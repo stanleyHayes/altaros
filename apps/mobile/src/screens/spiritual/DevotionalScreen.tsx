@@ -32,7 +32,7 @@ export function DevotionalScreen() {
     const loadDevotional = async () => {
       try {
         // Simulate API delay
-        await new Promise((resolve) => setTimeout(resolve, 500));
+        await new Promise<void>((resolve) => { setTimeout(() => resolve(), 500); });
         setDevotional(mockDevotional);
       } catch (error) {
         console.error('Failed to load devotional:', error);

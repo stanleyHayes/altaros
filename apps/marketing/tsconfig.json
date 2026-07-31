@@ -1,7 +1,6 @@
 {
   "extends": "@altar-os/tsconfig/react.json",
   "compilerOptions": {
-    "baseUrl": ".",
     "paths": {
       "@/*": ["./src/*"]
     }

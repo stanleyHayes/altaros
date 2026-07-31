@@ -377,7 +377,7 @@ export default function InterChurchPage() {
       >
         <Box sx={{ display: "flex", alignItems: "center", gap: 1.5 }}>
           <PublicIcon sx={{ fontSize: 32, color: "primary.main" }} />
-          <Typography variant="h4" fontWeight={700}>
+          <Typography variant="h4" sx={{ fontWeight: 700 }}>
             Inter-Church
           </Typography>
         </Box>
@@ -497,8 +497,8 @@ export default function InterChurchPage() {
                         >
                           <Typography
                             variant="subtitle1"
-                            fontWeight={600}
                             noWrap
+                            sx={{ fontWeight: 600 }}
                           >
                             {church.churchName}
                           </Typography>
@@ -704,11 +704,11 @@ export default function InterChurchPage() {
                           textTransform: "capitalize",
                         }}
                       />
-                      <Typography variant="h6" fontWeight={700} color="primary">
+                      <Typography variant="h6" color="primary" sx={{ fontWeight: 700 }}>
                         ${item.price.toFixed(2)}
                       </Typography>
                     </Box>
-                    <Typography variant="subtitle1" fontWeight={600} noWrap>
+                    <Typography variant="subtitle1" noWrap sx={{ fontWeight: 600 }}>
                       {item.title}
                     </Typography>
                     <Typography
@@ -780,7 +780,7 @@ export default function InterChurchPage() {
           </Box>
 
           {/* Incoming Requests */}
-          <Typography variant="h6" fontWeight={600} sx={{ mb: 2 }}>
+          <Typography variant="h6" sx={{ fontWeight: 600, mb: 2 }}>
             Incoming Requests
           </Typography>
           <Box sx={{ display: "flex", flexDirection: "column", gap: 2, mb: 4 }}>
@@ -792,7 +792,7 @@ export default function InterChurchPage() {
           </Box>
 
           {/* Outgoing Requests */}
-          <Typography variant="h6" fontWeight={600} sx={{ mb: 2 }}>
+          <Typography variant="h6" sx={{ fontWeight: 600, mb: 2 }}>
             Outgoing Requests
           </Typography>
           <Box sx={{ display: "flex", flexDirection: "column", gap: 2, mb: 4 }}>
@@ -830,7 +830,7 @@ function CollaborationCard({ collab }: { collab: CollaborationRequest }) {
           }}
         >
           <Box>
-            <Typography variant="subtitle1" fontWeight={600}>
+            <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>
               {collab.title}
             </Typography>
             <Typography variant="caption" color="text.secondary">

@@ -55,7 +55,11 @@ export default function Sidebar({ open, onClose }: SidebarProps) {
       >
         <AdminIcon sx={{ color: "secondary.main", fontSize: 28 }} />
         <Box>
-          <Typography variant="h6" fontWeight={700} color="text.primary">
+          <Typography
+            variant="h6"
+            color="text.primary"
+            sx={{ fontWeight: 700 }}
+          >
             ALTAR OS
           </Typography>
           <Typography variant="caption" color="text.secondary">

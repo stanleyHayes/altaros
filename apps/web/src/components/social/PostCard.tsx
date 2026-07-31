@@ -65,7 +65,7 @@ export default function PostCard({
             {authorName.charAt(0)}
           </Avatar>
           <Box sx={{ flex: 1 }}>
-            <Typography variant="subtitle2" fontWeight={600}>
+            <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
               {authorName}
             </Typography>
             <Typography variant="caption" color="text.secondary">

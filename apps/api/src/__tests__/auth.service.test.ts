@@ -3,15 +3,16 @@ import { AuthService } from '../domain/auth/application/auth.service';
 import type { IAuthRepository } from '../domain/auth/ports/auth.repository.port';
 import { LoginMethod } from '@altar-os/shared-types';
 
+// Mirrors IAuthRepository exactly. OTP-related methods (createFromPhone,
+// updateOtp, findOtp) were previously mocked here but exist on neither the
+// port nor the Mongo adapter — AuthService.verifyOtp is still a stub.
+// Phone OTP is the primary auth method per the spec; see WP-10.
 const mockRepo: IAuthRepository = {
   findByEmail: vi.fn(),
   findByPhone: vi.fn(),
   findById: vi.fn(),
   create: vi.fn(),
-  createFromPhone: vi.fn(),
   updatePassword: vi.fn(),
-  updateOtp: vi.fn(),
-  findOtp: vi.fn(),
 };
 
 describe('AuthService', () => {

@@ -46,7 +46,7 @@ export default function CampaignCard({
             mb: 1.5,
           }}
         >
-          <Typography variant="subtitle1" fontWeight={600}>
+          <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>
             {name}
           </Typography>
           <Chip label={status} size="small" color={statusColor} />
@@ -70,7 +70,7 @@ export default function CampaignCard({
               mb: 0.5,
             }}
           >
-            <Typography variant="body2" fontWeight={600}>
+            <Typography variant="body2" sx={{ fontWeight: 600 }}>
               ${currentAmount.toLocaleString()}
             </Typography>
             <Typography variant="body2" color="text.secondary">

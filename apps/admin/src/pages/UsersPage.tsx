@@ -64,7 +64,7 @@ export default function UsersPage() {
 
   return (
     <Box>
-      <Typography variant="h4" fontWeight={700} sx={{ mb: 3 }}>
+      <Typography variant="h4" sx={{ fontWeight: 700, mb: 3 }}>
         Users
       </Typography>
 
@@ -141,7 +141,7 @@ export default function UsersPage() {
                           >
                             {(user.name ?? "?").charAt(0)}
                           </Avatar>
-                          <Typography fontWeight={600}>
+                          <Typography sx={{ fontWeight: 600 }}>
                             {user.name ?? "—"}
                           </Typography>
                         </Box>

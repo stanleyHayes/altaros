@@ -107,7 +107,7 @@ export default function DataTable<T extends Record<string, unknown>>({
       >
         <Box sx={{ display: "flex", alignItems: "center", gap: 2 }}>
           {title && (
-            <Typography variant="h6" fontWeight={600}>
+            <Typography variant="h6" sx={{ fontWeight: 600 }}>
               {title}
             </Typography>
           )}

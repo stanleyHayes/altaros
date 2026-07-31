@@ -46,7 +46,7 @@ export default function FinancePage() {
 
   return (
     <Box>
-      <Typography variant="h4" fontWeight={700} sx={{ mb: 3 }}>
+      <Typography variant="h4" sx={{ fontWeight: 700, mb: 3 }}>
         Platform Finance
       </Typography>
 
@@ -55,7 +55,7 @@ export default function FinancePage() {
           <Typography variant="body2" color="text.secondary">
             Total Platform Revenue
           </Typography>
-          <Typography variant="h3" fontWeight={700} sx={{ mt: 1 }}>
+          <Typography variant="h3" sx={{ fontWeight: 700, mt: 1 }}>
             ${(totalRevenue / 100).toLocaleString()}
           </Typography>
         </CardContent>
@@ -64,7 +64,7 @@ export default function FinancePage() {
       <Card>
         <CardContent sx={{ p: 0 }}>
           <Box sx={{ px: 3, py: 2 }}>
-            <Typography variant="h6" fontWeight={600}>
+            <Typography variant="h6" sx={{ fontWeight: 600 }}>
               Revenue by Church
             </Typography>
           </Box>
@@ -83,7 +83,9 @@ export default function FinancePage() {
                 {churches.map((church) => (
                   <TableRow key={church.id} hover>
                     <TableCell>
-                      <Typography fontWeight={600}>{church.name}</Typography>
+                      <Typography sx={{ fontWeight: 600 }}>
+                        {church.name}
+                      </Typography>
                     </TableCell>
                     <TableCell>
                       <Chip label={church.plan} size="small" />

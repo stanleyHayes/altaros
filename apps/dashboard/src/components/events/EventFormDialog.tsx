@@ -83,7 +83,7 @@ export default function EventFormDialog({
 
   return (
     <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth>
-      <DialogTitle fontWeight={600}>
+      <DialogTitle sx={{ fontWeight: 600 }}>
         {isEdit ? "Edit Event" : "Create Event"}
       </DialogTitle>
       <form onSubmit={handleSubmit(handleFormSubmit)}>

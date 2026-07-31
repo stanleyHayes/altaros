@@ -226,7 +226,7 @@ export default function FamiliesPage() {
           <Avatar sx={{ bgcolor: "primary.light", width: 36, height: 36 }}>
             <FamilyIcon fontSize="small" />
           </Avatar>
-          <Typography variant="body2" fontWeight={600}>
+          <Typography variant="body2" sx={{ fontWeight: 600 }}>
             {row.familyName}
           </Typography>
         </Box>
@@ -285,7 +285,7 @@ export default function FamiliesPage() {
           mb: 3,
         }}
       >
-        <Typography variant="h4" fontWeight={700}>
+        <Typography variant="h4" sx={{ fontWeight: 700 }}>
           Families
         </Typography>
         <Button variant="contained" startIcon={<AddIcon />} onClick={openCreate}>
@@ -302,7 +302,7 @@ export default function FamiliesPage() {
 
       {/* Add/Edit Family Dialog */}
       <Dialog open={formOpen} onClose={() => setFormOpen(false)} maxWidth="sm" fullWidth>
-        <DialogTitle fontWeight={600}>
+        <DialogTitle sx={{ fontWeight: 600 }}>
           {editFamily ? "Edit Family" : "Add Family"}
         </DialogTitle>
         <form onSubmit={handleSubmit(handleFormSubmit)}>
@@ -369,7 +369,7 @@ export default function FamiliesPage() {
 
       {/* View Family Details Dialog */}
       <Dialog open={!!viewFamily} onClose={() => setViewFamily(null)} maxWidth="sm" fullWidth>
-        <DialogTitle fontWeight={600}>
+        <DialogTitle sx={{ fontWeight: 600 }}>
           <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
             {viewFamily?.familyName}
             <IconButton size="small" onClick={() => setViewFamily(null)}>

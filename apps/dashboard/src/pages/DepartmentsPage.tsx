@@ -216,7 +216,7 @@ export default function DepartmentsPage() {
           mb: 3,
         }}
       >
-        <Typography variant="h4" fontWeight={700}>
+        <Typography variant="h4" sx={{ fontWeight: 700 }}>
           Departments
         </Typography>
         <Button variant="contained" startIcon={<AddIcon />} onClick={openCreate}>
@@ -245,7 +245,7 @@ export default function DepartmentsPage() {
                     mb: 1.5,
                   }}
                 >
-                  <Typography variant="subtitle1" fontWeight={600}>
+                  <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>
                     {dept.name}
                   </Typography>
                   <Chip
@@ -305,7 +305,7 @@ export default function DepartmentsPage() {
 
       {/* Add/Edit Department Dialog */}
       <Dialog open={formOpen} onClose={() => setFormOpen(false)} maxWidth="sm" fullWidth>
-        <DialogTitle fontWeight={600}>
+        <DialogTitle sx={{ fontWeight: 600 }}>
           {editDept ? "Edit Department" : "Add Department"}
         </DialogTitle>
         <form onSubmit={handleSubmit(handleFormSubmit)}>
@@ -385,7 +385,7 @@ export default function DepartmentsPage() {
 
       {/* View Members Dialog */}
       <Dialog open={!!viewDept} onClose={() => setViewDept(null)} maxWidth="sm" fullWidth>
-        <DialogTitle fontWeight={600}>
+        <DialogTitle sx={{ fontWeight: 600 }}>
           <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
             {viewDept?.name} Members
             <IconButton size="small" onClick={() => setViewDept(null)}>

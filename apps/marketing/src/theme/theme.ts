@@ -138,13 +138,18 @@ const theme = createTheme({
           padding: "16px 40px",
           fontSize: "1.125rem",
         },
-        containedSecondary: {
-          color: "#1A1A2E",
-          "&:hover": {
-            backgroundColor: "#FFC107",
+      },
+      variants: [
+        {
+          props: { variant: "contained", color: "secondary" },
+          style: {
+            color: "#1A1A2E",
+            "&:hover": {
+              backgroundColor: "#FFC107",
+            },
           },
         },
-      },
+      ],
     },
     MuiCard: {
       styleOverrides: {

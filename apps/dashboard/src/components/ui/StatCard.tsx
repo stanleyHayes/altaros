@@ -42,12 +42,12 @@ export default function StatCard({
             <Typography
               variant="body2"
               color="text.secondary"
-              fontWeight={500}
               gutterBottom
+              sx={{ fontWeight: 500 }}
             >
               {title}
             </Typography>
-            <Typography variant="h4" fontWeight={700}>
+            <Typography variant="h4" sx={{ fontWeight: 700 }}>
               {value}
             </Typography>
           </Box>
@@ -80,8 +80,8 @@ export default function StatCard({
             )}
             <Typography
               variant="body2"
-              fontWeight={600}
               color={isPositive ? "success.main" : "error.main"}
+              sx={{ fontWeight: 600 }}
             >
               {isPositive ? "+" : ""}
               {change}%

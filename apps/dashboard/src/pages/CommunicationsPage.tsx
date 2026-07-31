@@ -223,7 +223,7 @@ export default function CommunicationsPage() {
           mb: 3,
         }}
       >
-        <Typography variant="h4" fontWeight={700}>
+        <Typography variant="h4" sx={{ fontWeight: 700 }}>
           Communications
         </Typography>
         <Box sx={{ display: "flex", gap: 1 }}>
@@ -276,7 +276,7 @@ export default function CommunicationsPage() {
                             mb: 0.5,
                           }}
                         >
-                          <Typography variant="subtitle2" fontWeight={600}>
+                          <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
                             {msg.subject}
                           </Typography>
                           <Chip
@@ -342,8 +342,7 @@ export default function CommunicationsPage() {
                     primary={
                       <Typography
                         color="text.secondary"
-                        textAlign="center"
-                        sx={{ py: 4 }}
+                        sx={{ textAlign: "center", py: 4 }}
                       >
                         No messages yet. Click Compose to send your first
                         message.
@@ -376,7 +375,7 @@ export default function CommunicationsPage() {
                             mb: 0.5,
                           }}
                         >
-                          <Typography variant="subtitle2" fontWeight={600}>
+                          <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
                             {ann.title}
                           </Typography>
                           <Chip
@@ -439,8 +438,7 @@ export default function CommunicationsPage() {
                     primary={
                       <Typography
                         color="text.secondary"
-                        textAlign="center"
-                        sx={{ py: 4 }}
+                        sx={{ textAlign: "center", py: 4 }}
                       >
                         No announcements yet. Click Create Announcement to get
                         started.

@@ -197,7 +197,7 @@ export default function AiPage() {
     <Box sx={{ py: 2 }}>
       <Box sx={{ display: "flex", alignItems: "center", gap: 1.5, mb: 2 }}>
         <AiIcon sx={{ color: "primary.main", fontSize: 32 }} />
-        <Typography variant="h5" fontWeight={700}>
+        <Typography variant="h5" sx={{ fontWeight: 700 }}>
           AI Assistant
         </Typography>
       </Box>
@@ -259,7 +259,7 @@ function SermonTab() {
       {/* Input Form */}
       <Card>
         <CardContent>
-          <Typography variant="h6" fontWeight={600} gutterBottom>
+          <Typography variant="h6" gutterBottom sx={{ fontWeight: 600 }}>
             Generate Sermon Outline
           </Typography>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
@@ -372,7 +372,7 @@ function SermonTab() {
               }}
             >
               <Box>
-                <Typography variant="h5" fontWeight={700}>
+                <Typography variant="h5" sx={{ fontWeight: 700 }}>
                   {sermon.title}
                 </Typography>
                 <Chip
@@ -392,9 +392,9 @@ function SermonTab() {
             {/* Introduction */}
             <Typography
               variant="subtitle1"
-              fontWeight={600}
               color="primary"
               gutterBottom
+              sx={{ fontWeight: 600 }}
             >
               Introduction
             </Typography>
@@ -405,9 +405,9 @@ function SermonTab() {
             {/* Main Points */}
             <Typography
               variant="subtitle1"
-              fontWeight={600}
               color="primary"
               gutterBottom
+              sx={{ fontWeight: 600 }}
             >
               Main Points
             </Typography>
@@ -421,7 +421,7 @@ function SermonTab() {
                       color="primary"
                       sx={{ fontWeight: 700, minWidth: 28 }}
                     />
-                    <Typography fontWeight={600}>{point.title}</Typography>
+                    <Typography sx={{ fontWeight: 600 }}>{point.title}</Typography>
                   </Box>
                 </AccordionSummary>
                 <AccordionDetails>
@@ -444,9 +444,9 @@ function SermonTab() {
             {/* Conclusion */}
             <Typography
               variant="subtitle1"
-              fontWeight={600}
               color="primary"
               gutterBottom
+              sx={{ fontWeight: 600 }}
             >
               Conclusion
             </Typography>
@@ -457,9 +457,9 @@ function SermonTab() {
             {/* Application Points */}
             <Typography
               variant="subtitle1"
-              fontWeight={600}
               color="primary"
               gutterBottom
+              sx={{ fontWeight: 600 }}
             >
               Application Points
             </Typography>
@@ -508,7 +508,7 @@ function InsightsTab() {
           alignItems: "center",
         }}
       >
-        <Typography variant="h6" fontWeight={600}>
+        <Typography variant="h6" sx={{ fontWeight: 600 }}>
           Member Insights
         </Typography>
         <FormControl size="small" sx={{ minWidth: 180 }}>
@@ -562,7 +562,7 @@ function InsightsTab() {
                 <Box
                   sx={{ display: "flex", alignItems: "center", gap: 1, mb: 1 }}
                 >
-                  <Typography variant="subtitle1" fontWeight={700}>
+                  <Typography variant="subtitle1" sx={{ fontWeight: 700 }}>
                     {insight.memberName}
                   </Typography>
                   <Chip
@@ -750,7 +750,7 @@ function PrayerTab() {
         minHeight: 400,
       }}
     >
-      <Typography variant="h6" fontWeight={600} sx={{ mb: 2 }}>
+      <Typography variant="h6" sx={{ fontWeight: 600, mb: 2 }}>
         Prayer Chat
       </Typography>
 
@@ -810,10 +810,10 @@ function PrayerTab() {
                     >
                       <Typography
                         variant="caption"
-                        fontWeight={700}
                         color={
                           msg.role === "user" ? "inherit" : "primary.main"
                         }
+                        sx={{ fontWeight: 700 }}
                       >
                         {s.reference}
                       </Typography>

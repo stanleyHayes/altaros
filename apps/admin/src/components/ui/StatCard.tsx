@@ -41,7 +41,7 @@ export default function StatCard({
             {icon}
           </Box>
         </Box>
-        <Typography variant="h4" fontWeight={700}>
+        <Typography variant="h4" sx={{ fontWeight: 700 }}>
           {value}
         </Typography>
         {change !== undefined && (
@@ -54,7 +54,7 @@ export default function StatCard({
             <Typography
               variant="caption"
               color={isPositive ? "success.main" : "error.main"}
-              fontWeight={600}
+              sx={{ fontWeight: 600 }}
             >
               {isPositive ? "+" : ""}
               {change}%

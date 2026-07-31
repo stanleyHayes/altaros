@@ -216,9 +216,8 @@ export default function LoginPage() {
             <Link
               component={RouterLink}
               to="/register"
-              fontWeight={600}
               underline="hover"
-              sx={{ color: "#6B4C9A" }}
+              sx={{ fontWeight: 600, color: "#6B4C9A" }}
             >
               Register your church
             </Link>

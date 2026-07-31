@@ -204,7 +204,7 @@ export default function AboutPage() {
             </Typography>
           </Box>
 
-          <Grid container spacing={4} justifyContent="center">
+          <Grid container spacing={4} sx={{ justifyContent: "center" }}>
             {team.map((member) => (
               <Grid size={{ xs: 12, sm: 6, md: 3 }} key={member.name}>
                 <Card

@@ -64,7 +64,7 @@ export function FeedScreen() {
     // TODO: Replace with socialService.getFeed()
     const loadFeed = async () => {
       try {
-        await new Promise((resolve) => setTimeout(resolve, 500));
+        await new Promise<void>((resolve) => { setTimeout(() => resolve(), 500); });
         setPosts(mockPosts);
       } catch (error) {
         console.error('Failed to load feed:', error);

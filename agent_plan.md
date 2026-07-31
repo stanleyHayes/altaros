@@ -20,20 +20,20 @@ Sections §0–§6 are context every agent should read before touching code. §7
 
 This was audited directly against the repo, not assumed. **The PDF describes a system that does not exist yet; the repo contains a different, partially-built system.**
 
-> ## 🔴 DO THIS BEFORE READING FURTHER
+> ## ✅ RESOLVED — 31 Jul 2026, commit `7feade5`
 >
-> **This repository has zero commits.** Verified: `git rev-parse HEAD` → `fatal: ambiguous argument 'HEAD': unknown revision`. No commits, no branches, no stash. Every one of the 239 staged files exists **only in `.git/index` and loose objects** — including the 48 files already deleted from the working tree (§0.2), which exist *nowhere else on disk*.
+> **This section described a repository with zero commits.** Verified at the time: `git rev-parse HEAD` → `fatal: ambiguous argument 'HEAD'`. No commits, no branches, no stash. All 239 staged files existed **only in `.git/index`** — including 48 already deleted from the working tree, which existed *nowhere else on disk*. A single `git reset` would have destroyed them irrecoverably.
 >
-> **A single `git reset`, `git checkout`, or `git stash` permanently destroys work that has no other copy.** There is no commit to recover from because there is no commit.
+> **Action taken (WP-00 · WP-00b · WP-00c, all complete):**
 >
-> **First action, before any planning work:**
-> ```bash
-> git diff --name-only --diff-filter=D | grep '\.tsx$' | while read -r f; do
->   mkdir -p "$(dirname "$f")" && git show ":$f" > "$f"     # restore frontends in place
-> done
-> git add -A && git commit -m "Initial commit: ALTAR OS monorepo baseline"
-> ```
-> That is WP-00b followed by WP-00c. Everything else in this plan assumes it has been done.
+> 1. All 48 index-only files backed up outside the repo as a safety net.
+> 2. All 48 restored **in place** — 32 backend `apps/api` files (6 domains + all routes/controllers) and 16 frontend components across `dashboard`, `mobile`, `admin`, `web`.
+> 3. Dangling-import scan re-run: **zero unresolved imports** across `apps/`.
+> 4. Initial commit `7feade5` created — 317 files, clean working tree. Every one of the 48 verified present in the commit tree with intact content.
+>
+> **Note on sequencing, preserved because it is a live trap:** `git add -A` would have staged those 48 files as *deletions*, dropping them from the very commit meant to rescue them. Restoring in place had to happen first.
+>
+> **Still outstanding:** the commit is local only. `git remote add origin <url> && git push -u origin main` — the repo has no remote and therefore no off-machine copy. See §10 Q-0.
 
 ### 0.1 What the repo really is
 

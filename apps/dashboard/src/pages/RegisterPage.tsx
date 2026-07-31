@@ -309,9 +309,8 @@ export default function RegisterPage() {
             <Link
               component={RouterLink}
               to="/login"
-              fontWeight={600}
               underline="hover"
-              sx={{ color: "#6B4C9A" }}
+              sx={{ fontWeight: 600, color: "#6B4C9A" }}
             >
               Sign in
             </Link>

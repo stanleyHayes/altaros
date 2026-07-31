@@ -58,7 +58,7 @@ export function GivingScreen() {
     setIsSubmitting(true);
     try {
       // TODO: Replace with givingService.give()
-      await new Promise((resolve) => setTimeout(resolve, 1000));
+      await new Promise<void>((resolve) => { setTimeout(() => resolve(), 1000); });
       Alert.alert(
         'Thank You!',
         `Your ${selectedType} of $${numericAmount.toFixed(2)} has been processed.`,

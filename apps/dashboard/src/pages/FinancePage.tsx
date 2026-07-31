@@ -280,7 +280,7 @@ export default function FinancePage() {
       label: "Amount",
       minWidth: 120,
       render: (row) => (
-        <Typography variant="body2" fontWeight={600}>
+        <Typography variant="body2" sx={{ fontWeight: 600 }}>
           {row.amount}
         </Typography>
       ),
@@ -328,7 +328,7 @@ export default function FinancePage() {
           mb: 3,
         }}
       >
-        <Typography variant="h4" fontWeight={700}>
+        <Typography variant="h4" sx={{ fontWeight: 700 }}>
           Finance
         </Typography>
         <Button
