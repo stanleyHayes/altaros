@@ -490,7 +490,9 @@ The PDF names four events. A working system needs a governed catalog with a vers
 
 | WP-06 | ✅ done | Per-purpose, append-only, independently revocable consent. Revoking `communications` removes that member from a broadcast — proven by test. Communications and AI processing **fail closed** (no record ≠ consent); membership and giving are service-necessary and implied. Consent does not cross churches. |
 
-Not yet started: WP-08 (audit log & observability), and Phase 1 onward.
+| WP-08 | 🟡 partial | **Audit log done:** append-only, tenant-scoped, records *reads* of sensitive resources (prayer, welfare, exports) and denied attempts, attributing the actor from the request scope rather than the caller. Reading a prayer request writes an audit row — proven by test. **Outstanding:** OpenTelemetry tracing (gateway → service → DB) is not implemented. |
+
+Not yet started: Phase 1 (WP-10 onward).
 
 ### Phase 0 — Salvage & foundation
 
