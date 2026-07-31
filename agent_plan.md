@@ -488,7 +488,9 @@ The PDF names four events. A working system needs a governed catalog with a vers
 | WP-05 | ✅ done | Production boot with missing secrets exits 1 naming each one, sorted, scoped per service (finance → 4, gateway → 9). Covered by tests. |
 | WP-07 | ✅ done | `TenantCollection` injects `churchId` into every filter and refuses to build one without a tenant in context. Cross-tenant reads return **zero rows across all 8 tenant-scoped domains** against real MongoDB; cross-tenant filters, inserts and tenant-reassigning updates are all rejected. |
 
-Not yet started: WP-06 (consent), WP-08 (audit log & observability), and Phase 1 onward.
+| WP-06 | ✅ done | Per-purpose, append-only, independently revocable consent. Revoking `communications` removes that member from a broadcast — proven by test. Communications and AI processing **fail closed** (no record ≠ consent); membership and giving are service-necessary and implied. Consent does not cross churches. |
+
+Not yet started: WP-08 (audit log & observability), and Phase 1 onward.
 
 ### Phase 0 — Salvage & foundation
 
