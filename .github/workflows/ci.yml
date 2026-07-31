@@ -14,7 +14,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
       - run: npm ci
       - run: npm run lint
@@ -26,7 +26,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
       - run: npm ci
       - run: npm run test
@@ -39,7 +39,46 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
       - run: npm ci
       - run: npm run build
+
+  # WP-04: Go contracts are generated from packages/shared-types. This job is
+  # what turns type drift into a build failure instead of a production bug —
+  # the exact class of failure that took dashboard login down (LoginRequest
+  # lost its required `method` in a hand-maintained duplicate).
+  contracts:
+    name: Contract drift
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+      # The generator pins its own TypeScript and is not an npm workspace,
+      # so install it directly rather than via the root `npm ci`.
+      - run: npm install --prefix tools/gen-go-contracts --no-audit --no-fund
+      - name: Verify Go contracts match shared-types
+        run: make contracts-check
+
+  go:
+    name: Go build & test
+    runs-on: ubuntu-latest
+    needs: [contracts]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+          cache: true
+      # Uses the same make targets developers run locally, so CI and local
+      # cannot drift. They also scope Go commands away from node_modules,
+      # which contains a vendored Go package (flatted) that `./...` picks up.
+      - run: make fmt-check
+      - run: make vet
+      - run: make build
+      - run: make test

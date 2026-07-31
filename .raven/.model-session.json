@@ -1,9 +1,9 @@
 {
   "session_started_at": "2026-07-31T14:35:37.721468Z",
   "raven_overhead": {
-    "tokens": 458,
-    "cost_usd": 0.000114,
-    "calls": 8,
+    "tokens": 626,
+    "cost_usd": 0.000156,
+    "calls": 11,
     "by_source": {
       "architect-router": {
         "tokens": 80,
@@ -11,24 +11,24 @@
         "cost_usd": 2e-05
       },
       "triage-router": {
-        "tokens": 378,
-        "calls": 7,
-        "cost_usd": 9.4e-05
+        "tokens": 546,
+        "calls": 10,
+        "cost_usd": 0.000136
       }
     }
   },
   "user_work": {
     "tokens": 0,
     "cost_usd": 0.0,
-    "calls": 8,
+    "calls": 11,
     "tier_counts": {
-      "SIMPLE": 8,
+      "SIMPLE": 11,
       "MEDIUM": 0,
       "COMPLEX": 0,
       "LOCAL_ONLY": 0
     },
     "last_classification": {
-      "timestamp": "2026-07-31T22:42:38.433074Z",
+      "timestamp": "2026-07-31T23:30:21.492363Z",
       "user_query_hash": "e3b0c44298fc1c14",
       "tier": "SIMPLE",
       "score": 0,

@@ -86,10 +86,10 @@ type KafkaConfig struct {
 }
 
 type JWTConfig struct {
-	Secret        string
-	AccessTTL     time.Duration
-	RefreshTTL    time.Duration
-	Issuer        string
+	Secret     string
+	AccessTTL  time.Duration
+	RefreshTTL time.Duration
+	Issuer     string
 }
 
 type PaystackConfig struct {
@@ -232,9 +232,9 @@ func requiredSecrets(service string) map[string]func(*Config) string {
 			"PAYSTACK_WEBHOOK_SECRET": func(c *Config) string { return c.Paystack.WebhookSecret },
 		},
 		"notification": {
-			"AT_API_KEY":       func(c *Config) string { return c.AfricasTkg.APIKey },
-			"AT_USERNAME":      func(c *Config) string { return c.AfricasTkg.Username },
-			"RESEND_API_KEY":   func(c *Config) string { return c.Resend.APIKey },
+			"AT_API_KEY":        func(c *Config) string { return c.AfricasTkg.APIKey },
+			"AT_USERNAME":       func(c *Config) string { return c.AfricasTkg.Username },
+			"RESEND_API_KEY":    func(c *Config) string { return c.Resend.APIKey },
 			"RESEND_FROM_EMAIL": func(c *Config) string { return c.Resend.FromEmail },
 		},
 		"ai": {

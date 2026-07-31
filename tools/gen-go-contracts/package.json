@@ -1,0 +1,14 @@
+{
+  "name": "@altar-os/gen-go-contracts",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "description": "Generates Go contract types from packages/shared-types (WP-04).",
+  "scripts": {
+    "generate": "node generate.mjs",
+    "check": "node generate.mjs --check"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3"
+  }
+}
