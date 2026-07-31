@@ -30,8 +30,9 @@ const churchSchema = new Schema<ChurchDocument>(
   {
     name: { type: String, required: true },
     slug: { type: String, required: true, unique: true },
-    address: { type: String, required: true },
-    city: { type: String, required: true },
+    // Not known at self-signup — the church fills these in from Settings.
+    address: { type: String, default: "" },
+    city: { type: String, default: "" },
     country: { type: String, required: true },
     phone: { type: String, required: true },
     email: { type: String, required: true },

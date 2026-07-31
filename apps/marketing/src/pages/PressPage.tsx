@@ -229,7 +229,7 @@ export default function PressPage() {
                 variant="body1"
                 sx={{ color: "text.secondary", lineHeight: 1.8 }}
               >
-                Our primary typeface is <strong>Nunito Sans</strong> — used
+                Our primary typeface is <strong>Outfit</strong> — used
                 across all marketing materials, the product interface, and
                 documentation. It conveys warmth, readability, and
                 professionalism.

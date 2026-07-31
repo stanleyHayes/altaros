@@ -1,5 +1,6 @@
 import bcrypt from "bcryptjs";
 import jwt, { type SignOptions } from "jsonwebtoken";
+import { UserRole } from "@altar-os/shared-types";
 import type {
   User,
   AuthTokens,
@@ -10,20 +11,89 @@ import type {
 } from "@altar-os/shared-types";
 import type { IAuthService, AuthResult } from "../ports/auth.service.port.js";
 import type { IAuthRepository } from "../ports/auth.repository.port.js";
+import type { IChurchRepository } from "../../church/ports/church.repository.port.js";
 import type { AuthPayload } from "../../../infrastructure/middleware/auth.middleware.js";
 import { env } from "../../../infrastructure/config/env.js";
 import { AppError } from "../../../infrastructure/middleware/error.middleware.js";
 
 const SALT_ROUNDS = 12;
 
+const SLUG_MAX_LENGTH = 60;
+
+function slugify(value: string): string {
+  return value
+    .toLowerCase()
+    .normalize("NFKD")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, SLUG_MAX_LENGTH);
+}
+
 export class AuthService implements IAuthService {
-  constructor(private readonly authRepo: IAuthRepository) {}
+  constructor(
+    private readonly authRepo: IAuthRepository,
+    private readonly churchRepo: IChurchRepository,
+  ) {}
+
+  /**
+   * Resolves the church a new user belongs to. Either they join an existing
+   * church by id, or they supply a church name and we create it — that is the
+   * self-signup path, and the registrant becomes its first admin.
+   */
+  private async resolveChurchId(data: RegisterRequest): Promise<string> {
+    if (data.churchId) {
+      const church = await this.churchRepo.findById(data.churchId);
+      if (!church) {
+        throw new AppError(404, "That church could not be found");
+      }
+      return church.id;
+    }
+
+    if (!data.churchName) {
+      throw new AppError(
+        400,
+        "Provide either churchId to join a church, or churchName to create one",
+      );
+    }
+
+    const baseSlug = slugify(data.churchName);
+    if (!baseSlug) {
+      throw new AppError(400, "Church name must contain letters or numbers");
+    }
+
+    if (await this.churchRepo.findBySlug(baseSlug)) {
+      throw new AppError(
+        409,
+        "A church with that name already exists. Ask an admin to invite you instead.",
+      );
+    }
+
+    // Defaults reflect the launch market; churches edit these in Settings.
+    const church = await this.churchRepo.create({
+      name: data.churchName,
+      slug: baseSlug,
+      address: "",
+      city: "",
+      country: "Ghana",
+      phone: data.phone,
+      email: data.email,
+      timezone: "Africa/Accra",
+      currency: "GHS",
+    });
+
+    return church.id;
+  }
 
   async register(data: RegisterRequest): Promise<AuthResult> {
     const existing = await this.authRepo.findByEmail(data.email);
     if (existing) {
       throw new AppError(409, "A user with this email already exists");
     }
+
+    const churchId = await this.resolveChurchId(data);
+    // Whoever creates the church administers it; people joining an existing
+    // church start as members and are promoted by an admin.
+    const isFoundingAdmin = !data.churchId && Boolean(data.churchName);
 
     const passwordHash = await bcrypt.hash(data.password, SALT_ROUNDS);
 
@@ -32,7 +102,8 @@ export class AuthService implements IAuthService {
       phone: data.phone,
       name: data.name,
       passwordHash,
-      churchId: data.churchId,
+      churchId,
+      ...(isFoundingAdmin ? { role: UserRole.CHURCH_ADMIN } : {}),
     });
 
     const tokens = this.generateTokens(user);

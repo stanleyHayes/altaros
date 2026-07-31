@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { AuthService } from '../domain/auth/application/auth.service';
 import type { IAuthRepository } from '../domain/auth/ports/auth.repository.port';
+import type { IChurchRepository } from '../domain/church/ports/church.repository.port';
 import { LoginMethod } from '@altar-os/shared-types';
 
 // Mirrors IAuthRepository exactly. OTP-related methods (createFromPhone,
@@ -15,12 +16,23 @@ const mockRepo: IAuthRepository = {
   updatePassword: vi.fn(),
 };
 
+// Register resolves a church (join by id, or create from name), so the
+// service now depends on the church repository too.
+const mockChurchRepo: IChurchRepository = {
+  findById: vi.fn(),
+  findBySlug: vi.fn(),
+  findAll: vi.fn(),
+  create: vi.fn(),
+  update: vi.fn(),
+  delete: vi.fn(),
+};
+
 describe('AuthService', () => {
   let service: AuthService;
 
   beforeEach(() => {
     vi.clearAllMocks();
-    service = new AuthService(mockRepo);
+    service = new AuthService(mockRepo, mockChurchRepo);
   });
 
   it('should throw if user already exists on register', async () => {

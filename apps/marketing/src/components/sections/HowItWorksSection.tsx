@@ -126,7 +126,7 @@ export default function HowItWorksSection() {
                       justifyContent: "center",
                       fontWeight: 800,
                       fontSize: "0.75rem",
-                      fontFamily: "'Nunito Sans', sans-serif",
+                      fontFamily: "'Outfit', sans-serif",
                     }}
                   >
                     {step.number}

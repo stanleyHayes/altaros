@@ -1,26 +1,32 @@
+import { LoginMethod } from "@altar-os/shared-types";
+import type {
+  AuthTokens,
+  LoginRequest,
+  RegisterRequest,
+  User,
+} from "@altar-os/shared-types";
 import { post, get } from "./api";
 
+/**
+ * Auth request/response shapes come from @altar-os/shared-types, which is the
+ * canonical contract the API is built against. This module previously declared
+ * its own drifted copies (a `User` with firstName/lastName, a login payload
+ * with no `method`), which made every auth call fail against the real API.
+ */
+export type { AuthTokens, User };
+
+/** What the login form collects. `method` is derived in `login()`. */
 export interface LoginPayload {
-  email: string;
+  email?: string;
+  phone?: string;
   password: string;
 }
 
-export interface RegisterPayload {
-  email: string;
-  password: string;
-  firstName: string;
-  lastName: string;
-  churchName?: string;
-}
+export type RegisterPayload = RegisterRequest;
 
 export interface OtpPayload {
-  email: string;
+  phone: string;
   code: string;
-}
-
-export interface AuthTokens {
-  accessToken: string;
-  refreshToken: string;
 }
 
 export interface AuthResponse {
@@ -28,19 +34,26 @@ export interface AuthResponse {
   tokens: AuthTokens;
 }
 
-export interface User {
-  id: string;
-  email: string;
-  firstName: string;
-  lastName: string;
-  role: string;
-  churchId?: string;
-  avatarUrl?: string;
+/** Display name helpers — the API returns a single `name`, not first/last. */
+export function initialsOf(user: Pick<User, "name">): string {
+  return user.name
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0])
+    .join("")
+    .toUpperCase();
 }
 
 const AuthService = {
   async login(payload: LoginPayload): Promise<AuthResponse> {
-    return post<AuthResponse>("/auth/login", payload);
+    // The API requires an explicit method; infer it from what was supplied so
+    // callers don't have to restate it at every call site.
+    const body: LoginRequest = {
+      ...payload,
+      method: payload.email ? LoginMethod.EMAIL : LoginMethod.PHONE,
+    };
+    return post<AuthResponse>("/auth/login", body);
   },
 
   async register(payload: RegisterPayload): Promise<AuthResponse> {
@@ -52,7 +65,8 @@ const AuthService = {
   },
 
   async refreshToken(refreshToken: string): Promise<AuthTokens> {
-    return post<AuthTokens>("/auth/refresh", { refreshToken });
+    // Route is /auth/refresh-token on the API, not /auth/refresh.
+    return post<AuthTokens>("/auth/refresh-token", { refreshToken });
   },
 
   async getCurrentUser(): Promise<User> {

@@ -41,7 +41,14 @@ export interface RegisterRequest {
   phone: string;
   name: string;
   password: string;
-  churchId: string;
+  /** Join an existing church. Provide this OR `churchName`, not neither. */
+  churchId?: string;
+  /**
+   * Register a new church and become its first CHURCH_ADMIN. Used by the
+   * self-signup flow, where the registrant knows their church's name but
+   * has no id yet.
+   */
+  churchName?: string;
 }
 
 export interface OtpVerifyRequest {

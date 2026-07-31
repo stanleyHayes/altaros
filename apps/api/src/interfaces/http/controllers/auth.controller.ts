@@ -1,19 +1,27 @@
 import type { Request, Response } from "express";
 import { z } from "zod";
 import { MongoAuthRepository } from "../../../domain/auth/adapters/auth.mongo.adapter.js";
+import { MongoChurchRepository } from "../../../domain/church/adapters/church.mongo.adapter.js";
 import { AuthService } from "../../../domain/auth/application/auth.service.js";
 import type { ApiResponse } from "@altar-os/shared-types";
 
 const authRepo = new MongoAuthRepository();
-const authService = new AuthService(authRepo);
+const churchRepo = new MongoChurchRepository();
+const authService = new AuthService(authRepo, churchRepo);
 
-export const registerSchema = z.object({
-  email: z.string().email(),
-  phone: z.string().min(1),
-  name: z.string().min(1),
-  password: z.string().min(8),
-  churchId: z.string().min(1),
-});
+export const registerSchema = z
+  .object({
+    email: z.string().email(),
+    phone: z.string().min(1),
+    name: z.string().min(1),
+    password: z.string().min(8),
+    churchId: z.string().min(1).optional(),
+    churchName: z.string().min(2).optional(),
+  })
+  .refine((data) => Boolean(data.churchId || data.churchName), {
+    message: "Provide either churchId (join a church) or churchName (create one)",
+    path: ["churchId"],
+  });
 
 export const loginSchema = z.object({
   email: z.string().email().optional(),

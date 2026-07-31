@@ -1,4 +1,4 @@
-import { BrowserRouter, Routes, Route } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { ThemeProvider } from "@mui/material/styles";
 import CssBaseline from "@mui/material/CssBaseline";
 import { HelmetProvider } from "react-helmet-async";
@@ -25,6 +25,8 @@ import ChangelogPage from "@/pages/ChangelogPage";
 import DocsPage from "@/pages/DocsPage";
 import PressPage from "@/pages/PressPage";
 import NotFoundPage from "@/pages/NotFoundPage";
+import PricingPage from "@/pages/PricingPage";
+import GetStartedPage from "@/pages/GetStartedPage";
 
 export default function App() {
   return (
@@ -43,6 +45,9 @@ export default function App() {
               <Route path="/mobile-app" element={<MobileAppPage />} />
               <Route path="/integrations" element={<IntegrationsPage />} />
               <Route path="/changelog" element={<ChangelogPage />} />
+              <Route path="/pricing" element={<PricingPage />} />
+              <Route path="/get-started" element={<GetStartedPage />} />
+              <Route path="/register" element={<Navigate to="/get-started" replace />} />
 
               {/* Solutions */}
               <Route path="/solutions/pastors" element={<SolutionsPastorsPage />} />

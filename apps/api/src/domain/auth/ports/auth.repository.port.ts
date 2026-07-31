@@ -1,4 +1,4 @@
-import type { User } from "@altar-os/shared-types";
+import type { User, UserRole } from "@altar-os/shared-types";
 
 export interface CreateUserData {
   email: string;
@@ -6,6 +6,8 @@ export interface CreateUserData {
   name: string;
   passwordHash: string;
   churchId: string;
+  /** Defaults to MEMBER. Set to CHURCH_ADMIN for whoever creates the church. */
+  role?: UserRole;
 }
 
 export interface IAuthRepository {

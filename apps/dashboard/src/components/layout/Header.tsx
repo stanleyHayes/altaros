@@ -15,6 +15,7 @@ import {
   Divider,
 } from "@mui/material";
 import { alpha, styled } from "@mui/material/styles";
+import { initialsOf } from "@/services/auth.service";
 import {
   Menu as MenuIcon,
   Search as SearchIcon,
@@ -56,10 +57,16 @@ const SearchIconWrapper = styled("div")(({ theme }) => ({
 const StyledInputBase = styled(InputBase)(({ theme }) => ({
   color: "inherit",
   width: "100%",
+  borderRadius: theme.shape.borderRadius,
+  // Keyboard focus needs a visible indicator; the wrapper has no outline of
+  // its own, so the ring lives here where it can surround the whole field.
+  "&:has(:focus-visible)": {
+    outline: `2px solid ${theme.palette.primary.main}`,
+    outlineOffset: 2,
+  },
   "& .MuiInputBase-input": {
     padding: theme.spacing(1, 1, 1, 0),
     paddingLeft: `calc(1em + ${theme.spacing(4)})`,
-    transition: theme.transitions.create("width"),
     fontSize: "0.9375rem",
   },
 }));
@@ -91,9 +98,8 @@ export default function Header({
     logout();
   };
 
-  const userInitials = user
-    ? `${user.firstName[0]}${user.lastName[0]}`.toUpperCase()
-    : "?";
+  // The API returns a single `name`; indexing firstName/lastName crashed here.
+  const userInitials = user ? initialsOf(user) : "?";
 
   return (
     <AppBar
@@ -158,7 +164,7 @@ export default function Header({
           {user && (
             <Box sx={{ display: { xs: "none", sm: "block" }, ml: 1 }}>
               <Typography variant="body2" sx={{ fontWeight: 600, lineHeight: 1.2 }}>
-                {user.firstName} {user.lastName}
+                {user.name}
               </Typography>
               <Typography variant="caption" color="text.secondary">
                 {user.role}

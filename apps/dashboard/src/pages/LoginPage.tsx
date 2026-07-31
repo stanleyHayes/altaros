@@ -28,11 +28,11 @@ const fieldSx = {
     "& fieldset": { borderColor: "#E0E0E0" },
     "&:hover fieldset": { borderColor: "#BDBDBD" },
     "&.Mui-focused fieldset": {
-      borderColor: "#6B4C9A",
-      boxShadow: "0 0 0 3px rgba(107,76,154,0.1)",
+      borderColor: "primary.main",
+      boxShadow: "0 0 0 3px rgba(63,81,181,0.12)",
     },
   },
-  "& .MuiInputLabel-root.Mui-focused": { color: "#6B4C9A" },
+  "& .MuiInputLabel-root.Mui-focused": { color: "primary.main" },
 } as const;
 
 const loginSchema = z.object({
@@ -156,7 +156,7 @@ export default function LoginPage() {
                 size="small"
                 sx={{
                   color: "#BDBDBD",
-                  "&.Mui-checked": { color: "#6B4C9A" },
+                  "&.Mui-checked": { color: "primary.main" },
                 }}
               />
             }
@@ -171,7 +171,7 @@ export default function LoginPage() {
             to="/forgot-password"
             variant="body2"
             underline="hover"
-            sx={{ color: "#6B4C9A", fontWeight: 500 }}
+            sx={{ color: "primary.main", fontWeight: 500 }}
           >
             Forgot password?
           </Link>
@@ -217,7 +217,7 @@ export default function LoginPage() {
               component={RouterLink}
               to="/register"
               underline="hover"
-              sx={{ fontWeight: 600, color: "#6B4C9A" }}
+              sx={{ fontWeight: 600, color: "primary.main" }}
             >
               Register your church
             </Link>
