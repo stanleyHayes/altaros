@@ -6,3 +6,9 @@ dist
 .vercel
 coverage
 *.tsbuildinfo
+
+# Go
+/altar
+/bin/
+*.test
+*.out

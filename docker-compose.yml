@@ -1,0 +1,91 @@
+# Local infrastructure for ALTAR OS (WP-03).
+#
+# Datastores the Go services target: MongoDB 7 (primary store), Redis 7
+# (cache + sessions), and single-node Kafka in KRaft mode (no ZooKeeper).
+#
+# MongoDB supersedes the MySQL choice in the original spec. It is also what the
+# legacy TypeScript API already uses, so both backends share one database
+# during the migration instead of running two engines side by side.
+#
+#   docker compose up -d
+#   docker compose ps          # all should report healthy
+#   docker compose down        # stop (volumes and data survive)
+#   docker compose down -v     # tear down INCLUDING data
+
+name: altar-os
+
+services:
+  mongodb:
+    image: mongo:7
+    container_name: altar-mongo
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    volumes:
+      # Pre-existing external volume: it already holds the seeded churches and
+      # users the running API depends on, so compose adopts it rather than
+      # creating a fresh one.
+      - altar-mongo-data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+
+  redis:
+    image: redis:7-alpine
+    container_name: altar-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  kafka:
+    image: apache/kafka:3.9.0
+    container_name: altar-kafka
+    restart: unless-stopped
+    ports:
+      # 9092-9096 are all occupied by other local services, so the broker is
+      # published on 19092. KAFKA_BROKERS must match.
+      - "19092:19092"
+    environment:
+      # Single-node KRaft: this broker is also the controller.
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@localhost:9093
+      KAFKA_LISTENERS: PLAINTEXT://:19092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:19092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      # Single broker, so nothing can be replicated.
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      # Domain events are the audit spine; don't silently create topics from a
+      # typo in a consumer's subscription.
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      CLUSTER_ID: altar-os-local-cluster
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:19092 >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 10s
+      retries: 20
+      start_period: 40s
+
+volumes:
+  altar-mongo-data:
+    external: true
+  redis-data:
+  kafka-data:

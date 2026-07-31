@@ -111,6 +111,16 @@ Confirmed by the project owner, 31 Jul 2026. These are settled; do not relitigat
 **Why:** the PDF's 8-service topology is correct as a *boundary* design and premature as a *deployment* design for a pre-launch product. Getting the boundaries right early is cheap; operating 8 K8s deployments before the first paying church is not. The code is written so that splitting is a deploy-config change, never a refactor.
 **Trigger to split a service out:** it needs independent scaling, an independent release cadence, or its failure must not take the others down. Finance and Notification will hit this first.
 
+### ADR-005 — MongoDB, not MySQL. Supersedes the datastore half of ADR-001.
+**Decision (31 Jul 2026):** the Go services use **MongoDB** via the official **MongoDB Go Driver** (`go.mongodb.org/mongo-driver/v2`). Redis and Kafka are unchanged.
+**Note on Mongoose:** Mongoose is a Node-only ODM and has no Go equivalent. Go uses the official driver directly; if Mongoose-style model helpers are wanted later, `mgm` or `qmgo` wrap the driver. Nothing named "Mongoose" will exist in the Go tree.
+**Why this is a good trade rather than a concession:** the legacy TypeScript API already runs on MongoDB, so the Go services and the TS API **share one database throughout the migration** instead of operating MySQL and Mongo side by side and syncing between them. It also removes the migration-tooling work (`golang-migrate`, `sqlc`) from the critical path.
+**What it costs, stated plainly:** the relational guarantees §5 leaned on are no longer free. Three things become explicit engineering rather than schema declarations:
+1. **Money.** `DECIMAL(19,4)` does not exist. Store money as **integer minor units** (`amount_minor` int64 + `currency`), never float64 — BSON `double` is IEEE-754 and will lose cents.
+2. **Referential integrity.** No foreign keys. Cross-collection consistency is enforced in the service layer, and multi-document writes that must be atomic use transactions (available on a replica set; the single-node local container is fine for development but production needs a replica set).
+3. **Tenant isolation.** §4.5's "leading column of every index" becomes "`church_id` is the **first field of every compound index**", and the query wrapper still refuses to build a tenant-scoped filter without it. The guarantee is unchanged; the mechanism is.
+**Consequence:** §5's `CREATE TABLE` definitions are superseded — read them as the **field-level contract** (names, types, required/optional, money as minor units, the unique constraints that make payments idempotent), and implement them as MongoDB collections with equivalent unique indexes. The two `uq_idempotency` / `uq_provider_ref` constraints in §5.2 remain **mandatory unique indexes**: they are what stop a retried payment webhook from recording a tithe twice.
+
 ---
 
 ## §2. Market context (research)
@@ -463,6 +473,21 @@ The PDF names four events. A working system needs a governed catalog with a vers
 ---
 
 ## §7. Work packages
+
+### Status — last updated 31 Jul 2026
+
+| WP | State | Evidence |
+|---|---|---|
+| WP-00 | ✅ done | 32 backend `.ts` restored. **Deviation:** restored *in place*, not to `reference/`, which also made `apps/api` compile and serve the platform again. |
+| WP-00b | ✅ done | 16 frontend components restored; zero dangling imports; 4 affected apps build. |
+| WP-00c | ✅ done | Commit `7feade5`. ⚠️ **Still local-only — no remote.** See §10 Q-0. |
+| WP-01 | ⛔ moot | Existed to stop a non-compiling `apps/api` failing the build. `apps/api` now compiles and is the live backend; quarantining it would break the running platform. It retires at WP-20 as planned. |
+| WP-02 | ✅ done | `go build ./...` and `go vet ./...` clean; `go run ./cmd/altar -service=gateway` returns `{"status":"ok"}`; all 9 services registered; graceful shutdown exits 0. |
+| WP-03 | ✅ done | `docker compose ps` → mongo/redis/kafka all **healthy**; seeded data intact across the container handover; 4 domain-event topics created. **Kafka is on 19092** (9092–9096 are occupied by other local services). |
+| WP-04 | ⏭ next | Contract pipeline `shared-types` → Go. |
+| WP-05 | ✅ done | Production boot with missing secrets exits 1 naming each one, sorted, scoped per service (finance → 4, gateway → 9). |
+
+Not yet started: WP-06 onward.
 
 ### Phase 0 — Salvage & foundation
 
