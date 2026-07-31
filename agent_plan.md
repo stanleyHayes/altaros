@@ -484,10 +484,11 @@ The PDF names four events. A working system needs a governed catalog with a vers
 | WP-01 | ⛔ moot | Existed to stop a non-compiling `apps/api` failing the build. `apps/api` now compiles and is the live backend; quarantining it would break the running platform. It retires at WP-20 as planned. |
 | WP-02 | ✅ done | `go build ./...` and `go vet ./...` clean; `go run ./cmd/altar -service=gateway` returns `{"status":"ok"}`; all 9 services registered; graceful shutdown exits 0. |
 | WP-03 | ✅ done | `docker compose ps` → mongo/redis/kafka all **healthy**; seeded data intact across the container handover; 4 domain-event topics created. **Kafka is on 19092** (9092–9096 are occupied by other local services). |
-| WP-04 | ⏭ next | Contract pipeline `shared-types` → Go. |
-| WP-05 | ✅ done | Production boot with missing secrets exits 1 naming each one, sorted, scoped per service (finance → 4, gateway → 9). |
+| WP-04 | ✅ done | `make contracts` generates 14 Go files from shared-types; `make contracts-check` fails on drift (verified both directions) and gates the Go job in CI. |
+| WP-05 | ✅ done | Production boot with missing secrets exits 1 naming each one, sorted, scoped per service (finance → 4, gateway → 9). Covered by tests. |
+| WP-07 | ✅ done | `TenantCollection` injects `churchId` into every filter and refuses to build one without a tenant in context. Cross-tenant reads return **zero rows across all 8 tenant-scoped domains** against real MongoDB; cross-tenant filters, inserts and tenant-reassigning updates are all rejected. |
 
-Not yet started: WP-06 onward.
+Not yet started: WP-06 (consent), WP-08 (audit log & observability), and Phase 1 onward.
 
 ### Phase 0 — Salvage & foundation
 

@@ -1,0 +1,229 @@
+// Package mongodb provides the tenant-safe data access layer (WP-07).
+//
+// ALTAR OS is shared-schema multi-tenant: tenant-scoped documents all carry a
+// churchId, and the known catastrophic failure is a single query that forgets
+// to filter on it, returning one church's giving records to another.
+//
+// The mitigation here is structural rather than procedural. Tenant-scoped
+// collections are only reachable through TenantCollection, which:
+//
+//   - reads the church from the request context, and returns ErrNoTenant if
+//     there isn't one, so a query cannot be built "unscoped by accident";
+//   - injects churchId into every filter itself, so the caller cannot forget;
+//   - refuses a caller-supplied churchId that contradicts the context, so a
+//     handler cannot be tricked into reading another tenant by passing an id
+//     from user input.
+//
+// Collections that are genuinely global (churches, organizations, platform
+// audit) use Global() explicitly, which makes the exception visible in review.
+package mongodb
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"time"
+
+	"go.mongodb.org/mongo-driver/v2/bson"
+	"go.mongodb.org/mongo-driver/v2/mongo"
+	"go.mongodb.org/mongo-driver/v2/mongo/options"
+
+	"github.com/hayfordstanley/altar-os/internal/platform/config"
+	"github.com/hayfordstanley/altar-os/internal/platform/tenancy"
+)
+
+// TenantField is the document field every tenant-scoped collection carries.
+// It matches the camelCase the TypeScript API already writes, so the Go
+// services and the legacy API can share one database during migration.
+const TenantField = "churchId"
+
+// ErrCrossTenant is returned when a filter names a church other than the one
+// in context. This is a rejected security violation, not a not-found.
+var ErrCrossTenant = errors.New("mongodb: filter targets a different church than the request scope")
+
+// DB wraps a Mongo database with tenant-aware accessors.
+type DB struct {
+	client *mongo.Client
+	db     *mongo.Database
+}
+
+// Connect dials MongoDB and verifies the connection before returning, so a
+// misconfigured deployment fails at boot rather than on first request.
+func Connect(ctx context.Context, cfg config.MongoConfig) (*DB, error) {
+	ctx, cancel := context.WithTimeout(ctx, cfg.ConnectTimeout)
+	defer cancel()
+
+	client, err := mongo.Connect(options.Client().ApplyURI(cfg.URI))
+	if err != nil {
+		return nil, fmt.Errorf("mongodb: connect: %w", err)
+	}
+	if err := client.Ping(ctx, nil); err != nil {
+		return nil, fmt.Errorf("mongodb: ping %s: %w", cfg.URI, err)
+	}
+
+	return &DB{client: client, db: client.Database(cfg.Database)}, nil
+}
+
+// Close disconnects the client.
+func (d *DB) Close(ctx context.Context) error {
+	if d == nil || d.client == nil {
+		return nil
+	}
+	return d.client.Disconnect(ctx)
+}
+
+// Database exposes the raw database. Reserved for migrations and index
+// management; request-path code should use Tenant or Global.
+func (d *DB) Database() *mongo.Database { return d.db }
+
+// Global returns a collection with no tenant filtering. Use only for
+// genuinely cross-tenant data (churches, organizations, platform audit).
+func (d *DB) Global(name string) *mongo.Collection { return d.db.Collection(name) }
+
+// Tenant returns a tenant-scoped view of a collection.
+func (d *DB) Tenant(name string) *TenantCollection {
+	return &TenantCollection{coll: d.db.Collection(name), name: name}
+}
+
+// TenantCollection is a collection that can only be queried within a church.
+type TenantCollection struct {
+	coll *mongo.Collection
+	name string
+}
+
+// scopedFilter merges the caller's filter with the church from context.
+//
+// A caller-supplied churchId is allowed only when it matches the context; a
+// mismatch is a cross-tenant attempt and is refused rather than silently
+// overwritten, so the attempt is visible instead of quietly downgraded.
+func (t *TenantCollection) scopedFilter(ctx context.Context, filter any) (bson.M, error) {
+	churchID, err := tenancy.MustChurchID(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", t.name, err)
+	}
+
+	out := bson.M{}
+	switch f := filter.(type) {
+	case nil:
+		// No filter: tenant predicate only.
+	case bson.M:
+		for k, v := range f {
+			out[k] = v
+		}
+	case bson.D:
+		for _, e := range f {
+			out[e.Key] = e.Value
+		}
+	default:
+		return nil, fmt.Errorf(
+			"%s: filter must be bson.M, bson.D or nil (got %T); "+
+				"other shapes cannot be checked for tenant safety", t.name, filter)
+	}
+
+	if existing, ok := out[TenantField]; ok {
+		if s, isString := existing.(string); !isString || s != churchID {
+			return nil, fmt.Errorf("%s: %w", t.name, ErrCrossTenant)
+		}
+	}
+
+	out[TenantField] = churchID
+	return out, nil
+}
+
+// stampTenant sets churchId on a document being written, and rejects a
+// document that claims a different church.
+func (t *TenantCollection) stampTenant(ctx context.Context, doc bson.M) (bson.M, error) {
+	churchID, err := tenancy.MustChurchID(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", t.name, err)
+	}
+
+	out := bson.M{}
+	for k, v := range doc {
+		out[k] = v
+	}
+
+	if existing, ok := out[TenantField]; ok {
+		if s, isString := existing.(string); !isString || s != churchID {
+			return nil, fmt.Errorf("%s: %w", t.name, ErrCrossTenant)
+		}
+	}
+
+	out[TenantField] = churchID
+	now := time.Now().UTC()
+	if _, ok := out["createdAt"]; !ok {
+		out["createdAt"] = now
+	}
+	out["updatedAt"] = now
+	return out, nil
+}
+
+// FindOne returns a single document within the caller's church.
+func (t *TenantCollection) FindOne(ctx context.Context, filter any, out any) error {
+	scoped, err := t.scopedFilter(ctx, filter)
+	if err != nil {
+		return err
+	}
+	return t.coll.FindOne(ctx, scoped).Decode(out)
+}
+
+// Find returns matching documents within the caller's church.
+func (t *TenantCollection) Find(ctx context.Context, filter any, out any, opts ...options.Lister[options.FindOptions]) error {
+	scoped, err := t.scopedFilter(ctx, filter)
+	if err != nil {
+		return err
+	}
+	cur, err := t.coll.Find(ctx, scoped, opts...)
+	if err != nil {
+		return err
+	}
+	return cur.All(ctx, out)
+}
+
+// CountDocuments counts within the caller's church.
+func (t *TenantCollection) CountDocuments(ctx context.Context, filter any) (int64, error) {
+	scoped, err := t.scopedFilter(ctx, filter)
+	if err != nil {
+		return 0, err
+	}
+	return t.coll.CountDocuments(ctx, scoped)
+}
+
+// InsertOne writes a document stamped with the caller's church.
+func (t *TenantCollection) InsertOne(ctx context.Context, doc bson.M) (*mongo.InsertOneResult, error) {
+	stamped, err := t.stampTenant(ctx, doc)
+	if err != nil {
+		return nil, err
+	}
+	return t.coll.InsertOne(ctx, stamped)
+}
+
+// UpdateOne updates a document within the caller's church.
+func (t *TenantCollection) UpdateOne(ctx context.Context, filter any, update bson.M) (*mongo.UpdateResult, error) {
+	scoped, err := t.scopedFilter(ctx, filter)
+	if err != nil {
+		return nil, err
+	}
+	// Never let an update move a document to another church.
+	if set, ok := update["$set"].(bson.M); ok {
+		if _, present := set[TenantField]; present {
+			return nil, fmt.Errorf("%s: %w (update may not reassign %s)",
+				t.name, ErrCrossTenant, TenantField)
+		}
+		set["updatedAt"] = time.Now().UTC()
+	}
+	return t.coll.UpdateOne(ctx, scoped, update)
+}
+
+// DeleteOne deletes a document within the caller's church.
+func (t *TenantCollection) DeleteOne(ctx context.Context, filter any) (*mongo.DeleteResult, error) {
+	scoped, err := t.scopedFilter(ctx, filter)
+	if err != nil {
+		return nil, err
+	}
+	return t.coll.DeleteOne(ctx, scoped)
+}
+
+// Indexes exposes the underlying index view for migrations. Every
+// tenant-scoped compound index must lead with churchId (ADR-005).
+func (t *TenantCollection) Indexes() mongo.IndexView { return t.coll.Indexes() }
