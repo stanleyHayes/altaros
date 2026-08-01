@@ -95,13 +95,24 @@ func handleVerifyOTP(svc *auth.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			Phone string `json:"phone"`
-			Code  string `json:"code"`
+			// `otp` is the canonical field: it is what shared-types'
+			// OtpVerifyRequest declares and what the legacy API validates.
+			OTP string `json:"otp"`
+			// `code` is accepted as well because clients drifted onto it while
+			// this endpoint was a stub. Tolerating both costs nothing and
+			// removes a class of "which field?" failures during the migration;
+			// it can be dropped once every client is on `otp`.
+			Code string `json:"code"`
 		}
 		if err := decode(r, &req); err != nil {
 			httpx.Error(w, http.StatusBadRequest, "Malformed request body")
 			return
 		}
-		result, err := svc.VerifyOTP(r.Context(), req.Phone, req.Code)
+		code := req.OTP
+		if code == "" {
+			code = req.Code
+		}
+		result, err := svc.VerifyOTP(r.Context(), req.Phone, code)
 		if err != nil {
 			writeAuthError(w, err)
 			return

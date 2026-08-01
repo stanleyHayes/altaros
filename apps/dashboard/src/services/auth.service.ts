@@ -25,8 +25,10 @@ export interface LoginPayload {
 export type RegisterPayload = RegisterRequest;
 
 export interface OtpPayload {
-  phone: string;
-  code: string;
+  phone?: string;
+  email?: string;
+  /** The API field is `otp`, matching shared-types' OtpVerifyRequest. */
+  otp: string;
 }
 
 export interface AuthResponse {

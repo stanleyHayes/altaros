@@ -57,9 +57,7 @@ const defaultPrefs: NotificationPrefs = {
 
 export default function ProfilePage() {
   const { user, logout } = useAuth();
-  const fullName = user
-    ? `${user.firstName} ${user.lastName}`
-    : "Church Member";
+  const fullName = user?.name || "Church Member";
 
   const [prefs, setPrefs] = useState<NotificationPrefs>(defaultPrefs);
   const [snackOpen, setSnackOpen] = useState(false);

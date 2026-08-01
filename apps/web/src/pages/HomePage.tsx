@@ -12,6 +12,7 @@ import PlayCircleOutlineRoundedIcon from "@mui/icons-material/PlayCircleOutlineR
 import CalendarTodayRoundedIcon from "@mui/icons-material/CalendarTodayRounded";
 import LocationOnRoundedIcon from "@mui/icons-material/LocationOnRounded";
 import { useAuth } from "@/hooks/useAuth";
+import { firstNameOf } from "@/services/auth.service";
 import QuickActionCard from "@/components/home/QuickActionCard";
 import AnnouncementBanner from "@/components/home/AnnouncementBanner";
 
@@ -78,7 +79,7 @@ const mockRecentSermons = [
 
 export default function HomePage() {
   const { user } = useAuth();
-  const firstName = user?.firstName || "Friend";
+  const firstName = user ? firstNameOf(user) : "Friend";
 
   return (
     <Box sx={{ py: 2 }}>

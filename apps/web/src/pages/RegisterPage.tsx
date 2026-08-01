@@ -60,7 +60,20 @@ export default function RegisterPage() {
   const onSubmit = async (data: RegisterFormData) => {
     try {
       setError(null);
-      await registerUser(data);
+      // The form collects a first and last name because that is how people
+      // expect to be asked; the API stores one `name`. Mapping here keeps the
+      // form natural without inventing fields the API does not have.
+      //
+      // The church identifier is passed as `churchId`. A church admin shares
+      // it when inviting members. A friendlier short code would need a lookup
+      // endpoint that does not exist yet — see §10 Q-8.
+      await registerUser({
+        name: `${data.firstName} ${data.lastName}`.trim(),
+        email: data.email,
+        phone: data.phone,
+        password: data.password,
+        churchId: data.churchCode,
+      });
       navigate("/");
     } catch {
       setError("Registration failed. Please check your details and try again.");

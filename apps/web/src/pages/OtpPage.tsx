@@ -120,7 +120,7 @@ export default function OtpPage() {
     setIsLoading(true);
     setError(null);
     try {
-      await verifyOtp({ email: contact, code });
+      await verifyOtp({ email: contact, otp: code });
       navigate("/", { replace: true });
     } catch (err: unknown) {
       const message =

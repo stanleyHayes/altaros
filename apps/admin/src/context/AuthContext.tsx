@@ -65,14 +65,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const login = useCallback(
     async (payload: { email: string; password: string }) => {
-      const res = await AuthService.login(payload);
-      const u = res.data.user;
+      // The api helpers unwrap the { success, data } envelope, so this is the
+      // payload rather than the whole body.
+      const { user, tokens } = await AuthService.login(payload);
 
-      if (u.role !== "SUPER_ADMIN") {
+      if (user.role !== "SUPER_ADMIN") {
         throw new Error("Access denied. Super admin credentials required.");
       }
 
-      persistAuth(u, res.data.tokens);
+      persistAuth(user, tokens);
     },
     [persistAuth],
   );
