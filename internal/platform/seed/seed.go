@@ -363,19 +363,28 @@ func (s *Seeder) orgAdmin(ctx context.Context, orgID bson.ObjectID, homeSlug str
 
 	now := time.Now().UTC()
 	email := "bishop@redemption-assemblies.org"
-	_, err = s.raw.Collection("users").InsertOne(ctx, bson.M{
-		"email":          email,
-		"phone":          s.phoneE164(),
-		"passwordHash":   string(hash),
-		"name":           "Bishop Samuel Adjei",
-		"role":           "ORG_ADMIN",
-		"churchId":       home.ID,
-		"organizationId": orgID,
-		"isActive":       true,
-		MarkerField:      Marker,
-		"createdAt":      now,
-		"updatedAt":      now,
-	})
+
+	// Upsert, like the branch staff: `email` is globally unique today (ADR-006
+	// changes that), so a second seed run would otherwise collide rather than
+	// refresh. This was an InsertOne and broke every re-run.
+	_, err = s.raw.Collection("users").UpdateOne(ctx,
+		bson.M{"email": email},
+		bson.M{
+			"$set": bson.M{
+				"email":          email,
+				"phone":          s.phoneE164(),
+				"passwordHash":   string(hash),
+				"name":           "Bishop Samuel Adjei",
+				"role":           "ORG_ADMIN",
+				"churchId":       home.ID,
+				"organizationId": orgID,
+				"isActive":       true,
+				MarkerField:      Marker,
+				"updatedAt":      now,
+			},
+			"$setOnInsert": bson.M{"createdAt": now},
+		},
+		options.UpdateOne().SetUpsert(true))
 	if err != nil {
 		return Login{}, fmt.Errorf("seed: org admin: %w", err)
 	}

@@ -9,6 +9,7 @@ import (
 	"github.com/hayfordstanley/altar-os/internal/domain/church"
 	"github.com/hayfordstanley/altar-os/internal/platform/deps"
 	"github.com/hayfordstanley/altar-os/internal/platform/httpx"
+	"github.com/hayfordstanley/altar-os/internal/platform/ratelimit"
 	"github.com/hayfordstanley/altar-os/internal/platform/tenancy"
 )
 
@@ -25,6 +26,18 @@ func churchRoutes(d *deps.Deps) routeSet {
 	svc := church.NewService(d.Mongo)
 
 	return func(r chi.Router) {
+		// A church slug doubles as the member join code. Registration happens
+		// before authentication, so expose only the three fields required to
+		// confirm the destination and submit its opaque id to auth registration.
+		// Unauthenticated, so this is an enumeration surface: a dictionary
+		// attack over slugs builds the customer list, which §11.2 names as
+		// competitively useful and, for a church in a hostile region, a safety
+		// problem. The slug is public by design under ADR-007 — it is the
+		// subdomain — so the endpoint is legitimate; the limit is what stops
+		// enumerating every church on the platform being free.
+		r.With(throttle(d, ratelimit.PublicLookup)).
+			Get("/churches/slug/{slug}", handlePublicChurchBySlug(svc))
+
 		r.Group(func(r chi.Router) {
 			r.Use(authenticated(d))
 
@@ -43,6 +56,25 @@ func churchRoutes(d *deps.Deps) routeSet {
 				r.Use(requireRole(RoleOrgAdmin))
 				r.Get("/organizations/{id}/branches", handleBranches(svc))
 			})
+		})
+	}
+}
+
+func handlePublicChurchBySlug(svc *church.Service) http.HandlerFunc {
+	type publicChurch struct {
+		ID   string `json:"id"`
+		Name string `json:"name"`
+		Slug string `json:"slug"`
+	}
+
+	return func(w http.ResponseWriter, r *http.Request) {
+		ch, err := svc.ByPublicSlug(r.Context(), chi.URLParam(r, "slug"))
+		if err != nil {
+			writeChurchError(w, err)
+			return
+		}
+		httpx.JSON(w, http.StatusOK, publicChurch{
+			ID: ch.ID.Hex(), Name: ch.Name, Slug: ch.Slug,
 		})
 	}
 }

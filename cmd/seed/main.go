@@ -13,6 +13,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"log/slog"
 	"os"
 	"strings"
 	"time"
@@ -40,6 +41,8 @@ func run() error {
 		seedNum  = flag.Int64("seed", 20260801, "random seed; the same value reproduces the same data")
 		force    = flag.Bool("i-know-what-im-doing", false,
 			"permit seeding a non-development environment")
+		credentialsPath = flag.String("credentials", "credentials.txt",
+			"where to write the seeded logins; empty to skip")
 	)
 	flag.Parse()
 
@@ -107,7 +110,78 @@ func run() error {
 	}
 
 	report(result, cfg.Mongo.Database, time.Since(started))
+
+	if err := writeCredentials(*credentialsPath, result, cfg.Mongo.Database); err != nil {
+		// Not fatal: the credentials are already on screen, and failing the
+		// whole seed because a convenience file could not be written would be
+		// disproportionate.
+		log.Warn("could not write the credentials file",
+			slog.String("path", *credentialsPath),
+			slog.String("error", err.Error()))
+	} else {
+		fmt.Printf("  Also written to %s\n\n", *credentialsPath)
+	}
 	return nil
+}
+
+// writeCredentials records the seeded logins somewhere greppable.
+//
+// The file is gitignored. These are development accounts on a local database
+// with a published password, so they are not secrets — but a file called
+// credentials.txt is exactly where a real one eventually gets pasted, and the
+// ignore rule is what stops that becoming a commit.
+func writeCredentials(path string, r *seed.Result, database string) error {
+	if path == "" {
+		return nil
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "ALTAR OS — seeded development logins\n")
+	fmt.Fprintf(&b, "Database: %s\n", database)
+	fmt.Fprintf(&b, "Generated: %s\n\n", time.Now().Format(time.RFC3339))
+	fmt.Fprintf(&b, "These are fixture accounts on a development database. They are not\n")
+	fmt.Fprintf(&b, "secrets, and this file is gitignored so it cannot become one.\n")
+	fmt.Fprintf(&b, "Rewritten by `make seed`.\n\n")
+	fmt.Fprintf(&b, "Gateway:   http://localhost:8080/api/v1\n")
+	fmt.Fprintf(&b, "Dashboard: http://localhost:5173\n\n")
+
+	if len(r.Logins) > 0 {
+		fmt.Fprintf(&b, "PASSWORD (all accounts): %s\n\n", r.Logins[0].Password)
+	}
+
+	fmt.Fprintf(&b, "%-42s  %-18s  %s\n", "EMAIL", "ROLE", "CHURCH")
+	fmt.Fprintf(&b, "%s\n", strings.Repeat("-", 96))
+	for _, l := range r.Logins {
+		fmt.Fprintf(&b, "%-42s  %-18s  %s\n", l.Email, l.Role, l.Church)
+	}
+
+	fmt.Fprintf(&b, `
+The ORG_ADMIN reads across every branch; a CHURCH_ADMIN sees one. That
+difference is what VisibleChurchIDs decides, and it is only visible with
+more than one branch seeded.
+
+Quick check:
+
+  curl -s -X POST http://localhost:8080/api/v1/auth/login \
+    -H 'Content-Type: application/json' \
+    -d '{"email":"%s","password":"%s","method":"EMAIL"}'
+`, firstEmail(r), firstPassword(r))
+
+	return os.WriteFile(path, []byte(b.String()), 0o600)
+}
+
+func firstEmail(r *seed.Result) string {
+	if len(r.Logins) == 0 {
+		return "pastor@grace-chapel.org"
+	}
+	return r.Logins[0].Email
+}
+
+func firstPassword(r *seed.Result) string {
+	if len(r.Logins) == 0 {
+		return ""
+	}
+	return r.Logins[0].Password
 }
 
 // looksProduction is a heuristic, and deliberately a broad one. A false

@@ -3,6 +3,7 @@ package service
 import (
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"strings"
 
@@ -11,6 +12,7 @@ import (
 	"github.com/hayfordstanley/altar-os/internal/domain/auth"
 	"github.com/hayfordstanley/altar-os/internal/platform/deps"
 	"github.com/hayfordstanley/altar-os/internal/platform/httpx"
+	"github.com/hayfordstanley/altar-os/internal/platform/ratelimit"
 	"github.com/hayfordstanley/altar-os/internal/platform/token"
 )
 
@@ -25,14 +27,66 @@ func buildAuth(d *deps.Deps) http.Handler { return standalone(authRoutes(d)) }
 func authRoutes(d *deps.Deps) routeSet {
 	svc := auth.NewService(d.Mongo, d.Tokens, d.Redis, smsSenderFor(d))
 
+	limiter := ratelimit.New(d.Redis)
+
 	return func(r chi.Router) {
-		r.Post("/auth/login", handleLogin(svc))
-		r.Post("/auth/request-otp", handleRequestOTP(svc))
-		r.Post("/auth/verify-otp", handleVerifyOTP(svc))
-		r.Post("/auth/refresh-token", handleRefresh(svc))
+		// Nothing on this router was throttled at all, which left unlimited
+		// credential stuffing against a platform holding giving records — and
+		// bcrypt made that worse rather than better, since each attempt costs
+		// ~100ms of CPU by design and a few hundred concurrent ones saturate
+		// the pod before any of them succeeds.
+		r.With(throttle(d, ratelimit.Register)).
+			Post("/auth/register", handleRegister(svc))
+
+		r.With(throttle(d, ratelimit.Login)).
+			Post("/auth/login", handleLogin(svc, limiter, d))
+
+		// request-otp costs real money per call. The domain throttles one phone
+		// number to a code a minute (WP-10), which cannot see one caller
+		// cycling through many numbers — that is what this catches.
+		r.With(throttle(d, ratelimit.RequestOTP)).
+			Post("/auth/request-otp", handleRequestOTP(svc))
+
+		r.With(throttle(d, ratelimit.VerifyOTP)).
+			Post("/auth/verify-otp", handleVerifyOTP(svc))
+
+		r.With(throttle(d, ratelimit.Login)).
+			Post("/auth/refresh-token", handleRefresh(svc))
+
+		// Signing out is not worth throttling: it is authenticated, idempotent,
+		// and a limit here would strand someone trying to end a session they
+		// have reason to think is compromised.
 		r.Post("/auth/logout", handleLogout(svc))
 		r.Post("/auth/logout-all", handleLogoutEverywhere(svc))
 		r.Get("/auth/me", handleMe(svc))
+	}
+}
+
+func handleRegister(svc *auth.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			ChurchID string `json:"churchId"`
+			Email    string `json:"email"`
+			Phone    string `json:"phone"`
+			Name     string `json:"name"`
+			Password string `json:"password"`
+		}
+		if err := decode(r, &req); err != nil {
+			httpx.Error(w, http.StatusBadRequest, "Malformed request body")
+			return
+		}
+		user, err := svc.Register(r.Context(), auth.RegisterRequest{
+			ChurchID: req.ChurchID, Email: req.Email, Phone: req.Phone,
+			Name: req.Name, Password: req.Password,
+		})
+		if err != nil {
+			writeAuthError(w, err)
+			return
+		}
+		httpx.JSON(w, http.StatusCreated, map[string]any{
+			"user":    user,
+			"message": "Account created. Verify your phone to continue.",
+		})
 	}
 }
 
@@ -43,12 +97,34 @@ type loginRequest struct {
 	Method   string `json:"method"`
 }
 
-func handleLogin(svc *auth.Service) http.HandlerFunc {
+// handleLogin authenticates, subject to a second limit keyed on the account.
+//
+// Per-IP alone is trivially evaded: a distributed attack on one account arrives
+// from a thousand addresses and never trips it. Per-account alone misses one
+// host spraying many accounts. Both are needed, and the account limit can only
+// live here because the account is not known until the body is read.
+func handleLogin(svc *auth.Service, limiter *ratelimit.Limiter, d *deps.Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req loginRequest
 		if err := decode(r, &req); err != nil {
 			httpx.Error(w, http.StatusBadRequest, "Malformed request body")
 			return
+		}
+
+		if account := strings.ToLower(strings.TrimSpace(req.Email)); account != "" {
+			decision, err := limiter.Allow(r.Context(), ratelimit.LoginPerAccount, account)
+			if err != nil {
+				d.Log.Warn("per-account rate limiting unavailable",
+					slog.String("error", err.Error()))
+			} else if !decision.Allowed {
+				// Deliberately the same status and wording as the per-IP
+				// refusal. Only a real account accumulates failed attempts, so
+				// a distinct message here would turn the limiter into an
+				// account oracle — the thing writeAuthError exists to avoid.
+				httpx.Error(w, http.StatusTooManyRequests,
+					"Too many attempts. Try again in 15 minutes.")
+				return
+			}
 		}
 
 		// PHONE means "send me a code" — it is not a password login.
@@ -186,6 +262,10 @@ func writeAuthError(w http.ResponseWriter, err error) {
 	case errors.Is(err, auth.ErrAccountDeactivated):
 		httpx.Error(w, http.StatusForbidden, "This account has been deactivated.")
 
+	case errors.Is(err, auth.ErrPhoneVerificationRequired):
+		httpx.Error(w, http.StatusForbidden,
+			"Verify your phone first. Use the phone code sign-in option.")
+
 	case errors.Is(err, auth.ErrOTPNotFound):
 		httpx.Error(w, http.StatusBadRequest, "That code has expired. Request a new one.")
 
@@ -200,6 +280,18 @@ func writeAuthError(w http.ResponseWriter, err error) {
 
 	case errors.Is(err, auth.ErrPhoneRequired):
 		httpx.Error(w, http.StatusBadRequest, "A phone number is required.")
+
+	case errors.Is(err, auth.ErrPhoneInvalid):
+		httpx.Error(w, http.StatusBadRequest, "Enter a valid phone number with its country code.")
+
+	case errors.Is(err, auth.ErrRegistrationInvalid):
+		httpx.Error(w, http.StatusBadRequest, "Enter a valid name, email, phone number, and password.")
+
+	case errors.Is(err, auth.ErrChurchUnavailable):
+		httpx.Error(w, http.StatusNotFound, "That church is not available for registration.")
+
+	case errors.Is(err, auth.ErrAccountExists):
+		httpx.Error(w, http.StatusConflict, "An account with those details already exists.")
 
 	case errors.Is(err, auth.ErrUserNotFound):
 		httpx.Error(w, http.StatusNotFound, "User not found")

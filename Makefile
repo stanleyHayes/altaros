@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help contracts contracts-check build vet test run fmt fmt-check infra-up infra-down infra-logs check seed seed-reset seed-clean
+.PHONY: infra-check help contracts contracts-check build vet test run fmt fmt-check infra-up infra-down infra-logs check seed seed-reset seed-clean
 
 GO       ?= go
 SERVICE  ?= gateway
@@ -77,6 +77,25 @@ check: contracts-check fmt-check vet build test ## Everything CI runs for the Go
 infra-up: ## Start MongoDB, Redis and Kafka
 	@docker compose up -d
 	@docker compose ps --format '  {{.Name}} | {{.State}} | {{.Health}}'
+	@$(MAKE) --no-print-directory infra-check
+
+# A natively-installed redis-server or mongod on the same port WINS over the
+# compose one for 127.0.0.1, so the services talk to it while `docker compose
+# exec` inspects the container's — two datasets that look like one. That
+# costs an afternoon to diagnose, so it is checked rather than documented.
+infra-check: ## Warn if a native service is shadowing a compose one
+	@for p in 6379 27017 19092; do \
+		owner="$$(lsof -nP -iTCP:$$p -sTCP:LISTEN 2>/dev/null \
+			| grep -v '^COMMAND' \
+			| grep -vi 'com.docke' | grep -vi 'docker' | grep -vi 'vpnkit' \
+			| head -1)"; \
+		if [ -n "$$owner" ]; then \
+			echo "  WARNING: a native service owns port $$p and shadows the compose container."; \
+			echo "    $$owner"; \
+			echo "    The services use THAT one; docker compose exec inspects the other."; \
+		fi; \
+	done; \
+	true
 
 infra-down: ## Stop infrastructure (data volumes survive)
 	@docker compose down
