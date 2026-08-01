@@ -1,5 +1,6 @@
 export * from "./auth";
 export * from "./church";
+export * from "./reserved-slugs";
 export * from "./member";
 export * from "./finance";
 export * from "./event";

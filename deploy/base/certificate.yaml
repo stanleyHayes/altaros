@@ -1,0 +1,83 @@
+# The single wildcard certificate every church subdomain shares (WP-39, §13.2).
+#
+# ONE certificate covers every church on *.altaros.com, which is what makes
+# onboarding the 200th church issue nothing at all. That is the whole economic
+# argument for subdomains over custom domains, and it is worth being precise
+# about why:
+#
+#   Let's Encrypt's binding limit is 50 certificates per registered domain per
+#   7 days. A certificate PER CHURCH would make that a hard ceiling on growth —
+#   50 new churches a week, platform-wide. Sharing one wildcard never
+#   approaches it, and renewals are exempt from rate limits entirely.
+#
+# DNS-01 is not a preference. HTTP-01 and TLS-ALPN-01 CANNOT issue a wildcard at
+# all, so the DNS provider has to be one cert-manager can automate. Cloudflare
+# is assumed below; Route53, AzureDNS and CloudDNS are equally built in, and
+# anything else needs a webhook solver.
+#
+# Custom church domains (gracechapel.org) are deliberately NOT here — each is
+# its own registered domain and needs its own certificate, which is a per-tenant
+# operational cost. WP-41 exists so shipping subdomains does not commit us to
+# that.
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: altar-wildcard
+  labels:
+    app.kubernetes.io/name: altar-os
+    app.kubernetes.io/component: tls
+spec:
+  # The ingress reads the certificate from here by name.
+  secretName: altar-wildcard-tls
+  issuerRef:
+    name: letsencrypt-dns
+    kind: ClusterIssuer
+  # Both, and both are needed: a wildcard does NOT cover the apex it hangs off.
+  # Without the second entry, altaros.com itself has no certificate.
+  dnsNames:
+    - "*.altaros.com"
+    - "altaros.com"
+  # 90-day certificate; renew at 30 days remaining. cert-manager's default is
+  # two-thirds of the lifetime, which is the same thing — stated explicitly so
+  # a shortened lifetime does not silently change the renewal window.
+  duration: 2160h # 90d
+  renewBefore: 720h # 30d
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    # Rotate the key on renewal rather than reusing it. A key that is never
+    # rotated has the lifetime of the deployment, not of the certificate.
+    rotationPolicy: Always
+---
+# The DNS-01 issuer. Referenced above; the API token is a Secret because
+# cert-manager needs standing permission to write TXT records for the zone —
+# which is exactly why this is scoped to one zone rather than a global token.
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-dns
+  labels:
+    app.kubernetes.io/name: altar-os
+    app.kubernetes.io/component: tls
+spec:
+  acme:
+    server: https://acme-v02.api.letsencrypt.org/directory
+    # Where expiry warnings go. A wildcard failing to renew takes every church
+    # site offline at once, so this must reach somebody on call rather than a
+    # shared inbox.
+    email: ops@altaros.com
+    privateKeySecretRef:
+      name: letsencrypt-dns-account-key
+    solvers:
+      - dns01:
+          cloudflare:
+            apiTokenSecretRef:
+              name: cloudflare-dns-token
+              key: api-token
+        # Only for the zone we own. Without this selector the issuer would
+        # attempt DNS-01 for any domain asked of it, including the custom
+        # church domains WP-41 will add — which need their own path.
+        selector:
+          dnsZones:
+            - altaros.com

@@ -159,9 +159,28 @@ func run() error {
 	httpx.MountReadiness(root, cfg, d.Checkers()...)
 	root.Mount("/api/v1", build(d))
 
+	// Anything else on a church subdomain is that church's public site. WP-40
+	// replaces this with the real renderer; today it proves the chain from DNS
+	// to Host header to church in a browser.
+	root.NotFound(service.PublicSiteFallback(d))
+
+	// Host-based tenancy (WP-39) wraps the FINISHED router rather than being a
+	// chi middleware, for two reasons. chi refuses middleware registered after
+	// routes, and httpx.NewRouter has already mounted its own — but more
+	// usefully, wrapping covers the NotFound handler too, and NotFound is
+	// exactly where a church's public site lives.
+	//
+	// A no-op unless PUBLIC_BASE_DOMAIN is set. Probes arrive with a pod IP for
+	// a Host, which resolves to no subdomain and passes straight through.
+	var handler http.Handler = root
+	if cfg.PublicBaseDomain != "" {
+		handler = service.TenantFromHost(d)(root)
+		log.Info("serving church subdomains", slog.String("base_domain", cfg.PublicBaseDomain))
+	}
+
 	srv := &http.Server{
 		Addr:              fmt.Sprintf(":%d", cfg.HTTPPort),
-		Handler:           root,
+		Handler:           handler,
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      60 * time.Second,

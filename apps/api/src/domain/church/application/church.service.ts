@@ -1,4 +1,8 @@
-import type { Church, PaginationQuery } from "@altar-os/shared-types";
+import {
+  isReservedSlug,
+  type Church,
+  type PaginationQuery,
+} from "@altar-os/shared-types";
 import type {
   IChurchRepository,
   CreateChurchData,
@@ -14,6 +18,7 @@ export class ChurchService {
     data: Omit<CreateChurchData, "slug">,
   ): Promise<Church> {
     const slug = this.generateSlug(data.name);
+    this.assertUsableSlug(slug);
 
     const existing = await this.churchRepo.findBySlug(slug);
     if (existing) {
@@ -51,6 +56,9 @@ export class ChurchService {
   ): Promise<Church> {
     if (data.name) {
       data.slug = this.generateSlug(data.name);
+      // Checked on rename too. A church that renames into `api` is the same
+      // routing collision as one created there.
+      this.assertUsableSlug(data.slug);
     }
 
     const church = await this.churchRepo.update(id, data);
@@ -72,5 +80,33 @@ export class ChurchService {
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, "-")
       .replace(/^-|-$/g, "");
+  }
+
+  /**
+   * Refuses a slug that cannot be a church's subdomain (WP-39, §13.1).
+   *
+   * Under ADR-007 the slug IS the subdomain, so this is a routing decision
+   * rather than a naming one — and it has to happen at creation, because a
+   * church that has already printed `api.altaros.com` on its bulletins cannot
+   * simply be renamed.
+   *
+   * The reserved list is shared with the Go services through
+   * @altar-os/shared-types rather than copied, and a Go test reads that file
+   * and fails if the two drift. WP-35 is why: a rule about one collection kept
+   * separately by two writers drifts silently, and whichever ran last wins.
+   */
+  private assertUsableSlug(slug: string): void {
+    if (slug.length < 3 || slug.length > 63) {
+      throw new AppError(
+        400,
+        "That church name is too short or too long to use as a web address",
+      );
+    }
+    if (isReservedSlug(slug)) {
+      throw new AppError(
+        409,
+        "That name is reserved by the platform. Please choose another.",
+      );
+    }
   }
 }

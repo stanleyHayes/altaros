@@ -16,6 +16,11 @@ configMapGenerator:
     behavior: merge
     literals:
       - APP_ENV=development
+      # WP-39: the domain church subdomains hang off. Per environment,
+      # because a rule hard-coded to production resolves nothing anywhere
+      # else — and resolving nothing looks exactly like a church that does
+      # not exist.
+      - PUBLIC_BASE_DOMAIN=altaros.dev
       - MONGODB_URI=mongodb://mongodb:27017
       - REDIS_ADDR=redis:6379
       - MONGODB_DATABASE=altar-os

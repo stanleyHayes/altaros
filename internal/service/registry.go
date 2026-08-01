@@ -41,12 +41,13 @@ func standalone(rs routeSet) http.Handler {
 // routeSets are the services with real endpoints, in mount order.
 func routeSets(d *deps.Deps) map[string]routeSet {
 	return map[string]routeSet{
-		"auth":       authRoutes(d),
-		"church":     churchRoutes(d),
-		"rbac":       rbacRoutes(d),
-		"invitation": invitationRoutes(d),
-		"member":     memberRoutes(d),
-		"finance":    financeRoutes(d),
+		"auth":         authRoutes(d),
+		"church":       churchRoutes(d),
+		"rbac":         rbacRoutes(d),
+		"invitation":   invitationRoutes(d),
+		"member":       memberRoutes(d),
+		"finance":      financeRoutes(d),
+		"notification": notificationRoutes(d),
 	}
 }
 
@@ -69,7 +70,7 @@ func init() {
 		"event":         placeholder("event", "events, RSVP, QR check-in, attendance"),
 		"communication": placeholder("communication", "broadcast + targeted messaging"),
 		"ai":            placeholder("ai", "sermon assistant, member insights, prayer chat"),
-		"notification":  placeholder("notification", "push, SMS, email, WhatsApp fan-out"),
+		"notification":  buildNotification,
 	}
 }
 
@@ -102,6 +103,21 @@ func Lookup(name string) (Builder, error) {
 // deployments before the first paying church.
 func buildGateway(d *deps.Deps) http.Handler {
 	r := chi.NewRouter()
+
+	// Host-based tenancy (WP-39). Mounted FIRST and outside every other group,
+	// because it must run for unauthenticated requests to a church's public
+	// site — a visitor reading service times has no session to scope from.
+	//
+	// A no-op unless PUBLIC_BASE_DOMAIN is set, which is why a local gateway on
+	// localhost:8080 is unaffected: there are no subdomains to resolve.
+	if d.Config != nil && d.Config.PublicBaseDomain != "" {
+		r.Use(tenantFromHost(d))
+	}
+
+	// What church this request was addressed to. The public site renderer reads
+	// it, and it is also how an operator confirms a subdomain resolves without
+	// needing a browser.
+	r.Get("/site/church", handleHostChurch())
 
 	r.Get("/", func(w http.ResponseWriter, _ *http.Request) {
 		httpx.JSON(w, http.StatusOK, map[string]any{
@@ -144,7 +160,7 @@ func buildGateway(d *deps.Deps) http.Handler {
 // A plain list rather than a key set of routeSets: building the route sets
 // constructs live services against the database, so asking "which services
 // exist" must not require a connection.
-var implementedNames = []string{"auth", "church", "finance", "gateway", "invitation", "member", "rbac"}
+var implementedNames = []string{"auth", "church", "finance", "gateway", "invitation", "member", "notification", "rbac"}
 
 // Implemented lists the services with real routes, sorted. The gateway is
 // included because it serves its own index.

@@ -1,0 +1,62 @@
+# Ingress for the platform and every church subdomain (WP-39, §13.1).
+#
+# One wildcard host rule rather than a rule per church, which is the routing
+# half of the same argument the certificate makes: onboarding a church is a
+# database row, not a Kubernetes resource. If each church needed an Ingress,
+# the 200th church would need a deploy.
+#
+# The gateway resolves WHICH church from the Host header (tenantFromHost), so
+# the ingress does not need to know: it forwards everything under the wildcard
+# to one Service and the application does the tenancy.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: altar-gateway
+  labels:
+    app.kubernetes.io/name: altar-os
+    app.kubernetes.io/component: gateway
+  annotations:
+    # The Host header must reach the application unchanged — it IS the tenant
+    # identifier. An ingress that rewrites or normalises it breaks every church
+    # site at once, and does it silently.
+    nginx.ingress.kubernetes.io/upstream-vhost: $host
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    # A church's public site is read by search engines and by the AI crawlers
+    # §13.4 names, and both give up on slow origins.
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "60"
+    nginx.ingress.kubernetes.io/proxy-body-size: 12m
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - "*.altaros.com"
+        - altaros.com
+      # Written by the Certificate in certificate.yaml. One secret for every
+      # church.
+      secretName: altar-wildcard-tls
+  rules:
+    # Every church subdomain. A wildcard rule matches exactly ONE label, which
+    # is the same constraint SubdomainOf enforces in code — a.b.altaros.com
+    # matches neither.
+    - host: "*.altaros.com"
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: gateway
+                port:
+                  name: http
+    # The apex. Not covered by the wildcard rule above, for the same reason it
+    # needs its own entry in the certificate.
+    - host: altaros.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: gateway
+                port:
+                  name: http

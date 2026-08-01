@@ -52,6 +52,17 @@ type Config struct {
 	// which is what should happen once the legacy API retires at WP-20.
 	LegacyAPIURL string
 
+	// PublicBaseDomain is the domain church subdomains hang off (WP-39).
+	//
+	// `grace-chapel.altaros.com` is Grace Chapel; `api.altaros.com` is this
+	// gateway. Configuration rather than a constant because it differs per
+	// environment — staging is not altaros.com — and because a host-resolution
+	// rule hard-coded to production silently resolves nothing anywhere else.
+	//
+	// Empty disables host-based tenancy entirely, which is the correct default
+	// for a local gateway reached at localhost:8080.
+	PublicBaseDomain string
+
 	// PublicAppURL is where a person lands when they follow a link the platform
 	// sent them — currently only invitations (WP-37).
 	//
@@ -201,6 +212,11 @@ func Load(serviceName string) (*Config, error) {
 		DataRegion:   getenv("DATA_REGION", "gh"),
 		LegacyAPIURL: getenvOptional("LEGACY_API_URL", "http://localhost:3001"),
 		PublicAppURL: strings.TrimRight(getenv("PUBLIC_APP_URL", "http://localhost:5173"), "/"),
+		// Optional, and empty by default: a developer running the gateway on
+		// localhost has no subdomains, and defaulting to the production domain
+		// would make every local Host header fail to match rather than be
+		// ignored.
+		PublicBaseDomain: strings.ToLower(strings.TrimSpace(os.Getenv("PUBLIC_BASE_DOMAIN"))),
 		Tracing: TracingConfig{
 			Endpoint:    os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"),
 			SampleRatio: getenvFloat("OTEL_TRACES_SAMPLER_ARG", 0.1),

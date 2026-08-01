@@ -19,6 +19,11 @@ configMapGenerator:
     behavior: merge
     literals:
       - APP_ENV=staging
+      # WP-39: the domain church subdomains hang off. Per environment,
+      # because a rule hard-coded to production resolves nothing anywhere
+      # else — and resolving nothing looks exactly like a church that does
+      # not exist.
+      - PUBLIC_BASE_DOMAIN=staging.altaros.com
       - MONGODB_DATABASE=altar-os-staging
       # Staging still fronts the legacy TypeScript API, because that is what
       # the migration looks like until WP-20. Production sets it empty.
