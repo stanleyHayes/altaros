@@ -342,8 +342,16 @@ func (s *Service) SetStatus(ctx context.Context, id string, to Status) error {
 	}
 
 	if s.pub != nil {
-		_ = s.pub.Publish(ctx, TopicMemberStatusChanged, id, map[string]any{
+		// See the note in consent: without churchId the bus keys by member,
+		// which loses per-church ordering and puts a member id in the envelope
+		// subject where consumers read a church id.
+		churchID, err := tenancy.MustChurchID(ctx)
+		if err != nil {
+			return err
+		}
+		_ = s.pub.Publish(ctx, TopicMemberStatusChanged, churchID, map[string]any{
 			"memberId": id,
+			"churchId": churchID,
 			"from":     string(current.Status),
 			"to":       string(to),
 		})

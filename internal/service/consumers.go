@@ -102,6 +102,20 @@ func givingReceiptHandler(d *deps.Deps, notifications *notification.Service, chu
 			return nil
 		}
 
+		// The envelope subject is the partition key and the payload carries the
+		// church; for anything this platform publishes they are the same value
+		// by construction. Asserting it catches a publisher that forgot to put
+		// churchId in its payload — which is exactly the defect consent and
+		// member.status_changed had — and refuses to act on a message whose two
+		// tenant claims disagree, rather than picking one.
+		if e.Subject != "" && e.Subject != gift.ChurchID {
+			d.Log.Error("event subject and payload church disagree; refusing to write",
+				slog.String("event_id", e.ID),
+				slog.String("subject", e.Subject),
+				slog.String("payload_church", gift.ChurchID))
+			return nil
+		}
+
 		// The event arrived from Kafka with no session, so the church comes
 		// from the event and every write happens inside its scope. The actor
 		// is the system: attributing this to a person would put a false actor

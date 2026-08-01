@@ -30,6 +30,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 
 	"github.com/hayfordstanley/altar-os/internal/platform/mongodb"
+	"github.com/hayfordstanley/altar-os/internal/platform/tenancy"
 )
 
 // Collection holding consent records.
@@ -208,10 +209,20 @@ func (s *Service) record(ctx context.Context, memberID string, p Purpose, grante
 	}
 
 	if s.pub != nil {
+		// churchId is required, not decorative. Without it the bus falls back to
+		// the memberID as the partition key AND as the envelope subject — so the
+		// topic partitions by member instead of church (losing the per-church
+		// ordering §6 exists for), and any consumer that scopes by subject would
+		// scope to a MEMBER id treated as a church id.
+		churchID, err := tenancy.MustChurchID(ctx)
+		if err != nil {
+			return err
+		}
 		// Best-effort: a publish failure must not lose the recorded decision,
 		// which is already durable. The consumer reconciles from the store.
-		_ = s.pub.Publish(ctx, TopicConsentChanged, memberID, map[string]any{
+		_ = s.pub.Publish(ctx, TopicConsentChanged, churchID, map[string]any{
 			"memberId": memberID,
+			"churchId": churchID,
 			"purpose":  string(p),
 			"granted":  granted,
 		})

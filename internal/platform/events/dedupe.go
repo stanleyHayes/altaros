@@ -84,6 +84,29 @@ func (d *Deduper) Wrap(handler Handler) Handler {
 			return nil
 		}
 
+		// A panic must release the claim too, and this is subtler than it
+		// looks. Bus.handle recovers panics into a failed record, so the offset
+		// is not committed and the message IS redelivered — but the claim above
+		// was taken before the handler ran, and only the error path below
+		// releases it. Without this, the redelivery finds the claim still held,
+		// treats the event as already handled, returns nil, and commits the
+		// offset: the member paid and never gets a receipt, for 24 hours, with
+		// one panic line in the log as the only evidence.
+		//
+		// The panic is re-raised rather than swallowed, so Bus.handle still
+		// records the failure and the redelivery still happens.
+		defer func() {
+			if p := recover(); p != nil {
+				if delErr := d.redis.Del(ctx, key).Err(); delErr != nil {
+					d.log.Error("handler panicked AND the dedupe claim could not "+
+						"be released; this event is suppressed until the key expires",
+						slog.String("event_id", e.ID),
+						slog.String("error", delErr.Error()))
+				}
+				panic(p)
+			}
+		}()
+
 		if err := handler(ctx, e, raw); err != nil {
 			// Release the claim so the redelivery is not silently swallowed.
 			// Best effort: if this fails the event is suppressed for 24h,
