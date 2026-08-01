@@ -379,7 +379,7 @@ func TestImplementedListMatchesTheRouteSets(t *testing.T) {
 	if !claimed["gateway"] {
 		t.Error("the gateway must appear in Implemented()")
 	}
-	for _, name := range []string{"auth", "member", "finance"} {
+	for _, name := range []string{"auth", "church", "member", "finance"} {
 		if !claimed[name] {
 			t.Errorf("%s serves real routes but is missing from Implemented()", name)
 		}
@@ -393,7 +393,7 @@ func TestImplementedListMatchesTheRouteSets(t *testing.T) {
 	}
 
 	// And nothing still served by a placeholder may claim to be implemented.
-	for _, name := range []string{"church", "event", "communication", "ai", "notification"} {
+	for _, name := range []string{"event", "communication", "ai", "notification"} {
 		if claimed[name] {
 			t.Errorf("%s is still a placeholder but claims to be implemented", name)
 		}

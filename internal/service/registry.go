@@ -42,6 +42,7 @@ func standalone(rs routeSet) http.Handler {
 func routeSets(d *deps.Deps) map[string]routeSet {
 	return map[string]routeSet{
 		"auth":    authRoutes(d),
+		"church":  churchRoutes(d),
 		"member":  memberRoutes(d),
 		"finance": financeRoutes(d),
 	}
@@ -60,7 +61,7 @@ func init() {
 		"auth":          buildAuth,
 		"member":        buildMember,
 		"finance":       buildFinance,
-		"church":        placeholder("church", "organizations, branches, departments, groups"),
+		"church":        buildChurch,
 		"event":         placeholder("event", "events, RSVP, QR check-in, attendance"),
 		"communication": placeholder("communication", "broadcast + targeted messaging"),
 		"ai":            placeholder("ai", "sermon assistant, member insights, prayer chat"),
@@ -139,7 +140,7 @@ func buildGateway(d *deps.Deps) http.Handler {
 // A plain list rather than a key set of routeSets: building the route sets
 // constructs live services against the database, so asking "which services
 // exist" must not require a connection.
-var implementedNames = []string{"auth", "finance", "gateway", "member"}
+var implementedNames = []string{"auth", "church", "finance", "gateway", "member"}
 
 // Implemented lists the services with real routes, sorted. The gateway is
 // included because it serves its own index.
