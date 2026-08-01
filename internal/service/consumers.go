@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/hayfordstanley/altar-os/internal/domain/church"
 	"github.com/hayfordstanley/altar-os/internal/domain/notification"
@@ -21,13 +22,20 @@ import (
 // nothing connected them, so the receipt could never fire however correct
 // either half was on its own.
 func StartConsumers(ctx context.Context, d *deps.Deps) error {
+	notifications := newNotificationService(d)
+
+	// The sweeper runs whether or not Kafka does: a message deferred for quiet
+	// hours is queued by a direct call, not by an event, so tying its delivery
+	// to the broker would mean a deployment without Kafka silently drops every
+	// announcement sent after 21:00.
+	go startNotificationSweeper(ctx, d, notifications)
+
 	if d.Events == nil || !d.Events.Enabled() {
 		d.Log.Warn("event consumers not started — no Kafka brokers configured; " +
-			"giving receipts and member notifications will not be sent")
+			"giving receipts will not be sent")
 		return nil
 	}
 
-	notifications := newNotificationService(d)
 	churches := church.NewService(d.Mongo)
 
 	// Redis dedupe on the event id, per §6. This is the cheap first line; the
@@ -138,5 +146,82 @@ func givingReceiptHandler(d *deps.Deps, notifications *notification.Service, chu
 				slog.String("reason", n.Reason))
 		}
 		return nil
+	}
+}
+
+// notificationSweepInterval is how often deferred and failed messages are
+// re-attempted.
+//
+// A minute is short enough that a message held for quiet hours goes out within
+// a minute of the window closing, and long enough that a platform of a few
+// thousand churches is doing one small indexed query a minute rather than
+// hammering MongoDB.
+const notificationSweepInterval = time.Minute
+
+// startNotificationSweeper re-attempts messages that are due.
+//
+// Two things queue a message and then depend entirely on this loop:
+// an announcement deferred past quiet hours (sent at 23:00, scheduled for
+// 07:00) and a send that failed transiently and backed off. Both were being
+// written to the database and then never looked at again — notification.Retry
+// existed, was tested, and had no production caller, so a message deferred at
+// 23:00 was simply never sent.
+//
+// The sweeper runs without a tenant, which is why it asks which churches have
+// work before doing any: it re-enters each church's scope to retry, so nothing
+// crosses a tenant boundary just because the timer has no request behind it.
+func startNotificationSweeper(ctx context.Context, d *deps.Deps, notifications *notification.Service) {
+	ticker := time.NewTicker(notificationSweepInterval)
+	defer ticker.Stop()
+
+	d.Log.Info("notification sweeper started",
+		slog.Duration("interval", notificationSweepInterval))
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			sweepOnce(ctx, d, notifications)
+		}
+	}
+}
+
+func sweepOnce(ctx context.Context, d *deps.Deps, notifications *notification.Service) {
+	churches, err := notifications.PendingChurches(ctx)
+	if err != nil {
+		d.Log.Error("could not find churches with due messages",
+			slog.String("error", err.Error()))
+		return
+	}
+	if len(churches) == 0 {
+		return
+	}
+
+	sent := 0
+	for _, churchID := range churches {
+		scoped := tenancy.WithScope(ctx, tenancy.Scope{
+			ChurchID: churchID,
+			UserID:   "system:notification-sweeper",
+			Role:     "SYSTEM",
+		})
+
+		n, err := notifications.Retry(scoped, 100)
+		if err != nil {
+			// One church's problem must not stop the others: a single church
+			// with a malformed record would otherwise hold up every deferred
+			// announcement on the platform.
+			d.Log.Error("notification retry failed for a church",
+				slog.String("church_id", churchID),
+				slog.String("error", err.Error()))
+			continue
+		}
+		sent += n
+	}
+
+	if sent > 0 {
+		d.Log.Info("deferred notifications sent",
+			slog.Int("sent", sent),
+			slog.Int("churches", len(churches)))
 	}
 }

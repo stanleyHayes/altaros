@@ -1033,3 +1033,97 @@ func TestBackoffGrowsThenCaps(t *testing.T) {
 		t.Errorf("backoff should reach the ceiling, got %v", backoffFor(10))
 	}
 }
+
+// The sweeper's query. Without a tenant it must still be able to find WHICH
+// churches have work — and it must return only ids, never documents.
+func TestPendingChurchesFindsDueMessagesWithoutATenant(t *testing.T) {
+	h := newHarness(t)
+	h.cc.grant("member_1")
+	h.now = time.Date(2026, 7, 29, 23, 30, 0, 0, time.UTC) // inside quiet hours
+
+	// Deferred: queued with a future nextAttemptAt.
+	deferred, err := h.svc.Send(h.ctx, Message{
+		MemberID: "member_1", Channel: ChannelSMS, Kind: KindAnnouncement,
+		Body: "Morning notice.",
+	})
+	if err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	if deferred.Status != StatusQueued {
+		t.Fatalf("expected the message to be deferred, got %s", deferred.Status)
+	}
+
+	// Still inside quiet hours: nothing is due yet.
+	due, err := h.svc.PendingChurches(context.Background())
+	if err != nil {
+		t.Fatalf("PendingChurches: %v", err)
+	}
+	if len(due) != 0 {
+		t.Fatalf("nothing should be due at 23:30, got %v", due)
+	}
+
+	// Morning: now it is.
+	h.now = time.Date(2026, 7, 30, 8, 0, 0, 0, time.UTC)
+	due, err = h.svc.PendingChurches(context.Background())
+	if err != nil {
+		t.Fatalf("PendingChurches: %v", err)
+	}
+	if len(due) != 1 || due[0] != testChurch {
+		t.Fatalf("due churches = %v, want [%s]", due, testChurch)
+	}
+}
+
+// Two churches with due messages must both be found, or the sweeper silently
+// serves whichever one it happens to see.
+func TestPendingChurchesFindsEveryChurchWithWork(t *testing.T) {
+	h := newHarness(t)
+	h.cc.grant("member_1")
+	h.now = time.Date(2026, 7, 29, 23, 30, 0, 0, time.UTC)
+
+	other := tenancy.WithScope(context.Background(), tenancy.Scope{
+		ChurchID: "second_church", UserID: "u", Role: "CHURCH_ADMIN",
+	})
+	h.dir.add(&Recipient{MemberID: "member_2", PhoneE164: "+233201111111"})
+	h.cc.grant("member_2")
+
+	for _, c := range []struct {
+		ctx      context.Context
+		memberID string
+	}{{h.ctx, "member_1"}, {other, "member_2"}} {
+		if _, err := h.svc.Send(c.ctx, Message{
+			MemberID: c.memberID, Channel: ChannelSMS, Kind: KindAnnouncement,
+			Body: "Notice",
+		}); err != nil {
+			t.Fatalf("Send: %v", err)
+		}
+	}
+
+	h.now = time.Date(2026, 7, 30, 8, 0, 0, 0, time.UTC)
+	due, err := h.svc.PendingChurches(context.Background())
+	if err != nil {
+		t.Fatalf("PendingChurches: %v", err)
+	}
+	if len(due) != 2 {
+		t.Fatalf("due churches = %v, want both", due)
+	}
+}
+
+// A message that has already been sent must not keep the sweeper busy.
+func TestSentMessagesAreNotPending(t *testing.T) {
+	h := newHarness(t)
+
+	if _, err := h.svc.Send(h.ctx, Message{
+		MemberID: "member_1", Channel: ChannelSMS, Kind: KindTransactional,
+		Body: "Receipt",
+	}); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+
+	due, err := h.svc.PendingChurches(context.Background())
+	if err != nil {
+		t.Fatalf("PendingChurches: %v", err)
+	}
+	if len(due) != 0 {
+		t.Fatalf("a sent message should not be pending, got %v", due)
+	}
+}

@@ -19,6 +19,10 @@ import (
 type Service struct {
 	coll  *mongodb.TenantCollection
 	prefs *mongodb.TenantCollection
+	// global reaches the same collection without a tenant, for the sweeper —
+	// which runs on a timer with no request and therefore no church, and has
+	// to find out which churches have work before it can scope anything.
+	global *mongo.Collection
 	// transports is keyed by channel. A channel with no transport suppresses
 	// rather than errors, so a deployment without an email provider still
 	// sends SMS instead of failing every send.
@@ -36,6 +40,7 @@ type Service struct {
 func NewService(db *mongodb.DB, cc ConsentChecker, dir Directory, transports ...Transport) *Service {
 	s := &Service{
 		coll:       db.Tenant(Collection),
+		global:     db.Global(Collection),
 		prefs:      db.Tenant(PreferenceCollection),
 		transports: make(map[Channel]Transport, len(transports)),
 		consent:    cc,
@@ -566,4 +571,37 @@ func (s *Service) upsertPreference(ctx context.Context, memberID string, update 
 // never going to be sent, so the created flag carries no meaning.
 func suppressed(n *Notification, _ bool, err error) (*Notification, error) {
 	return n, err
+}
+
+// PendingChurches lists churches with messages due to be sent.
+//
+// This is the one query in this package that runs without a tenant, and it
+// exists because a background sweeper has no request and therefore no church.
+// It returns ONLY church ids — never a document — so nothing tenant-scoped
+// escapes; the caller then re-enters each church's scope to do the work.
+func (s *Service) PendingChurches(ctx context.Context) ([]string, error) {
+	var raw []any
+	err := s.global.Distinct(ctx, mongodb.TenantField, bson.M{
+		"status":        string(StatusQueued),
+		"nextAttemptAt": bson.M{"$lte": s.now().UTC()},
+	}).Decode(&raw)
+	if err != nil {
+		return nil, fmt.Errorf("notification: find churches with due messages: %w", err)
+	}
+
+	out := make([]string, 0, len(raw))
+	for _, v := range raw {
+		// churchId is an ObjectId when Mongoose wrote it and a string on older
+		// Go rows (ADR-005), so both forms have to be handled or the sweeper
+		// silently skips half the platform.
+		switch id := v.(type) {
+		case string:
+			if id != "" {
+				out = append(out, id)
+			}
+		case bson.ObjectID:
+			out = append(out, id.Hex())
+		}
+	}
+	return out, nil
 }
