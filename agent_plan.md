@@ -942,6 +942,10 @@ Three bugs came out of building it, all about redelivery: **not committing an of
 
 | R-15 note | ✅ **closed by WP-39** | The reserved-slug list is enforced at creation and at rename, includes the mail/validation names the original list omitted, and cannot drift between the two writers. |
 
+| WP-40 | 🟡 backend done, SSR renderer outstanding | **Church site CMS.** Versioning at the PAGE: publish and rollback are each a single pointer move, atomic and impossible to half-apply. **No HTML anywhere in the content model** — rich text is structured nodes, so XSS is structurally impossible rather than sanitiser-dependent (a deliberate strengthening of §13.5, at a real cost to the editor). URLs are an allowlist tested against fourteen spellings of `javascript:` a browser accepts. The giving block has **no URL field at all**. **Verified over HTTP:** a member gets 404 on the editor, the public renderer needs no token and is scoped by Host alone, an unpublished page is invisible, editing a live page leaves it alone, publish→rollback restores it, four hostile blocks are refused, and two churches serve different sites from the same path. Mutation-testing the fork guard puts a draft on the live site. |
+
+**Two of my own mistakes, recorded because both were invisible to the tests that existed — 1 Aug 2026.** The site routes were registered in the service registry but **not in `routeSets`**, so every CMS endpoint 404'd; the unit tests could not catch it because they call the service directly, and only an HTTP check found it. And the test helper reading content back handled `bson.M` when the driver decodes embedded documents into `any` as **`bson.D`** — which made four tests fail while reporting that unpublished edits had reached the live site. The data was correct throughout. A test that lies in that direction is worse than no test at all.
+
 Not yet started: WP-19 (Phase 1 gate) onward.
 
 **Tracing fails soft and carries no personal data.** With no collector configured it becomes a no-op and the service runs normally — observability that stops the platform when its collector is unreachable is worse than none, because the failure arrives during exactly the incident the traces were for. The exporter uses a bounded queue so a stalled collector drops spans rather than accumulating them until the process runs out of memory.
@@ -1496,9 +1500,15 @@ Invite staff and members with an initial role. Hashed single-use tokens, 7-day e
 
 **Rendering the overlays caught a breakage before it shipped.** An edit matched `APP_ENV=dev` as a prefix of `APP_ENV=development`, leaving the dev overlay setting an environment `config.Load` rejects at boot. All three overlays now render and validate against real Kubernetes *and cert-manager* schemas, none skipped.
 
-**WP-40 · Church site CMS** — Depends on: WP-39
+**WP-40 · Church site CMS** — 🟡 **backend done and verified (1 Aug 2026); SSR renderer outstanding** · Depends on: WP-39
 `pages`, `pageVersions`, `blocks`, `siteThemes`; the v1 block library; draft/publish/rollback; Cloudinary media; sanitisation on save and render; CSP on the public origin. Editor in the dashboard, renderer on the public subdomain.
-**Done when:** a church adds a page, arranges blocks, publishes, and the live site changes — while the draft was invisible until publish and a rollback restores the previous version in one action. A block whose text contains `<script>` renders as text.
+**Done when:** a church adds a page, arranges blocks, publishes, and the live site changes — while the draft was invisible until publish and a rollback restores the previous version in one action. A block whose text contains `<script>` renders as text. ✅ *All verified over HTTP against seeded data. The SSR renderer that turns this into HTML is the outstanding half — Q-13 requires server rendering, and that is frontend work.*
+
+**§13.5 was implemented more strictly than written, and the change is worth stating.** The plan said rich text would be "sanitised server-side on save and again on render". It stores **structured nodes and accepts no HTML at any point**. A sanitiser is a denylist wearing an allowlist's clothes: it must be right about every parser quirk, every mutation-XSS case and every encoding, forever. Structured nodes remove it from the trust path — there is nothing to sanitise because there is no HTML, and the renderer emits from a closed set of node types. **The cost is real and lands on the editor:** it must produce this shape rather than a `contenteditable`'s `innerHTML`, and a paste from Word must be converted rather than accepted. That is a bigger frontend job, and it is the difference between "we sanitise" and "there is nothing to sanitise".
+
+**The giving block carries no URL field at all.** Its destination is derived from the church at render time, so a section that says "give" cannot be pointed at another payment link by a mistake or a compromised staff account. It is the one field on a church website where a wrong URL costs the congregation money.
+
+**The property the versioning model rests on, and its mutation test:** after publishing, draft and published point at the *same* version, so the next edit must FORK. Removing that guard makes the test report — in its own words — that the live site shows "DRAFT — do not publish yet".
 
 **WP-41 · Custom domains** — Depends on: WP-40
 Per-domain certificate issuance, domain verification, and the rate-limit handling that per-tenant certificates require. Deliberately separate from WP-39, so shipping subdomains does not commit the platform to the operational cost of customer domains.
