@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -10,9 +11,11 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/hayfordstanley/altar-os/internal/domain/auth"
+	"github.com/hayfordstanley/altar-os/internal/domain/notification"
 	"github.com/hayfordstanley/altar-os/internal/platform/deps"
 	"github.com/hayfordstanley/altar-os/internal/platform/httpx"
 	"github.com/hayfordstanley/altar-os/internal/platform/ratelimit"
+	"github.com/hayfordstanley/altar-os/internal/platform/tenancy"
 	"github.com/hayfordstanley/altar-os/internal/platform/token"
 )
 
@@ -26,6 +29,7 @@ func buildAuth(d *deps.Deps) http.Handler { return standalone(authRoutes(d)) }
 // authRoutes registers the auth endpoints onto a router.
 func authRoutes(d *deps.Deps) routeSet {
 	svc := auth.NewService(d.Mongo, d.Tokens, d.Redis, smsSenderFor(d))
+	notifications := newNotificationService(d)
 
 	limiter := ratelimit.New(d.Redis)
 
@@ -56,8 +60,8 @@ func authRoutes(d *deps.Deps) routeSet {
 		// Signing out is not worth throttling: it is authenticated, idempotent,
 		// and a limit here would strand someone trying to end a session they
 		// have reason to think is compromised.
-		r.Post("/auth/logout", handleLogout(svc))
-		r.Post("/auth/logout-all", handleLogoutEverywhere(svc))
+		r.Post("/auth/logout", handleLogout(d, svc, notifications))
+		r.Post("/auth/logout-all", handleLogoutEverywhere(d, svc, notifications))
 		r.Get("/auth/me", handleMe(svc))
 	}
 }
@@ -91,10 +95,30 @@ func handleRegister(svc *auth.Service) http.HandlerFunc {
 }
 
 type loginRequest struct {
+	// Workspace is the church slug — which church this sign-in is for (WP-35).
+	//
+	// Optional on the wire during the migration window, and the API accepts the
+	// three names clients have grown: `workspace` is canonical, `churchSlug`
+	// and `slug` are tolerated so the mobile app and the legacy web client keep
+	// working through the rollout rather than all being cut over on one day.
+	Workspace  string `json:"workspace"`
+	ChurchSlug string `json:"churchSlug"`
+	Slug       string `json:"slug"`
+
 	Email    string `json:"email"`
 	Phone    string `json:"phone"`
 	Password string `json:"password"`
 	Method   string `json:"method"`
+}
+
+// workspace returns whichever spelling the client used.
+func (r loginRequest) workspace() string {
+	for _, candidate := range []string{r.Workspace, r.ChurchSlug, r.Slug} {
+		if strings.TrimSpace(candidate) != "" {
+			return candidate
+		}
+	}
+	return ""
 }
 
 // handleLogin authenticates, subject to a second limit keyed on the account.
@@ -129,7 +153,7 @@ func handleLogin(svc *auth.Service, limiter *ratelimit.Limiter, d *deps.Deps) ht
 
 		// PHONE means "send me a code" — it is not a password login.
 		if strings.EqualFold(req.Method, "PHONE") {
-			if err := svc.RequestOTP(r.Context(), req.Phone); err != nil {
+			if err := svc.RequestOTP(r.Context(), req.workspace(), req.Phone); err != nil {
 				writeAuthError(w, err)
 				return
 			}
@@ -139,7 +163,7 @@ func handleLogin(svc *auth.Service, limiter *ratelimit.Limiter, d *deps.Deps) ht
 			return
 		}
 
-		result, err := svc.LoginWithPassword(r.Context(), req.Email, req.Password)
+		result, err := svc.LoginWithPassword(r.Context(), req.workspace(), req.Email, req.Password)
 		if err != nil {
 			writeAuthError(w, err)
 			return
@@ -151,13 +175,17 @@ func handleLogin(svc *auth.Service, limiter *ratelimit.Limiter, d *deps.Deps) ht
 func handleRequestOTP(svc *auth.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
-			Phone string `json:"phone"`
+			Workspace  string `json:"workspace"`
+			ChurchSlug string `json:"churchSlug"`
+			Slug       string `json:"slug"`
+			Phone      string `json:"phone"`
 		}
 		if err := decode(r, &req); err != nil {
 			httpx.Error(w, http.StatusBadRequest, "Malformed request body")
 			return
 		}
-		if err := svc.RequestOTP(r.Context(), req.Phone); err != nil {
+		workspace := firstNonEmpty(req.Workspace, req.ChurchSlug, req.Slug)
+		if err := svc.RequestOTP(r.Context(), workspace, req.Phone); err != nil {
 			writeAuthError(w, err)
 			return
 		}
@@ -170,7 +198,10 @@ func handleRequestOTP(svc *auth.Service) http.HandlerFunc {
 func handleVerifyOTP(svc *auth.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
-			Phone string `json:"phone"`
+			Workspace  string `json:"workspace"`
+			ChurchSlug string `json:"churchSlug"`
+			Slug       string `json:"slug"`
+			Phone      string `json:"phone"`
 			// `otp` is the canonical field: it is what shared-types'
 			// OtpVerifyRequest declares and what the legacy API validates.
 			OTP string `json:"otp"`
@@ -188,7 +219,8 @@ func handleVerifyOTP(svc *auth.Service) http.HandlerFunc {
 		if code == "" {
 			code = req.Code
 		}
-		result, err := svc.VerifyOTP(r.Context(), req.Phone, code)
+		result, err := svc.VerifyOTP(r.Context(),
+			firstNonEmpty(req.Workspace, req.ChurchSlug, req.Slug), req.Phone, code)
 		if err != nil {
 			writeAuthError(w, err)
 			return
@@ -215,24 +247,55 @@ func handleRefresh(svc *auth.Service) http.HandlerFunc {
 	}
 }
 
-func handleLogout(svc *auth.Service) http.HandlerFunc {
+func handleLogout(d *deps.Deps, svc *auth.Service, notifications *notification.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if err := svc.Logout(r.Context(), bearer(r)); err != nil {
+		raw := bearer(r)
+		claims, claimsErr := d.Tokens.Verify(r.Context(), raw, token.KindAccess)
+		var deviceErr error
+		if claimsErr == nil {
+			deviceErr = notifications.RemoveDevices(notificationContext(r, claims), claims.UserID, claims.Family)
+		}
+		if err := svc.Logout(r.Context(), raw); err != nil {
 			writeAuthError(w, err)
 			return
 		}
-		httpx.JSON(w, http.StatusOK, map[string]any{"message": "Signed out."})
+		if deviceErr != nil {
+			d.Log.Error("signed-out session device cleanup failed",
+				slog.String("user_id", claims.UserID), slog.String("error", deviceErr.Error()))
+		}
+		httpx.JSON(w, http.StatusOK, map[string]any{
+			"message": "Signed out.", "deviceCleanupConfirmed": deviceErr == nil,
+		})
 	}
 }
 
-func handleLogoutEverywhere(svc *auth.Service) http.HandlerFunc {
+func handleLogoutEverywhere(d *deps.Deps, svc *auth.Service, notifications *notification.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if err := svc.LogoutEverywhere(r.Context(), bearer(r)); err != nil {
+		raw := bearer(r)
+		claims, claimsErr := d.Tokens.Verify(r.Context(), raw, token.KindAccess)
+		var deviceErr error
+		if claimsErr == nil {
+			deviceErr = notifications.RemoveDevices(notificationContext(r, claims), claims.UserID, "")
+		}
+		if err := svc.LogoutEverywhere(r.Context(), raw); err != nil {
 			writeAuthError(w, err)
 			return
 		}
-		httpx.JSON(w, http.StatusOK, map[string]any{"message": "Signed out on all devices."})
+		if deviceErr != nil {
+			d.Log.Error("global sign-out device cleanup failed",
+				slog.String("user_id", claims.UserID), slog.String("error", deviceErr.Error()))
+		}
+		httpx.JSON(w, http.StatusOK, map[string]any{
+			"message": "Signed out on all devices.", "deviceCleanupConfirmed": deviceErr == nil,
+		})
 	}
+}
+
+func notificationContext(r *http.Request, claims *token.Claims) context.Context {
+	return tenancy.WithScope(r.Context(), tenancy.Scope{
+		ChurchID: claims.ChurchID, OrganizationID: claims.OrganizationID,
+		UserID: claims.UserID, Role: claims.Role, CrossBranch: crossBranch(claims.Role),
+	})
 }
 
 func handleMe(svc *auth.Service) http.HandlerFunc {
@@ -317,6 +380,20 @@ func bearer(r *http.Request) string {
 	h := r.Header.Get("Authorization")
 	if after, ok := strings.CutPrefix(h, "Bearer "); ok {
 		return strings.TrimSpace(after)
+	}
+	return ""
+}
+
+// firstNonEmpty returns the first value that is not blank.
+//
+// Clients spell the workspace three ways during the WP-35 rollout; accepting
+// all three is cheaper than coordinating a single cutover across a mobile app,
+// three web apps and the legacy API.
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if strings.TrimSpace(v) != "" {
+			return v
+		}
 	}
 	return ""
 }

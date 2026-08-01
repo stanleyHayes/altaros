@@ -58,9 +58,35 @@ type otpStore struct {
 	redis *redis.Client
 }
 
-func otpKey(phone string) string        { return "otp:code:" + phone }
-func otpAttemptKey(phone string) string { return "otp:attempts:" + phone }
-func otpResendKey(phone string) string  { return "otp:resend:" + phone }
+// Keys are namespaced by CHURCH as well as by number (WP-35).
+//
+// One person may hold an account in two churches with the same phone number.
+// Keyed on the number alone, they have one outstanding code between them, a
+// second request inside the resend window is refused as a duplicate, and a code
+// issued for one church verifies a sign-in to the other. The namespace is what
+// keeps the two sign-ins separate.
+//
+// An empty churchID keeps the old key shape, so codes already in flight during
+// a deploy still verify instead of every member in the middle of signing in
+// being told their code is wrong.
+func otpNamespace(churchID, phone string) string {
+	if churchID == "" {
+		return phone
+	}
+	return churchID + ":" + phone
+}
+
+func otpKey(churchID, phone string) string {
+	return "otp:code:" + otpNamespace(churchID, phone)
+}
+
+func otpAttemptKey(churchID, phone string) string {
+	return "otp:attempts:" + otpNamespace(churchID, phone)
+}
+
+func otpResendKey(churchID, phone string) string {
+	return "otp:resend:" + otpNamespace(churchID, phone)
+}
 
 // generateCode returns a cryptographically random numeric code.
 //
@@ -87,9 +113,9 @@ func hashCode(code string) string {
 
 // issue creates and stores a new code, returning the plaintext for delivery.
 // The plaintext is never persisted.
-func (s *otpStore) issue(ctx context.Context, phone string) (string, error) {
+func (s *otpStore) issue(ctx context.Context, churchID, phone string) (string, error) {
 	// Throttle resends before doing any work.
-	ok, err := s.redis.SetNX(ctx, otpResendKey(phone), "1", otpResendWindow).Result()
+	ok, err := s.redis.SetNX(ctx, otpResendKey(churchID, phone), "1", otpResendWindow).Result()
 	if err != nil {
 		return "", fmt.Errorf("auth: otp resend check: %w", err)
 	}
@@ -103,10 +129,10 @@ func (s *otpStore) issue(ctx context.Context, phone string) (string, error) {
 	}
 
 	pipe := s.redis.TxPipeline()
-	pipe.Set(ctx, otpKey(phone), hashCode(code), otpTTL)
+	pipe.Set(ctx, otpKey(churchID, phone), hashCode(code), otpTTL)
 	// Reset the attempt counter so a previous failed code does not burn the
 	// new one.
-	pipe.Del(ctx, otpAttemptKey(phone))
+	pipe.Del(ctx, otpAttemptKey(churchID, phone))
 	if _, err := pipe.Exec(ctx); err != nil {
 		return "", fmt.Errorf("auth: store otp: %w", err)
 	}
@@ -115,8 +141,8 @@ func (s *otpStore) issue(ctx context.Context, phone string) (string, error) {
 }
 
 // verify checks a submitted code, consuming it on success.
-func (s *otpStore) verify(ctx context.Context, phone, submitted string) error {
-	stored, err := s.redis.Get(ctx, otpKey(phone)).Result()
+func (s *otpStore) verify(ctx context.Context, churchID, phone, submitted string) error {
+	stored, err := s.redis.Get(ctx, otpKey(churchID, phone)).Result()
 	if errors.Is(err, redis.Nil) {
 		return ErrOTPNotFound
 	}
@@ -126,16 +152,16 @@ func (s *otpStore) verify(ctx context.Context, phone, submitted string) error {
 
 	// Count the attempt before comparing, so a crash mid-verify cannot be used
 	// to get free guesses.
-	attempts, err := s.redis.Incr(ctx, otpAttemptKey(phone)).Result()
+	attempts, err := s.redis.Incr(ctx, otpAttemptKey(churchID, phone)).Result()
 	if err != nil {
 		return fmt.Errorf("auth: count otp attempt: %w", err)
 	}
 	if attempts == 1 {
 		// Expire the counter with the code so it cannot outlive it.
-		s.redis.Expire(ctx, otpAttemptKey(phone), otpTTL)
+		s.redis.Expire(ctx, otpAttemptKey(churchID, phone), otpTTL)
 	}
 	if attempts > otpMaxAttempts {
-		s.clear(ctx, phone)
+		s.clear(ctx, churchID, phone)
 		return ErrOTPTooManyAttempts
 	}
 
@@ -146,17 +172,17 @@ func (s *otpStore) verify(ctx context.Context, phone, submitted string) error {
 	}
 
 	// Single use.
-	s.clear(ctx, phone)
+	s.clear(ctx, churchID, phone)
 	return nil
 }
 
-func (s *otpStore) clear(ctx context.Context, phone string) {
-	s.redis.Del(ctx, otpKey(phone), otpAttemptKey(phone))
+func (s *otpStore) clear(ctx context.Context, churchID, phone string) {
+	s.redis.Del(ctx, otpKey(churchID, phone), otpAttemptKey(churchID, phone))
 }
 
 // remainingAttempts is exposed for surfacing "2 attempts left" in the UI.
-func (s *otpStore) remainingAttempts(ctx context.Context, phone string) int {
-	used, err := s.redis.Get(ctx, otpAttemptKey(phone)).Result()
+func (s *otpStore) remainingAttempts(ctx context.Context, churchID, phone string) int {
+	used, err := s.redis.Get(ctx, otpAttemptKey(churchID, phone)).Result()
 	if err != nil {
 		return otpMaxAttempts
 	}

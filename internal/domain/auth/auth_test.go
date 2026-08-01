@@ -61,6 +61,7 @@ type harness struct {
 	svc  *Service
 	sms  *captureSMS
 	iss  *token.Issuer
+	db   *mongodb.DB
 	user *User
 }
 
@@ -143,7 +144,93 @@ func newHarness(t *testing.T) (*harness, context.Context) {
 	}
 	user.ID = res.InsertedID.(bson.ObjectID)
 
-	return &harness{svc: svc, sms: sms, iss: iss, user: user}, ctx
+	return &harness{svc: svc, sms: sms, iss: iss, db: db, user: user}, ctx
+}
+
+func TestRegistrationRequiresOTPBeforeIssuingSession(t *testing.T) {
+	h, ctx := newHarness(t)
+	churchID := bson.NewObjectID()
+	if _, err := h.db.Global("churches").InsertOne(ctx, bson.M{
+		"_id": churchID, "name": "Grace East", "slug": "grace-east", "isActive": true,
+	}); err != nil {
+		t.Fatalf("seed church: %v", err)
+	}
+
+	user, err := h.svc.Register(ctx, RegisterRequest{
+		ChurchID: churchID.Hex(), Email: " NEW@Example.com ", Phone: "024 555 0199",
+		Name: "  Esi Boateng  ", Password: "StrongPass123",
+	})
+	if err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	if user.ChurchID.String() != churchID.Hex() || user.Role != "MEMBER" || user.Phone != "+233245550199" {
+		t.Fatalf("unexpected registered identity: %+v", user)
+	}
+	if user.PhoneVerified || !user.PhoneVerificationRequired {
+		t.Fatal("new account must require phone ownership proof")
+	}
+	if _, err := h.svc.LoginWithPassword(ctx, "", user.Email, "StrongPass123"); !errors.Is(err, ErrPhoneVerificationRequired) {
+		t.Fatalf("password login before OTP = %v, want verification required", err)
+	}
+
+	if err := h.svc.RequestOTP(ctx, "", user.Phone); err != nil {
+		t.Fatalf("RequestOTP: %v", err)
+	}
+	verified, err := h.svc.VerifyOTP(ctx, "", user.Phone, h.sms.lastCode(t))
+	if err != nil {
+		t.Fatalf("VerifyOTP: %v", err)
+	}
+	if verified.Tokens.AccessToken == "" || !verified.User.PhoneVerified {
+		t.Fatal("OTP should be the first operation to issue an authenticated session")
+	}
+}
+
+func TestRegistrationRejectsUnavailableChurchAndDuplicateIdentity(t *testing.T) {
+	h, ctx := newHarness(t)
+	if _, err := h.svc.Register(ctx, RegisterRequest{
+		ChurchID: bson.NewObjectID().Hex(), Email: "new@example.com", Phone: "+233245550199",
+		Name: "Esi Boateng", Password: "StrongPass123",
+	}); !errors.Is(err, ErrChurchUnavailable) {
+		t.Fatalf("missing church error = %v", err)
+	}
+
+	churchID := bson.NewObjectID()
+	if _, err := h.db.Global("churches").InsertOne(ctx, bson.M{
+		"_id": churchID, "name": "Grace East", "slug": "grace-east", "isActive": true,
+	}); err != nil {
+		t.Fatalf("seed church: %v", err)
+	}
+
+	first := RegisterRequest{
+		ChurchID: churchID.Hex(), Email: "esi@example.com", Phone: "+233245550199",
+		Name: "Esi Boateng", Password: "StrongPass123",
+	}
+	if _, err := h.svc.Register(ctx, first); err != nil {
+		t.Fatalf("first registration: %v", err)
+	}
+
+	// The SAME address in the SAME church is still a duplicate.
+	if _, err := h.svc.Register(ctx, first); !errors.Is(err, ErrAccountExists) {
+		t.Fatalf("duplicate identity error = %v", err)
+	}
+
+	// The same address in a DIFFERENT church is not (WP-35). Before workspace
+	// scoping this was refused, which is what stopped a person who attends two
+	// churches from holding an account in each.
+	second := bson.NewObjectID()
+	if _, err := h.db.Global("churches").InsertOne(ctx, bson.M{
+		"_id": second, "name": "Grace West", "slug": "grace-west", "isActive": true,
+	}); err != nil {
+		t.Fatalf("seed second church: %v", err)
+	}
+	h.dropGlobalIndexes(t, ctx) // the old global index would still refuse it
+
+	elsewhere := first
+	elsewhere.ChurchID = second.Hex()
+	elsewhere.Phone = "+233245550200" // a distinct number; only the email is shared
+	if _, err := h.svc.Register(ctx, elsewhere); err != nil {
+		t.Fatalf("the same address in another church was refused: %v", err)
+	}
 }
 
 // WP-10 acceptance, end to end: OTP login -> refresh -> revoke.
@@ -151,13 +238,13 @@ func TestOTPLoginRefreshRevokeEndToEnd(t *testing.T) {
 	h, ctx := newHarness(t)
 
 	// 1. Request a code.
-	if err := h.svc.RequestOTP(ctx, h.user.Phone); err != nil {
+	if err := h.svc.RequestOTP(ctx, "", h.user.Phone); err != nil {
 		t.Fatalf("RequestOTP: %v", err)
 	}
 	code := h.sms.lastCode(t)
 
 	// 2. Exchange it for tokens.
-	result, err := h.svc.VerifyOTP(ctx, h.user.Phone, code)
+	result, err := h.svc.VerifyOTP(ctx, "", h.user.Phone, code)
 	if err != nil {
 		t.Fatalf("VerifyOTP: %v", err)
 	}
@@ -199,15 +286,15 @@ func TestOTPLoginRefreshRevokeEndToEnd(t *testing.T) {
 func TestOTPCodeIsSingleUse(t *testing.T) {
 	h, ctx := newHarness(t)
 
-	if err := h.svc.RequestOTP(ctx, h.user.Phone); err != nil {
+	if err := h.svc.RequestOTP(ctx, "", h.user.Phone); err != nil {
 		t.Fatalf("RequestOTP: %v", err)
 	}
 	code := h.sms.lastCode(t)
 
-	if _, err := h.svc.VerifyOTP(ctx, h.user.Phone, code); err != nil {
+	if _, err := h.svc.VerifyOTP(ctx, "", h.user.Phone, code); err != nil {
 		t.Fatalf("first verify: %v", err)
 	}
-	if _, err := h.svc.VerifyOTP(ctx, h.user.Phone, code); !errors.Is(err, ErrOTPNotFound) {
+	if _, err := h.svc.VerifyOTP(ctx, "", h.user.Phone, code); !errors.Is(err, ErrOTPNotFound) {
 		t.Fatalf("a used code must not work twice, got %v", err)
 	}
 }
@@ -216,20 +303,20 @@ func TestOTPCodeIsSingleUse(t *testing.T) {
 func TestOTPAttemptsAreCapped(t *testing.T) {
 	h, ctx := newHarness(t)
 
-	if err := h.svc.RequestOTP(ctx, h.user.Phone); err != nil {
+	if err := h.svc.RequestOTP(ctx, "", h.user.Phone); err != nil {
 		t.Fatalf("RequestOTP: %v", err)
 	}
 	realCode := h.sms.lastCode(t)
 
 	for i := 0; i < otpMaxAttempts; i++ {
-		if _, err := h.svc.VerifyOTP(ctx, h.user.Phone, "000000"); err != nil &&
+		if _, err := h.svc.VerifyOTP(ctx, "", h.user.Phone, "000000"); err != nil &&
 			!errors.Is(err, ErrOTPIncorrect) && !errors.Is(err, ErrOTPTooManyAttempts) {
 			t.Fatalf("attempt %d: unexpected error %v", i, err)
 		}
 	}
 
 	// The code is burned even though it is the correct one.
-	_, err := h.svc.VerifyOTP(ctx, h.user.Phone, realCode)
+	_, err := h.svc.VerifyOTP(ctx, "", h.user.Phone, realCode)
 	if err == nil {
 		t.Fatal("the code should be unusable after exhausting attempts")
 	}
@@ -240,7 +327,7 @@ func TestOTPAttemptsAreCapped(t *testing.T) {
 func TestOTPForUnknownNumberIsSilent(t *testing.T) {
 	h, ctx := newHarness(t)
 
-	if err := h.svc.RequestOTP(ctx, "+233200000000"); err != nil {
+	if err := h.svc.RequestOTP(ctx, "", "+233200000000"); err != nil {
 		t.Fatalf("an unknown number must not error: %v", err)
 	}
 	h.sms.mu.Lock()
@@ -251,14 +338,36 @@ func TestOTPForUnknownNumberIsSilent(t *testing.T) {
 	}
 }
 
+func TestOTPPhoneSpellingsUseOneCanonicalKey(t *testing.T) {
+	h, ctx := newHarness(t)
+
+	if err := h.svc.RequestOTP(ctx, "", "024 123 4567"); err != nil {
+		t.Fatalf("domestic spelling should resolve: %v", err)
+	}
+	if _, err := h.svc.VerifyOTP(ctx, "", "00233 24 123 4567", h.sms.lastCode(t)); err != nil {
+		t.Fatalf("international-prefix spelling should verify the same code: %v", err)
+	}
+}
+
+func TestOTPRejectsUnusablePhoneBeforeLookup(t *testing.T) {
+	h, ctx := newHarness(t)
+
+	if err := h.svc.RequestOTP(ctx, "", "024"); !errors.Is(err, ErrPhoneInvalid) {
+		t.Fatalf("invalid phone should be rejected, got %v", err)
+	}
+	if _, err := h.svc.VerifyOTP(ctx, "", "not-a-phone", "123456"); !errors.Is(err, ErrPhoneInvalid) {
+		t.Fatalf("invalid verification phone should be rejected, got %v", err)
+	}
+}
+
 // SMS costs money; the endpoint must not be usable as a bulk sender.
 func TestOTPResendIsThrottled(t *testing.T) {
 	h, ctx := newHarness(t)
 
-	if err := h.svc.RequestOTP(ctx, h.user.Phone); err != nil {
+	if err := h.svc.RequestOTP(ctx, "", h.user.Phone); err != nil {
 		t.Fatalf("first request: %v", err)
 	}
-	if err := h.svc.RequestOTP(ctx, h.user.Phone); !errors.Is(err, ErrOTPTooSoon) {
+	if err := h.svc.RequestOTP(ctx, "", h.user.Phone); !errors.Is(err, ErrOTPTooSoon) {
 		t.Fatalf("an immediate resend must be throttled, got %v", err)
 	}
 }
@@ -266,7 +375,7 @@ func TestOTPResendIsThrottled(t *testing.T) {
 func TestPasswordLoginSucceeds(t *testing.T) {
 	h, ctx := newHarness(t)
 
-	result, err := h.svc.LoginWithPassword(ctx, h.user.Email, "CorrectHorseBattery1")
+	result, err := h.svc.LoginWithPassword(ctx, "", h.user.Email, "CorrectHorseBattery1")
 	if err != nil {
 		t.Fatalf("LoginWithPassword: %v", err)
 	}
@@ -275,11 +384,38 @@ func TestPasswordLoginSucceeds(t *testing.T) {
 	}
 }
 
+func TestNewAccountCannotBypassPhoneVerificationWithPassword(t *testing.T) {
+	h, ctx := newHarness(t)
+	if _, err := h.svc.users.UpdateOne(ctx,
+		bson.M{"_id": h.user.ID},
+		bson.M{"$set": bson.M{
+			"phoneVerified":             false,
+			"phoneVerificationRequired": true,
+		}},
+	); err != nil {
+		t.Fatalf("mark verification required: %v", err)
+	}
+
+	if _, err := h.svc.LoginWithPassword(ctx, "", h.user.Email, "CorrectHorseBattery1"); !errors.Is(err, ErrPhoneVerificationRequired) {
+		t.Fatalf("password must not bypass phone ownership proof, got %v", err)
+	}
+
+	if err := h.svc.RequestOTP(ctx, "", h.user.Phone); err != nil {
+		t.Fatalf("request OTP: %v", err)
+	}
+	if _, err := h.svc.VerifyOTP(ctx, "", h.user.Phone, h.sms.lastCode(t)); err != nil {
+		t.Fatalf("verify OTP: %v", err)
+	}
+	if _, err := h.svc.LoginWithPassword(ctx, "", h.user.Email, "CorrectHorseBattery1"); err != nil {
+		t.Fatalf("password should work after verification: %v", err)
+	}
+}
+
 // Email is normalised, so one account is not two.
 func TestEmailLoginIsCaseInsensitive(t *testing.T) {
 	h, ctx := newHarness(t)
 
-	if _, err := h.svc.LoginWithPassword(ctx, "  AMA@GraceChapel.ORG ", "CorrectHorseBattery1"); err != nil {
+	if _, err := h.svc.LoginWithPassword(ctx, "", "  AMA@GraceChapel.ORG ", "CorrectHorseBattery1"); err != nil {
 		t.Fatalf("email should be normalised before lookup: %v", err)
 	}
 }
@@ -288,8 +424,8 @@ func TestEmailLoginIsCaseInsensitive(t *testing.T) {
 func TestLoginDoesNotRevealAccountExistence(t *testing.T) {
 	h, ctx := newHarness(t)
 
-	_, wrongPassword := h.svc.LoginWithPassword(ctx, h.user.Email, "not-the-password")
-	_, noSuchUser := h.svc.LoginWithPassword(ctx, "nobody@example.org", "not-the-password")
+	_, wrongPassword := h.svc.LoginWithPassword(ctx, "", h.user.Email, "not-the-password")
+	_, noSuchUser := h.svc.LoginWithPassword(ctx, "", "nobody@example.org", "not-the-password")
 
 	if !errors.Is(wrongPassword, ErrInvalidCredentials) || !errors.Is(noSuchUser, ErrInvalidCredentials) {
 		t.Fatalf("both must be ErrInvalidCredentials, got %v and %v", wrongPassword, noSuchUser)
@@ -310,7 +446,7 @@ func TestDeactivatedAccountCannotLogIn(t *testing.T) {
 		t.Fatalf("deactivate: %v", err)
 	}
 
-	if _, err := h.svc.LoginWithPassword(ctx, h.user.Email, "CorrectHorseBattery1"); !errors.Is(err, ErrAccountDeactivated) {
+	if _, err := h.svc.LoginWithPassword(ctx, "", h.user.Email, "CorrectHorseBattery1"); !errors.Is(err, ErrAccountDeactivated) {
 		t.Fatalf("want ErrAccountDeactivated, got %v", err)
 	}
 }
@@ -320,7 +456,7 @@ func TestDeactivatedAccountCannotLogIn(t *testing.T) {
 func TestDeactivationTakesEffectAtRefresh(t *testing.T) {
 	h, ctx := newHarness(t)
 
-	result, err := h.svc.LoginWithPassword(ctx, h.user.Email, "CorrectHorseBattery1")
+	result, err := h.svc.LoginWithPassword(ctx, "", h.user.Email, "CorrectHorseBattery1")
 	if err != nil {
 		t.Fatalf("login: %v", err)
 	}
@@ -330,6 +466,10 @@ func TestDeactivationTakesEffectAtRefresh(t *testing.T) {
 		bson.M{"$set": bson.M{"isActive": false}},
 	); err != nil {
 		t.Fatalf("deactivate: %v", err)
+	}
+
+	if _, err := h.svc.CurrentUser(ctx, result.Tokens.AccessToken); !errors.Is(err, ErrAccountDeactivated) {
+		t.Fatalf("current-user reconciliation must refuse a deactivated account, got %v", err)
 	}
 
 	if _, err := h.svc.Refresh(ctx, result.Tokens.RefreshToken); !errors.Is(err, ErrAccountDeactivated) {
@@ -346,7 +486,7 @@ func TestDeactivationTakesEffectAtRefresh(t *testing.T) {
 func TestLogoutEverywhereEndsAllSessions(t *testing.T) {
 	h, ctx := newHarness(t)
 
-	first, err := h.svc.LoginWithPassword(ctx, h.user.Email, "CorrectHorseBattery1")
+	first, err := h.svc.LoginWithPassword(ctx, "", h.user.Email, "CorrectHorseBattery1")
 	if err != nil {
 		t.Fatalf("login: %v", err)
 	}
@@ -374,7 +514,7 @@ func TestLogoutEverywhereEndsAllSessions(t *testing.T) {
 func TestRefreshReplayRevokesFamilyThroughService(t *testing.T) {
 	h, ctx := newHarness(t)
 
-	first, err := h.svc.LoginWithPassword(ctx, h.user.Email, "CorrectHorseBattery1")
+	first, err := h.svc.LoginWithPassword(ctx, "", h.user.Email, "CorrectHorseBattery1")
 	if err != nil {
 		t.Fatalf("login: %v", err)
 	}
@@ -404,7 +544,7 @@ func TestRefreshReplayRevokesFamilyThroughService(t *testing.T) {
 func TestRefreshPicksUpRoleChange(t *testing.T) {
 	h, ctx := newHarness(t)
 
-	first, err := h.svc.LoginWithPassword(ctx, h.user.Email, "CorrectHorseBattery1")
+	first, err := h.svc.LoginWithPassword(ctx, "", h.user.Email, "CorrectHorseBattery1")
 	if err != nil {
 		t.Fatalf("login: %v", err)
 	}

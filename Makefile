@@ -58,6 +58,12 @@ seed-reset: ## Remove the previous seed run, then seed again
 seed-clean: ## Remove seed data and stop
 	@$(GO) run ./cmd/seed -reset-only
 
+migrate-check: ## WP-35: report accounts that would block the workspace migration
+	@$(GO) run ./cmd/migrate
+
+migrate: ## WP-35: drop global email/phone uniqueness (identity becomes per-church)
+	@$(GO) run ./cmd/migrate -apply
+
 run: ## Run one service: make run SERVICE=gateway PORT=8090
 	@PORT=$(PORT) $(GO) run ./cmd/altar -service=$(SERVICE)
 

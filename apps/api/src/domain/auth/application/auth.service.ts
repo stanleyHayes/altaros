@@ -85,9 +85,29 @@ export class AuthService implements IAuthService {
   }
 
   async register(data: RegisterRequest): Promise<AuthResult> {
-    const existing = await this.authRepo.findByEmail(data.email);
-    if (existing) {
-      throw new AppError(409, "A user with this email already exists");
+    // Scoped to the church being joined (WP-35 / ADR-006). A global check here
+    // is what made one address one account across the entire platform, so
+    // somebody who attends two churches could not hold an account at the
+    // second. Uniqueness is now per (church, address).
+    //
+    // Only checked when the church already exists. A founding admin is creating
+    // theirs, so there is nothing yet to collide with — scoping the query to a
+    // church that does not exist would return nothing anyway, and the guard
+    // says so plainly instead.
+    //
+    // The check stays BEFORE resolveChurchId, which is what stops a refused
+    // signup leaving an orphan church behind. That ordering only protects the
+    // join-an-existing-church path, which is the one that can be refused.
+    if (data.churchId) {
+      const [existingEmail, existingPhone] = await Promise.all([
+        this.authRepo.findByEmail(data.email, data.churchId),
+        this.authRepo.findByPhone(data.phone, data.churchId),
+      ]);
+      if (existingEmail || existingPhone) {
+        // One response avoids turning registration into an email/phone account
+        // enumeration endpoint.
+        throw new AppError(409, "An account with those details already exists");
+      }
     }
 
     const churchId = await this.resolveChurchId(data);

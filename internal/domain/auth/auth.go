@@ -16,6 +16,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/mail"
 	"strings"
 	"time"
 
@@ -26,6 +27,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 
 	"github.com/hayfordstanley/altar-os/internal/platform/mongodb"
+	"github.com/hayfordstanley/altar-os/internal/platform/phone"
 	"github.com/hayfordstanley/altar-os/internal/platform/token"
 )
 
@@ -48,6 +50,19 @@ var (
 	ErrUserNotFound = errors.New("auth: user not found")
 	// ErrPhoneRequired is returned when an OTP flow is missing a number.
 	ErrPhoneRequired = errors.New("auth: phone number is required")
+	// ErrPhoneInvalid means the supplied number cannot be represented safely as
+	// E.164 for OTP lookup and delivery.
+	ErrPhoneInvalid = errors.New("auth: phone number is invalid")
+	// ErrPhoneVerificationRequired prevents a newly registered account from
+	// bypassing the OTP ownership proof through password login. The persisted
+	// flag is opt-in so legacy accounts created before this rollout continue to
+	// work until they verify naturally.
+	ErrPhoneVerificationRequired = errors.New("auth: phone verification is required")
+	// ErrAccountExists deliberately does not identify which login identifier
+	// collided; registration must not become an account-enumeration endpoint.
+	ErrAccountExists       = errors.New("auth: account already exists")
+	ErrRegistrationInvalid = errors.New("auth: registration details are invalid")
+	ErrChurchUnavailable   = errors.New("auth: church is unavailable")
 )
 
 // User is an account. Users are global rather than tenant-scoped: the church
@@ -57,18 +72,19 @@ type User struct {
 	ID bson.ObjectID `bson:"_id,omitempty"    json:"id"`
 	// mongodb.ID, not string: the legacy TypeScript API stores these as
 	// Mongoose ObjectIds while shared-types declares them as strings.
-	ChurchID       mongodb.ID `bson:"churchId"                 json:"churchId"`
-	OrganizationID mongodb.ID `bson:"organizationId,omitempty" json:"organizationId,omitempty"`
-	Email          string     `bson:"email"            json:"email"`
-	Phone          string     `bson:"phone"            json:"phone"`
-	Name           string     `bson:"name"             json:"name"`
-	Role           string     `bson:"role"             json:"role"`
-	PasswordHash   string     `bson:"passwordHash"     json:"-"`
-	AvatarURL      string     `bson:"avatarUrl,omitempty" json:"avatarUrl,omitempty"`
-	IsActive       bool       `bson:"isActive"         json:"isActive"`
-	PhoneVerified  bool       `bson:"phoneVerified"    json:"phoneVerified"`
-	CreatedAt      time.Time  `bson:"createdAt"        json:"createdAt"`
-	UpdatedAt      time.Time  `bson:"updatedAt"        json:"updatedAt"`
+	ChurchID                  mongodb.ID `bson:"churchId"                 json:"churchId"`
+	OrganizationID            mongodb.ID `bson:"organizationId,omitempty" json:"organizationId,omitempty"`
+	Email                     string     `bson:"email"            json:"email"`
+	Phone                     string     `bson:"phone"            json:"phone"`
+	Name                      string     `bson:"name"             json:"name"`
+	Role                      string     `bson:"role"             json:"role"`
+	PasswordHash              string     `bson:"passwordHash"     json:"-"`
+	AvatarURL                 string     `bson:"avatarUrl,omitempty" json:"avatarUrl,omitempty"`
+	IsActive                  bool       `bson:"isActive"         json:"isActive"`
+	PhoneVerified             bool       `bson:"phoneVerified"    json:"phoneVerified"`
+	PhoneVerificationRequired bool       `bson:"phoneVerificationRequired,omitempty" json:"phoneVerificationRequired,omitempty"`
+	CreatedAt                 time.Time  `bson:"createdAt"        json:"createdAt"`
+	UpdatedAt                 time.Time  `bson:"updatedAt"        json:"updatedAt"`
 }
 
 // SMSSender delivers the OTP. Kept as an interface so tests capture the code
@@ -79,10 +95,11 @@ type SMSSender interface {
 
 // Service implements the auth use cases.
 type Service struct {
-	users  *mongo.Collection
-	tokens *token.Issuer
-	otp    *otpStore
-	sms    SMSSender
+	users    *mongo.Collection
+	churches *mongo.Collection
+	tokens   *token.Issuer
+	otp      *otpStore
+	sms      SMSSender
 }
 
 // NewService builds the auth service.
@@ -92,24 +109,54 @@ type Service struct {
 // legitimate cross-tenant collections (see mongodb.Global).
 func NewService(db *mongodb.DB, issuer *token.Issuer, rdb *redis.Client, sms SMSSender) *Service {
 	return &Service{
-		users:  db.Global(Collection),
-		tokens: issuer,
-		otp:    &otpStore{redis: rdb},
-		sms:    sms,
+		users:    db.Global(Collection),
+		churches: db.Global("churches"),
+		tokens:   issuer,
+		otp:      &otpStore{redis: rdb},
+		sms:      sms,
 	}
 }
 
 // EnsureIndexes creates the uniqueness the auth flows depend on.
+//
+// It creates ONLY the compound pair. The global `email_unique` / `phone_unique`
+// that this used to create are deliberately absent, and their absence is what
+// makes the migration stick: recreating them here would have this run at every
+// boot and quietly undo DropGlobalUniqueness — which is exactly what happened
+// the first time, because DropGlobalUniqueness calls this to guarantee the
+// replacements exist before removing anything.
+//
+// Adding the compound indexes is safe at any time; they are additive. Removing
+// the global pair is a separate, deliberate operation, because dropping a
+// unique index before both writers scope their lookups leaves a window in which
+// two churches register the same address — after which the compound build fails
+// and the fix is manual data surgery (R-10). See DropGlobalUniqueness and the
+// preflight it refuses to run without.
 func (s *Service) EnsureIndexes(ctx context.Context) error {
 	err := mongodb.EnsureIndexes(ctx, s.users, []mongo.IndexModel{
 		{
-			Keys:    bson.D{{Key: "email", Value: 1}},
-			Options: options.Index().SetName("email_unique").SetUnique(true).SetSparse(true),
+			// ADR-006: identity is scoped to a workspace. One address may hold
+			// an account in each of two churches and never two in one.
+			//
+			// A PARTIAL filter, not sparse. A compound sparse index skips a
+			// document only when EVERY indexed field is missing, so every
+			// email-less account would index as {church, null} and collide with
+			// the others — the same trap as the invitations index, and the same
+			// one that made "phone": "" reject the second phone-less account.
+			Keys: bson.D{
+				{Key: "churchId", Value: 1},
+				{Key: "email", Value: 1},
+			},
+			Options: options.Index().SetName("uq_church_email").SetUnique(true).
+				SetPartialFilterExpression(bson.M{"email": bson.M{"$exists": true}}),
 		},
 		{
-			// Phone is the primary login identifier, so it must be unique.
-			Keys:    bson.D{{Key: "phone", Value: 1}},
-			Options: options.Index().SetName("phone_unique").SetUnique(true).SetSparse(true),
+			Keys: bson.D{
+				{Key: "churchId", Value: 1},
+				{Key: "phone", Value: 1},
+			},
+			Options: options.Index().SetName("uq_church_phone").SetUnique(true).
+				SetPartialFilterExpression(bson.M{"phone": bson.M{"$exists": true}}),
 		},
 	})
 	if err != nil {
@@ -124,21 +171,135 @@ type Result struct {
 	Tokens *token.Pair `json:"tokens"`
 }
 
-// --- password login ---
+type RegisterRequest struct {
+	ChurchID string
+	Email    string
+	Phone    string
+	Name     string
+	Password string
+}
 
-// LoginWithPassword authenticates by email and password.
-func (s *Service) LoginWithPassword(ctx context.Context, email, password string) (*Result, error) {
-	var user User
-	err := s.users.FindOne(ctx, bson.M{"email": normalizeEmail(email)}).Decode(&user)
+// Register creates an inactive-session member account inside an existing,
+// active church. It intentionally returns no tokens: control of the supplied
+// phone is proved only by VerifyOTP, which is the first point a session may be
+// issued for a newly self-registered member.
+func (s *Service) Register(ctx context.Context, req RegisterRequest) (*User, error) {
+	name := strings.TrimSpace(req.Name)
+	email := normalizeEmail(req.Email)
+	if len(name) < 2 || len(name) > 120 || len(req.Password) < 8 || len(req.Password) > 72 {
+		return nil, ErrRegistrationInvalid
+	}
+	parsedEmail, err := mail.ParseAddress(email)
+	if err != nil || parsedEmail.Address != email {
+		return nil, ErrRegistrationInvalid
+	}
+	phoneNumber, err := normalizeOTPPhone(req.Phone)
+	if err != nil {
+		return nil, err
+	}
+	churchID, err := bson.ObjectIDFromHex(strings.TrimSpace(req.ChurchID))
+	if err != nil {
+		return nil, ErrChurchUnavailable
+	}
+	var church struct {
+		IsActive bool `bson:"isActive"`
+	}
+	if err := s.churches.FindOne(ctx, bson.M{"_id": churchID, "isActive": true}).Decode(&church); err != nil {
+		if errors.Is(err, mongo.ErrNoDocuments) {
+			return nil, ErrChurchUnavailable
+		}
+		return nil, fmt.Errorf("auth: lookup registration church: %w", err)
+	}
 
-	if errors.Is(err, mongo.ErrNoDocuments) {
-		// Hash anyway so a missing account and a wrong password take the same
-		// time. Skipping this makes response latency an account oracle.
-		_, _ = bcrypt.GenerateFromPassword([]byte(password), bcryptCost)
-		return nil, ErrInvalidCredentials
+	// Scoped to the church being joined (WP-35). A global check here is what
+	// made one address one account across the whole platform; a person who
+	// attends two churches must be able to hold an account in each.
+	//
+	// Both storage forms, because Mongoose writes churchId as an ObjectId and
+	// early Go documents wrote it as a string (ADR-005) — matching only one
+	// silently misses half the church's existing accounts and lets a duplicate
+	// through.
+	churchScope := bson.M{"$in": bson.A{churchID, churchID.Hex()}}
+	if err := s.users.FindOne(ctx, bson.M{
+		"churchId": churchScope,
+		"$or": bson.A{
+			bson.M{"email": email}, bson.M{"phone": phoneNumber},
+		},
+	}).Err(); err == nil {
+		return nil, ErrAccountExists
+	} else if !errors.Is(err, mongo.ErrNoDocuments) {
+		return nil, fmt.Errorf("auth: check registration identity: %w", err)
+	}
+
+	passwordHash, err := HashPassword(req.Password)
+	if err != nil {
+		return nil, err
+	}
+	now := time.Now().UTC()
+	user := &User{
+		ChurchID:                  mongodb.ID(churchID.Hex()),
+		Email:                     email,
+		Phone:                     phoneNumber,
+		Name:                      name,
+		Role:                      "MEMBER",
+		PasswordHash:              passwordHash,
+		IsActive:                  true,
+		PhoneVerified:             false,
+		PhoneVerificationRequired: true,
+		CreatedAt:                 now,
+		UpdatedAt:                 now,
+	}
+	result, err := s.users.InsertOne(ctx, user)
+	if mongo.IsDuplicateKeyError(err) {
+		return nil, ErrAccountExists
 	}
 	if err != nil {
-		return nil, fmt.Errorf("auth: lookup by email: %w", err)
+		return nil, fmt.Errorf("auth: create account: %w", err)
+	}
+	user.ID = result.InsertedID.(bson.ObjectID)
+	return user, nil
+}
+
+// --- password login ---
+
+// LoginWithPassword authenticates into a WORKSPACE (WP-35).
+//
+// The workspace is the church slug. An empty one falls back to a global lookup
+// that only succeeds when exactly one account holds the address — see
+// findOneCredential for why that fallback is safe and temporary.
+//
+// Every failure below costs the same and says the same thing. A wrong password,
+// an address in no church, an address in a DIFFERENT church, an unknown
+// workspace and an ambiguous one are indistinguishable to the caller, in both
+// the message and the time taken. Distinguishing any of them turns the sign-in
+// form into a directory of which churches are on the platform and who belongs
+// to them — which for a congregation is a membership-disclosure risk, not a
+// privacy nicety.
+func (s *Service) LoginWithPassword(ctx context.Context, workspace, email, password string) (*Result, error) {
+	churchID := ""
+	if normalizeWorkspace(workspace) != "" {
+		resolved, err := s.resolveWorkspace(ctx, workspace)
+		if err != nil {
+			if !errors.Is(err, ErrWorkspaceUnknown) {
+				return nil, err
+			}
+			// Unknown workspace. Pay the bcrypt cost anyway: returning early
+			// here makes response latency say "no such church", which is the
+			// enumeration this whole path is written to avoid.
+			_, _ = bcrypt.GenerateFromPassword([]byte(password), bcryptCost)
+			return nil, ErrInvalidCredentials
+		}
+		churchID = resolved
+	}
+
+	user, err := s.findOneCredential(ctx, "email", normalizeEmail(email), churchID)
+	if err != nil {
+		if errors.Is(err, ErrInvalidCredentials) {
+			// Hash anyway so a missing account and a wrong password take the
+			// same time. Skipping this makes response latency an account oracle.
+			_, _ = bcrypt.GenerateFromPassword([]byte(password), bcryptCost)
+		}
+		return nil, err
 	}
 
 	if bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(password)) != nil {
@@ -147,37 +308,49 @@ func (s *Service) LoginWithPassword(ctx context.Context, email, password string)
 	if !user.IsActive {
 		return nil, ErrAccountDeactivated
 	}
+	if user.PhoneVerificationRequired && !user.PhoneVerified {
+		return nil, ErrPhoneVerificationRequired
+	}
 
-	return s.issueFor(ctx, &user)
+	return s.issueFor(ctx, user)
 }
 
 // --- OTP login ---
 
-// RequestOTP sends a login code to a phone number.
+// RequestOTP sends a login code to a phone number in a workspace.
 //
 // It returns success even when the number is unknown: a differing response
 // would let anyone test which numbers belong to church members, which for a
 // religious congregation is a membership-disclosure risk, not just a privacy
-// nicety.
-func (s *Service) RequestOTP(ctx context.Context, phone string) error {
-	phone = strings.TrimSpace(phone)
-	if phone == "" {
-		return ErrPhoneRequired
+// nicety. The same silence covers an unknown workspace and a number that
+// belongs to a different church.
+func (s *Service) RequestOTP(ctx context.Context, workspace, phone string) error {
+	phone, err := normalizeOTPPhone(phone)
+	if err != nil {
+		return err
 	}
 
-	var user User
-	err := s.users.FindOne(ctx, bson.M{"phone": phone}).Decode(&user)
-	if errors.Is(err, mongo.ErrNoDocuments) {
-		return nil // Silent no-op; see doc comment.
-	}
+	churchID, err := s.workspaceForOTP(ctx, workspace)
 	if err != nil {
-		return fmt.Errorf("auth: lookup by phone: %w", err)
+		return nil // Unknown workspace, indistinguishable from an unknown number.
+	}
+
+	user, err := s.findOneCredential(ctx, "phone", phone, churchID)
+	if err != nil {
+		if errors.Is(err, ErrInvalidCredentials) {
+			return nil // Silent no-op; see doc comment.
+		}
+		return err
 	}
 	if !user.IsActive {
 		return nil // Same shape as unknown, for the same reason.
 	}
 
-	code, err := s.otp.issue(ctx, phone)
+	// Keyed by the account's church as well as the number. Without this, one
+	// person with accounts in two churches has ONE outstanding code, and a code
+	// requested for church A verifies a sign-in to church B — the workspace
+	// separation undone in the one place it is least visible.
+	code, err := s.otp.issue(ctx, user.ChurchID.String(), phone)
 	if err != nil {
 		// ErrOTPTooSoon is surfaced: the member is waiting for a code and
 		// needs to know one was already sent.
@@ -193,23 +366,27 @@ func (s *Service) RequestOTP(ctx context.Context, phone string) error {
 }
 
 // VerifyOTP exchanges a code for tokens.
-func (s *Service) VerifyOTP(ctx context.Context, phone, code string) (*Result, error) {
-	phone = strings.TrimSpace(phone)
-	if phone == "" {
-		return nil, ErrPhoneRequired
-	}
-
-	if err := s.otp.verify(ctx, phone, code); err != nil {
+func (s *Service) VerifyOTP(ctx context.Context, workspace, phone, code string) (*Result, error) {
+	phone, err := normalizeOTPPhone(phone)
+	if err != nil {
 		return nil, err
 	}
 
-	var user User
-	err := s.users.FindOne(ctx, bson.M{"phone": phone}).Decode(&user)
-	if errors.Is(err, mongo.ErrNoDocuments) {
+	churchID, err := s.workspaceForOTP(ctx, workspace)
+	if err != nil {
 		return nil, ErrInvalidCredentials
 	}
+
+	// The user is resolved BEFORE the code is checked, because the code is
+	// keyed by their church — there is no way to look up the right code
+	// without knowing which account is being verified.
+	user, err := s.findOneCredential(ctx, "phone", phone, churchID)
 	if err != nil {
-		return nil, fmt.Errorf("auth: lookup by phone: %w", err)
+		return nil, err
+	}
+
+	if err := s.otp.verify(ctx, user.ChurchID.String(), phone, code); err != nil {
+		return nil, err
 	}
 	if !user.IsActive {
 		return nil, ErrAccountDeactivated
@@ -219,12 +396,40 @@ func (s *Service) VerifyOTP(ctx context.Context, phone, code string) (*Result, e
 	if !user.PhoneVerified {
 		_, _ = s.users.UpdateOne(ctx,
 			bson.M{"_id": user.ID},
-			bson.M{"$set": bson.M{"phoneVerified": true, "updatedAt": time.Now().UTC()}},
+			bson.M{"$set": bson.M{
+				"phoneVerified":             true,
+				"phoneVerificationRequired": false,
+				"updatedAt":                 time.Now().UTC(),
+			}},
 		)
 		user.PhoneVerified = true
+		user.PhoneVerificationRequired = false
 	}
 
-	return s.issueFor(ctx, &user)
+	return s.issueFor(ctx, user)
+}
+
+// workspaceForOTP resolves an optional workspace for the OTP flows.
+//
+// An empty workspace is allowed and means "look globally", matching the
+// password path's migration fallback. A NAMED workspace that does not exist is
+// an error the callers turn into their usual silence.
+func (s *Service) workspaceForOTP(ctx context.Context, workspace string) (string, error) {
+	if normalizeWorkspace(workspace) == "" {
+		return "", nil
+	}
+	return s.resolveWorkspace(ctx, workspace)
+}
+
+func normalizeOTPPhone(raw string) (string, error) {
+	if strings.TrimSpace(raw) == "" {
+		return "", ErrPhoneRequired
+	}
+	normalized, err := phone.Normalize(raw, "GH")
+	if err != nil {
+		return "", ErrPhoneInvalid
+	}
+	return normalized, nil
 }
 
 // --- tokens ---
@@ -287,7 +492,14 @@ func (s *Service) CurrentUser(ctx context.Context, accessToken string) (*User, e
 	if err != nil {
 		return nil, err
 	}
-	return s.byIDString(ctx, claims.UserID)
+	user, err := s.byIDString(ctx, claims.UserID)
+	if err != nil {
+		return nil, err
+	}
+	if !user.IsActive {
+		return nil, ErrAccountDeactivated
+	}
+	return user, nil
 }
 
 func (s *Service) issueFor(ctx context.Context, user *User) (*Result, error) {
