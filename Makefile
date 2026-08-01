@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help contracts contracts-check build vet test run fmt fmt-check infra-up infra-down infra-logs check
+.PHONY: help contracts contracts-check build vet test run fmt fmt-check infra-up infra-down infra-logs check seed seed-reset seed-clean
 
 GO       ?= go
 SERVICE  ?= gateway
@@ -48,6 +48,15 @@ test-ci: ## Run Go tests as CI does: race detector on, skips are failures
 	status=$$?; \
 	grep -E '^(--- FAIL|--- SKIP|ok  |FAIL|panic:)' test-output.txt || true; \
 	exit $$status
+
+seed: ## Fill the development database with realistic church data
+	@$(GO) run ./cmd/seed
+
+seed-reset: ## Remove the previous seed run, then seed again
+	@$(GO) run ./cmd/seed -reset
+
+seed-clean: ## Remove seed data and stop
+	@$(GO) run ./cmd/seed -reset-only
 
 run: ## Run one service: make run SERVICE=gateway PORT=8090
 	@PORT=$(PORT) $(GO) run ./cmd/altar -service=$(SERVICE)
