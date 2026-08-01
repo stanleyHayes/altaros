@@ -177,6 +177,13 @@ var (
 	// Write covers authenticated mutations. Not a security boundary so much as
 	// a guard against a runaway client loop taking the database with it.
 	Write = Rule{Name: "write", Limit: 120, Window: time.Minute}
+
+	// RedeemInvitation covers the two unauthenticated endpoints that accept an
+	// invitation token. The token itself is 32 random bytes, so guessing one is
+	// not the threat — the endpoint doing a database lookup per attempt is. A
+	// real invitee loads the page once and submits once; twenty attempts covers
+	// a mistyped password and a refresh, and nothing else.
+	RedeemInvitation = Rule{Name: "redeem_invitation", Limit: 20, Window: 10 * time.Minute}
 )
 
 // IdentityFromAddr reduces a remote address to a rate-limit identity.

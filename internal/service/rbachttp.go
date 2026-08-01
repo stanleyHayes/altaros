@@ -45,6 +45,14 @@ func rbacRoutes(d *deps.Deps) routeSet {
 					Get("/", handleListRoles(svc))
 				r.With(requirePermission(rbac.ResourceRole, rbac.ActionRead)).
 					Get("/{id}", handleGetRole(svc))
+
+				// Which roles this caller may actually hand out. The invite
+				// form populates its dropdown from here, so someone is never
+				// offered a role they will then be refused for — the escalation
+				// rule is strict, and a strict rule that only shows up as a 403
+				// after the fact reads as a broken feature.
+				r.With(requirePermission(rbac.ResourceRole, rbac.ActionRead)).
+					Get("/assignable", handleAssignableRoles(svc))
 				r.With(requirePermission(rbac.ResourceRole, rbac.ActionCreate)).
 					Post("/", handleCreateRole(svc))
 				r.With(requirePermission(rbac.ResourceRole, rbac.ActionUpdate)).
@@ -127,6 +135,25 @@ func handleListRoles(svc *rbac.Service) http.HandlerFunc {
 			roles = []rbac.Role{}
 		}
 		httpx.JSON(w, http.StatusOK, roles)
+	}
+}
+
+func handleAssignableRoles(svc *rbac.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		roles, err := svc.Assignable(r.Context(), permissionsFrom(r.Context()))
+		if err != nil {
+			writeRBACError(w, err)
+			return
+		}
+		if roles == nil {
+			roles = []rbac.AssignableRole{}
+		}
+		httpx.JSON(w, http.StatusOK, map[string]any{
+			"roles": roles,
+			// Said once, here, rather than left for an admin to infer from a
+			// dropdown that is shorter than the role list.
+			"rule": "You can only give someone a role whose permissions you hold yourself.",
+		})
 	}
 }
 

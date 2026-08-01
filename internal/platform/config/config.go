@@ -52,6 +52,16 @@ type Config struct {
 	// which is what should happen once the legacy API retires at WP-20.
 	LegacyAPIURL string
 
+	// PublicAppURL is where a person lands when they follow a link the platform
+	// sent them — currently only invitations (WP-37).
+	//
+	// Configuration rather than a header off the request. Building the link from
+	// the Host of whatever request happened to trigger it means an attacker who
+	// can set Host controls where an invitation email points, and the recipient
+	// has no way to tell: the mail genuinely comes from us, and the link goes to
+	// a credential-harvesting clone of our own login page.
+	PublicAppURL string
+
 	Mongo MongoConfig
 	Redis RedisConfig
 	Kafka KafkaConfig
@@ -190,6 +200,7 @@ func Load(serviceName string) (*Config, error) {
 		}),
 		DataRegion:   getenv("DATA_REGION", "gh"),
 		LegacyAPIURL: getenvOptional("LEGACY_API_URL", "http://localhost:3001"),
+		PublicAppURL: strings.TrimRight(getenv("PUBLIC_APP_URL", "http://localhost:5173"), "/"),
 		Tracing: TracingConfig{
 			Endpoint:    os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"),
 			SampleRatio: getenvFloat("OTEL_TRACES_SAMPLER_ARG", 0.1),

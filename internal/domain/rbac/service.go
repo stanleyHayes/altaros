@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -488,6 +489,27 @@ func legacyRoleSlug(role string) string {
 	}
 }
 
+// LegacyRoleFor is the inverse: the enum to write on a user Go creates, so a
+// request proxied to the TypeScript API — which has never heard of roleId —
+// still authorises them correctly.
+//
+// It lives next to legacyRoleSlug deliberately. The two are a round trip, and
+// separating them is how they drift until an account created in Go reads as a
+// member on one side and an administrator on the other.
+//
+// A custom role maps to MEMBER: the legacy API cannot express it, and the safe
+// reading of an unrepresentable role is the least privileged one.
+func LegacyRoleFor(slug string) string {
+	switch slug {
+	case SystemAdmin:
+		return "CHURCH_ADMIN"
+	case SystemStaff:
+		return "DEPARTMENT_LEADER"
+	default:
+		return "MEMBER"
+	}
+}
+
 // versionOf identifies an exact authorisation state.
 //
 // Role version plus a hash of the overrides. A token carrying a different
@@ -507,25 +529,100 @@ func versionOf(role *Role, o Overrides) string {
 }
 
 // refuseEscalation stops a caller granting a permission they do not hold.
+func (s *Service) refuseEscalation(wanted, callerHolds Set) error {
+	return RefuseEscalation(wanted, callerHolds)
+}
+
+// EscalationError names what the caller was missing.
+//
+// Typed rather than a wrapped string because the missing list is the only thing
+// that makes this error actionable. "You cannot grant a permission you do not
+// hold" tells an admin nothing they can do; "you would need finance:read" tells
+// them exactly which role to fix.
+type EscalationError struct{ Missing []string }
+
+func (e *EscalationError) Error() string {
+	return fmt.Sprintf("%s: %s", ErrEscalation.Error(), strings.Join(e.Missing, ", "))
+}
+
+// Unwrap makes errors.Is(err, ErrEscalation) work.
+func (e *EscalationError) Unwrap() error { return ErrEscalation }
+
+// RefuseEscalation stops a caller handing out a permission they do not hold.
 //
 // Without this, anyone with `role:create` can write themselves an
 // all-permissions role and become an administrator — which makes `role:create`
-// equivalent to full access and the whole model decorative. A nil callerHolds
-// means the check is skipped, which is only correct for system provisioning.
-func (s *Service) refuseEscalation(wanted, callerHolds Set) error {
+// equivalent to full access and the whole model decorative. The same reasoning
+// applies to invitations, which is why this is exported: inviting someone into
+// a role you could not create is the same escalation with an extra person in
+// the middle, and the invited address can be one the inviter controls.
+//
+// The rule is a strict subset — the standard one, and stricter than it first
+// looks. It is NOT "the target role must be weaker than yours": a role holding
+// any single permission you lack is refused even when it is otherwise trivial.
+// That means someone given user:create and nothing else can invite nobody at
+// all, because even the Member role holds reads they do not have.
+//
+// That is a real constraint rather than a bug, and it is handled by making it
+// visible instead of loosening it: Assignable() below answers which roles a
+// caller may actually hand out, so the invite form offers only those, and the
+// error names the exact permissions missing when one is attempted anyway.
+//
+// A nil callerHolds skips the check, which is only correct for system
+// provisioning. An EMPTY set is not the same thing and refuses everything.
+func RefuseEscalation(wanted, callerHolds Set) error {
 	if callerHolds == nil {
 		return nil
 	}
-	var missing []string
+	missing := Missing(wanted, callerHolds)
+	if len(missing) == 0 {
+		return nil
+	}
+	return &EscalationError{Missing: missing}
+}
+
+// Missing lists what `wanted` holds that `callerHolds` does not.
+func Missing(wanted, callerHolds Set) []string {
+	missing := make([]string, 0, len(wanted))
 	for p := range wanted {
 		if !callerHolds.Has(p) {
 			missing = append(missing, string(p))
 		}
 	}
-	if len(missing) == 0 {
-		return nil
+	sort.Strings(missing)
+	return missing
+}
+
+// Assignable returns the roles a caller may hand out, and why not for the rest.
+//
+// This is what stops the escalation rule being experienced as an arbitrary 403.
+// The invite form calls it and offers only the roles that will be accepted —
+// requirement 7's principle applied to a dropdown rather than a button — and an
+// admin configuring roles can see that their new Registrar role cannot assign
+// anything and why.
+func (s *Service) Assignable(ctx context.Context, callerHolds Set) ([]AssignableRole, error) {
+	roles, err := s.Roles(ctx)
+	if err != nil {
+		return nil, err
 	}
-	return fmt.Errorf("%w: %s", ErrEscalation, strings.Join(missing, ", "))
+
+	out := make([]AssignableRole, 0, len(roles))
+	for i := range roles {
+		missing := Missing(roles[i].PermissionSet(), callerHolds)
+		out = append(out, AssignableRole{
+			Role:       &roles[i],
+			Assignable: len(missing) == 0,
+			Missing:    missing,
+		})
+	}
+	return out, nil
+}
+
+// AssignableRole is a role plus whether this caller may give it to someone.
+type AssignableRole struct {
+	*Role
+	Assignable bool     `json:"assignable"`
+	Missing    []string `json:"missingPermissions,omitempty"`
 }
 
 // slugify makes a stable identifier from a role name.
