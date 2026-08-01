@@ -502,7 +502,18 @@ The PDF names four events. A working system needs a governed catalog with a vers
 
 | WP-14 | ✅ done | Giving and ledger. **Acceptance met:** member gives via MoMo → charge carries the church's subaccount and our computed split → settlement records the provider's actual fees → the church's balance reflects **net**, not gross → `giving.completed` is emitted once for the notification service to consume. Settling three times sequentially, and eight times concurrently, both produce **exactly one** transaction and **exactly one** event. Cash bypasses settlement (no provider, no fees, gross = net) and records who counted it. Expenses reduce the balance. Pending checkouts are never income. Both guards were **mutation-tested**: removing the forced tenant stage leaks another church's income into the summary, and removing the settlement compare-and-set turns 8 concurrent deliveries into 6 duplicate receipts — the suite catches both. |
 
-Not yet started: WP-15 (notification service) onward.
+| WP-15 | ✅ done | Consent-gated messaging with real SMS (Africa's Talking), email (Resend) and push (FCM v1) adapters. **Acceptance met:** `giving.completed` produces exactly one SMS receipt, and a member whose communications consent is revoked receives nothing — the transport is never reached. Per-channel preference, per-member quiet hours, delivery-status tracking and exponential backoff with a ceiling are all covered. |
+
+Not yet started: WP-16 (gateway wiring) onward.
+
+**Consent is checked at the point of send, not by callers.** If the check lived in each caller, one caller forgetting it is a regulatory incident under Act 843 and the NDPA rather than a bug. Two distinctions turned out to matter and are structural:
+
+- **Transactional messages are not consent-gated.** A giving receipt or an OTP is necessary to perform the service the member asked for — the same lawful basis WP-06 gives membership and giving. Treating an OTP as marketing would lock a member out of their account for declining a newsletter, and a receipt held until morning by quiet hours is a member who thinks their tithe vanished.
+- **Unsubscribe is a preference, not a consent revocation.** A member who replies STOP has said "stop texting me", not "delete my lawful basis"; collapsing the two would make re-subscribing a consent ceremony instead of a toggle.
+
+**A consent-service outage is an error, never a suppression.** Reading "cannot reach consent" as "no consent" would silently stop every church's communications during an outage, and the suppression records would make it look intentional.
+
+**Bug the concurrency test caught, worth recording.** The unique dedupe index held at exactly one *record*, but all eight racing goroutines called the transport on the winner's row — one record, eight SMS receipts to the same member. The insert now reports whether it actually created the row, and a caller that lost the race returns without sending. A uniqueness constraint stops duplicate *rows*; it does nothing about duplicate *side effects*.
 
 **Two things the ledger refuses to do, both deliberate.** It never trusts a webhook body for value — a forged webhook claiming GHS 1,000,000 against a real GHS 100 gift records GHS 100, because settlement re-verifies with the provider and the body is only a hint that something happened. And when the provider reports a different amount from the one recorded, it **refuses rather than reconciles**: silently adopting the provider's figure would hide both the bug case and the attack case, so the row stays pending for a human. Same for a payment that settled to a different subaccount — successful, but not that church's income.
 

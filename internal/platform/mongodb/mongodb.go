@@ -215,6 +215,64 @@ func (t *TenantCollection) UpdateOne(ctx context.Context, filter any, update bso
 	return t.coll.UpdateOne(ctx, scoped, update)
 }
 
+// UpsertOne updates a document within the caller's church, creating it if it
+// does not exist.
+//
+// The tenant is applied twice, and both are necessary. The filter is scoped so
+// an upsert cannot match another church's document, and churchId is forced
+// into $setOnInsert so a newly created document is stamped — an upsert whose
+// filter matches nothing inserts a document built from the update, and without
+// the stamp that document would have no tenant at all and be invisible to
+// every subsequent scoped query.
+func (t *TenantCollection) UpsertOne(ctx context.Context, filter any, update bson.M) (*mongo.UpdateResult, error) {
+	churchID, err := tenancy.MustChurchID(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", t.name, err)
+	}
+	scoped, err := t.scopedFilter(ctx, filter)
+	if err != nil {
+		return nil, err
+	}
+
+	out := bson.M{}
+	for k, v := range update {
+		out[k] = v
+	}
+
+	// Never let an upsert move a document to another church.
+	if set, ok := out["$set"].(bson.M); ok {
+		if _, present := set[TenantField]; present {
+			return nil, fmt.Errorf("%s: %w (upsert may not reassign %s)",
+				t.name, ErrCrossTenant, TenantField)
+		}
+		copied := bson.M{}
+		for k, v := range set {
+			copied[k] = v
+		}
+		copied["updatedAt"] = time.Now().UTC()
+		out["$set"] = copied
+	}
+
+	onInsert := bson.M{}
+	if existing, ok := out["$setOnInsert"].(bson.M); ok {
+		for k, v := range existing {
+			onInsert[k] = v
+		}
+	}
+	if claimed, ok := onInsert[TenantField]; ok {
+		if s, isString := claimed.(string); !isString || s != churchID {
+			return nil, fmt.Errorf("%s: %w", t.name, ErrCrossTenant)
+		}
+	}
+	onInsert[TenantField] = churchID
+	if _, ok := onInsert["createdAt"]; !ok {
+		onInsert["createdAt"] = time.Now().UTC()
+	}
+	out["$setOnInsert"] = onInsert
+
+	return t.coll.UpdateOne(ctx, scoped, out, options.UpdateOne().SetUpsert(true))
+}
+
 // DeleteOne deletes a document within the caller's church.
 func (t *TenantCollection) DeleteOne(ctx context.Context, filter any) (*mongo.DeleteResult, error) {
 	scoped, err := t.scopedFilter(ctx, filter)
