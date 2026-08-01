@@ -58,6 +58,21 @@ type Claims struct {
 	// a replayed token can revoke every descendant rather than just that one.
 	Family string `json:"fam,omitempty"`
 
+	// LegacyUserID and LegacyChurchID duplicate UserID and ChurchID under the
+	// names the TypeScript API's auth middleware reads (`id` and `churchId`).
+	//
+	// This is a migration shim, and it is what lets one token authenticate
+	// against both APIs while the gateway forwards not-yet-ported routes to
+	// the legacy service. Without it a user who signs in through Go gets a
+	// token the TypeScript API verifies successfully — same secret, same
+	// HS256 — but then reads `req.user.id` as undefined from, which fails in a
+	// far more confusing way than a rejected token.
+	//
+	// Both APIs must therefore share JWT_SECRET until the TypeScript API
+	// retires at WP-20, at which point these two fields are deleted.
+	LegacyUserID   string `json:"id,omitempty"`
+	LegacyChurchID string `json:"churchId,omitempty"`
+
 	jwt.RegisteredClaims
 }
 
@@ -149,6 +164,16 @@ func (i *Issuer) issuePair(ctx context.Context, id Identity, family string) (*Pa
 	}, nil
 }
 
+// legacyIf returns the value only when the condition holds, so the legacy
+// compatibility claims are omitted rather than blank on tokens that must not
+// carry them.
+func legacyIf(include bool, value string) string {
+	if include {
+		return value
+	}
+	return ""
+}
+
 func (i *Issuer) sign(id Identity, kind Kind, family string, now time.Time, ttl time.Duration) (string, error) {
 	claims := Claims{
 		UserID:         id.UserID,
@@ -157,6 +182,11 @@ func (i *Issuer) sign(id Identity, kind Kind, family string, now time.Time, ttl 
 		Role:           id.Role,
 		Kind:           kind,
 		Family:         family,
+		// The legacy shim above. Only on access tokens: the TypeScript API
+		// never sees a refresh token, and duplicating identity into one would
+		// widen what a stolen refresh token can do.
+		LegacyUserID:   legacyIf(kind == KindAccess, id.UserID),
+		LegacyChurchID: legacyIf(kind == KindAccess, id.ChurchID),
 		RegisteredClaims: jwt.RegisteredClaims{
 			ID:        newID(),
 			Issuer:    i.issuer,

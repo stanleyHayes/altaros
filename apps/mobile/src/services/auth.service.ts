@@ -65,7 +65,10 @@ const authService = {
 
   async refreshToken(): Promise<AuthResponse> {
     const refreshToken = await AsyncStorage.getItem('refreshToken');
-    const { data } = await api.post<AuthResponse>('/auth/refresh', {
+    // The route is /auth/refresh-token on both the Go gateway and the legacy
+    // API. This app called /auth/refresh, so every session ended at the access
+    // token's expiry instead of renewing.
+    const { data } = await api.post<AuthResponse>('/auth/refresh-token', {
       refreshToken,
     });
     await storeAuthData(data);

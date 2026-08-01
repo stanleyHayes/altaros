@@ -1,9 +1,20 @@
 import axios from 'axios';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-const API_BASE_URL = __DEV__
-  ? 'http://localhost:4000/api'
-  : 'https://api.altar-os.com/api';
+// The Go gateway is the single origin. It serves auth, members and finance
+// directly and forwards anything not yet ported to the legacy TypeScript API,
+// so this app never needs to know which domains have moved.
+//
+// The previous value pointed at localhost:4000/api, which was neither the port
+// nor the path any API has ever served — this app could not have reached a
+// backend at all.
+//
+// localhost only resolves to the dev machine from an iOS simulator or the web
+// build. A physical device or an Android emulator needs the machine's LAN
+// address, which is why this is overridable rather than hard-coded.
+const API_BASE_URL =
+  process.env.EXPO_PUBLIC_API_URL ??
+  (__DEV__ ? 'http://localhost:8080/api/v1' : 'https://api.altar-os.com/api/v1');
 
 const api = axios.create({
   baseURL: API_BASE_URL,

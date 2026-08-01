@@ -1,7 +1,10 @@
 import axios, { type AxiosRequestConfig, type AxiosResponse } from "axios";
 
 const api = axios.create({
-  baseURL: import.meta.env.VITE_API_URL || "http://localhost:3001/api/v1",
+  // The Go gateway is the single origin. It serves auth, members and finance
+  // directly and forwards everything not yet ported to the legacy TypeScript
+  // API, so this app never needs to know which domains have moved.
+  baseURL: import.meta.env.VITE_API_URL || "http://localhost:8080/api/v1",
   headers: { "Content-Type": "application/json" },
 });
 

@@ -256,3 +256,64 @@ func TestIssuerRequiresRedis(t *testing.T) {
 		t.Fatal("NewIssuer must refuse to build without a secret")
 	}
 }
+
+// The migration shim: while the gateway forwards unported routes to the
+// TypeScript API, one token must authenticate against both. The TypeScript
+// middleware reads `id` and `churchId`, so an access token has to carry them
+// alongside Go's own `uid` and `cid`.
+func TestAccessTokenCarriesLegacyClaims(t *testing.T) {
+	issuer := newIssuer(t, nil)
+
+	pair, err := issuer.Issue(context.Background(), Identity{
+		UserID:   "user_1",
+		ChurchID: "church_1",
+		Role:     "CHURCH_ADMIN",
+	})
+	if err != nil {
+		t.Fatalf("Issue: %v", err)
+	}
+
+	claims, err := issuer.Verify(context.Background(), pair.AccessToken, KindAccess)
+	if err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	if claims.LegacyUserID != "user_1" {
+		t.Errorf("legacy id = %q, want user_1; the TypeScript middleware reads this",
+			claims.LegacyUserID)
+	}
+	if claims.LegacyChurchID != "church_1" {
+		t.Errorf("legacy churchId = %q, want church_1", claims.LegacyChurchID)
+	}
+	// They must agree with the canonical claims, or the two APIs would
+	// disagree about who is calling.
+	if claims.LegacyUserID != claims.UserID || claims.LegacyChurchID != claims.ChurchID {
+		t.Error("the legacy claims must mirror the canonical ones exactly")
+	}
+}
+
+// A refresh token must NOT carry them. The TypeScript API never sees one, and
+// putting identity into it would widen what a stolen refresh token can do.
+func TestRefreshTokenOmitsLegacyClaims(t *testing.T) {
+	issuer := newIssuer(t, nil)
+
+	pair, err := issuer.Issue(context.Background(), Identity{
+		UserID: "user_1", ChurchID: "church_1", Role: "MEMBER",
+	})
+	if err != nil {
+		t.Fatalf("Issue: %v", err)
+	}
+
+	claims, err := issuer.Verify(context.Background(), pair.RefreshToken, KindRefresh)
+	if err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	if claims.LegacyUserID != "" || claims.LegacyChurchID != "" {
+		t.Errorf("a refresh token must not carry legacy identity claims, got id=%q churchId=%q",
+			claims.LegacyUserID, claims.LegacyChurchID)
+	}
+	// The canonical claims are still there — the refresh token still knows
+	// whose it is, it just does not advertise it to the legacy API.
+	if claims.UserID != "user_1" {
+		t.Errorf("uid = %q, want user_1", claims.UserID)
+	}
+}

@@ -44,6 +44,10 @@ type Config struct {
 	// Ghana (Act 843), Nigeria (NDPA) and Kenya (DPA) alike, so residency is
 	// configuration rather than convention.
 	DataRegion string
+	// LegacyAPIURL is the TypeScript API the gateway forwards not-yet-ported
+	// routes to (the strangler-fig proxy). Empty means unported paths 404,
+	// which is what should happen once the legacy API retires at WP-20.
+	LegacyAPIURL string
 
 	Mongo MongoConfig
 	Redis RedisConfig
@@ -160,8 +164,18 @@ func Load(serviceName string) (*Config, error) {
 		Env:         env,
 		ServiceName: serviceName,
 		HTTPPort:    getenvInt("PORT", 8080),
-		CORSOrigins: getenvList("CORS_ORIGIN", []string{"http://localhost:4173"}),
-		DataRegion:  getenv("DATA_REGION", "gh"),
+		// Every local frontend port, because the apps now talk to this gateway
+		// rather than the legacy API: dashboard/web/admin/marketing on both the
+		// preview (4173+) and dev (5173+) ranges, and Expo web on 8081.
+		CORSOrigins: getenvList("CORS_ORIGIN", []string{
+			"http://localhost:4173", "http://localhost:4174",
+			"http://localhost:4175", "http://localhost:4176",
+			"http://localhost:5173", "http://localhost:5174",
+			"http://localhost:5175", "http://localhost:5176",
+			"http://localhost:8081",
+		}),
+		DataRegion:   getenv("DATA_REGION", "gh"),
+		LegacyAPIURL: getenv("LEGACY_API_URL", "http://localhost:3001"),
 
 		Mongo: MongoConfig{
 			URI:            getenv("MONGODB_URI", "mongodb://localhost:27017"),

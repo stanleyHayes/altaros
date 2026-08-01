@@ -119,6 +119,17 @@ func buildGateway(d *deps.Deps) http.Handler {
 	for _, name := range names {
 		sets[name](r)
 	}
+
+	// Anything the Go services do not serve goes to the legacy TypeScript API.
+	// Registered last so a Go route always wins: the day a domain is ported,
+	// its routes shadow the proxy and no client changes.
+	//
+	// Built once and shared: the proxy owns a connection pool, and constructing
+	// it per handler would give the two paths separate pools to the same
+	// upstream.
+	legacy := legacyProxy(d)
+	r.NotFound(legacy.ServeHTTP)
+	r.MethodNotAllowed(legacy.ServeHTTP)
 	return r
 }
 
