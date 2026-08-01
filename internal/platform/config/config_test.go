@@ -179,3 +179,47 @@ func TestLegacyAPIURLIsTrimmed(t *testing.T) {
 		t.Errorf("LegacyAPIURL = %q, want it trimmed", cfg.LegacyAPIURL)
 	}
 }
+
+// The same empty-versus-absent distinction as LEGACY_API_URL, and it bit
+// twice. For KAFKA_BROKERS, empty means "run without a broker" — a real
+// deployment shape and what CI's smoke job uses. Treating it as unset
+// restored the development default, so the service tried to reach a broker on
+// localhost that was not there and refused to start.
+func TestEmptyKafkaBrokersMeansNoBroker(t *testing.T) {
+	t.Setenv("KAFKA_BROKERS", "")
+
+	cfg, err := Load("gateway")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(cfg.Kafka.Brokers) != 0 {
+		t.Fatalf("brokers = %v; setting the variable empty must mean no broker",
+			cfg.Kafka.Brokers)
+	}
+}
+
+func TestAbsentKafkaBrokersUsesTheDevelopmentDefault(t *testing.T) {
+	os.Unsetenv("KAFKA_BROKERS")
+
+	cfg, err := Load("gateway")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(cfg.Kafka.Brokers) == 0 {
+		t.Fatal("with the variable absent, the development default should apply")
+	}
+}
+
+// A list with blank entries must not produce empty broker addresses, which
+// the client would then try to dial.
+func TestBrokerListIgnoresBlankEntries(t *testing.T) {
+	t.Setenv("KAFKA_BROKERS", " a:9092 , , b:9092 ,")
+
+	cfg, err := Load("gateway")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(cfg.Kafka.Brokers) != 2 {
+		t.Fatalf("brokers = %v, want two", cfg.Kafka.Brokers)
+	}
+}

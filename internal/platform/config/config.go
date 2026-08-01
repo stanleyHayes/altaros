@@ -211,7 +211,7 @@ func Load(serviceName string) (*Config, error) {
 		},
 		Kafka: KafkaConfig{
 			// 19092, not the usual 9092 — see the note in docker-compose.yml.
-			Brokers:       getenvList("KAFKA_BROKERS", []string{"127.0.0.1:19092"}),
+			Brokers:       getenvListOptional("KAFKA_BROKERS", []string{"127.0.0.1:19092"}),
 			ConsumerGroup: getenv("KAFKA_CONSUMER_GROUP", "altar-"+serviceName),
 		},
 		JWT: JWTConfig{
@@ -352,6 +352,25 @@ func getenvOptional(key, fallback string) string {
 	return fallback
 }
 
+// getenvListOptional reads a comma-separated list, distinguishing an ABSENT
+// variable from one explicitly set to empty.
+//
+// Same reasoning as getenvOptional, and the same bug twice: for KAFKA_BROKERS,
+// empty means "run without a broker" — a real deployment shape, and what CI's
+// smoke job asserts. Through getenvList, setting it empty silently restored
+// the development default and the service tried to reach a broker on localhost
+// that was not there, then refused to start.
+func getenvListOptional(key string, fallback []string) []string {
+	raw, present := os.LookupEnv(key)
+	if !present {
+		return fallback
+	}
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	return getenvList(key, fallback)
+}
+
 func getenvFloat(key string, fallback float64) float64 {
 	v := strings.TrimSpace(os.Getenv(key))
 	if v == "" {
@@ -400,6 +419,11 @@ func getenvDuration(key string, fallback time.Duration) time.Duration {
 	return d
 }
 
+// getenvList reads a comma-separated list, treating empty as unset.
+//
+// That is right for most settings — an empty CORS_ORIGIN means "nobody
+// configured this", and the default should apply. Where empty is a MEANINGFUL
+// value, use getenvListOptional instead.
 func getenvList(key string, fallback []string) []string {
 	v := strings.TrimSpace(os.Getenv(key))
 	if v == "" {
