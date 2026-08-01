@@ -1,11 +1,11 @@
 import React, { createContext, useEffect, useState, useCallback } from 'react';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import authService, {
   User,
   LoginRequest,
   RegisterRequest,
   OtpRequest,
 } from '../services/auth.service';
+import { session } from '../services/session';
 
 export interface AuthContextType {
   user: User | null;
@@ -25,12 +25,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
-    loadStoredUser();
+    void loadStoredUser();
+    return session.onExpired(() => setUser(null));
   }, []);
 
   const loadStoredUser = async () => {
     try {
-      const token = await AsyncStorage.getItem('accessToken');
+      const token = await session.getAccessToken();
       if (token) {
         const storedUser = await authService.getStoredUser();
         if (storedUser) {
@@ -41,7 +42,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           const freshUser = await authService.getCurrentUser();
           setUser(freshUser);
         } catch {
-          // If refresh fails, keep stored user or clear if token is invalid
+          await session.clear();
+          setUser(null);
         }
       }
     } catch (error) {

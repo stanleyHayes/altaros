@@ -6,62 +6,24 @@ import {
   StyleSheet,
   TouchableOpacity,
   ActivityIndicator,
+  Linking,
 } from 'react-native';
 import { Card } from '../../components/common/Card';
 import { colors, typography, spacing, borderRadius } from '../../theme';
 import type { Sermon } from '../../services/spiritual.service';
-
-// TODO: Replace with real API call
-const mockSermons: Sermon[] = [
-  {
-    id: '1',
-    title: 'Walking in Faith',
-    speaker: 'Pastor James',
-    date: '2026-03-23',
-    duration: '42:15',
-    series: 'Faith Series',
-    description: 'Exploring what it means to truly walk by faith.',
-  },
-  {
-    id: '2',
-    title: 'The Power of Grace',
-    speaker: 'Pastor Sarah',
-    date: '2026-03-16',
-    duration: '38:30',
-    series: 'Grace Unbound',
-    description: 'Understanding the transformative power of God\'s grace.',
-  },
-  {
-    id: '3',
-    title: 'Hope in Uncertain Times',
-    speaker: 'Pastor James',
-    date: '2026-03-09',
-    duration: '45:00',
-    description: 'Finding hope when the world feels uncertain.',
-  },
-  {
-    id: '4',
-    title: 'Living with Purpose',
-    speaker: 'Guest Speaker Dr. Williams',
-    date: '2026-03-02',
-    duration: '35:45',
-    series: 'Purpose Driven',
-    description: 'Discovering your God-given purpose.',
-  },
-];
+import spiritualService from '../../services/spiritual.service';
 
 export function SermonsScreen() {
   const [sermons, setSermons] = useState<Sermon[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
-    // TODO: Replace with spiritualService.getSermons()
     const loadSermons = async () => {
       try {
-        await new Promise<void>((resolve) => { setTimeout(() => resolve(), 500); });
-        setSermons(mockSermons);
-      } catch (error) {
-        console.error('Failed to load sermons:', error);
+        const result = await spiritualService.getSermons({ limit: 40 });
+        setSermons(result.sermons);
+      } catch {
+        setSermons([]);
       } finally {
         setIsLoading(false);
       }
@@ -72,7 +34,15 @@ export function SermonsScreen() {
   const renderSermon = ({ item }: { item: Sermon }) => (
     <Card style={styles.sermonCard}>
       <View style={styles.sermonRow}>
-        <TouchableOpacity style={styles.playButton} activeOpacity={0.7}>
+        <TouchableOpacity
+          style={styles.playButton}
+          activeOpacity={0.7}
+          disabled={!item.audioUrl && !item.videoUrl}
+          onPress={() => void Linking.openURL(item.audioUrl ?? item.videoUrl ?? '')}
+          accessibilityRole="button"
+          accessibilityLabel={`Play ${item.title}`}
+          accessibilityState={{ disabled: !item.audioUrl && !item.videoUrl }}
+        >
           <Text style={styles.playIcon}>{'\u25B6'}</Text>
         </TouchableOpacity>
         <View style={styles.sermonInfo}>

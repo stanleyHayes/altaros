@@ -1,161 +1,81 @@
-import React, { useState, useEffect } from 'react';
-import {
-  View,
-  Text,
-  FlatList,
-  StyleSheet,
-  ActivityIndicator,
-} from 'react-native';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { ActivityIndicator, FlatList, RefreshControl, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { Card } from '../../components/common/Card';
-import { colors, typography, spacing, borderRadius } from '../../theme';
-import type { GivingRecord } from '../../services/giving.service';
+import givingService, { formatMoney, type GivingRecord } from '../../services/giving.service';
+import { borderRadius, colors, spacing, typography } from '../../theme';
 
-// TODO: Replace with real API call
-const mockHistory: GivingRecord[] = [
-  {
-    id: '1',
-    amount: 100,
-    currency: 'USD',
-    type: 'tithe',
-    paymentMethod: 'card',
-    status: 'completed',
-    reference: 'TXN-001',
-    createdAt: '2026-03-28T09:00:00Z',
-  },
-  {
-    id: '2',
-    amount: 50,
-    currency: 'USD',
-    type: 'offering',
-    paymentMethod: 'bank',
-    status: 'completed',
-    reference: 'TXN-002',
-    createdAt: '2026-03-21T10:30:00Z',
-  },
-  {
-    id: '3',
-    amount: 250,
-    currency: 'USD',
-    type: 'building_fund',
-    paymentMethod: 'card',
-    status: 'completed',
-    reference: 'TXN-003',
-    note: 'Monthly building fund contribution',
-    createdAt: '2026-03-14T14:00:00Z',
-  },
-  {
-    id: '4',
-    amount: 75,
-    currency: 'USD',
-    type: 'donation',
-    paymentMethod: 'mobile_money',
-    status: 'pending',
-    reference: 'TXN-004',
-    createdAt: '2026-03-07T16:45:00Z',
-  },
-];
-
-const statusColors: Record<string, string> = {
-  completed: colors.success,
+const statusColors: Record<GivingRecord['status'], string> = {
+  success: colors.success,
   pending: colors.warning,
   failed: colors.error,
+  reversed: colors.muted,
 };
 
 export function GivingHistoryScreen() {
   const [records, setRecords] = useState<GivingRecord[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [error, setError] = useState('');
 
-  useEffect(() => {
-    // TODO: Replace with givingService.getHistory()
-    const loadHistory = async () => {
-      try {
-        await new Promise<void>((resolve) => { setTimeout(() => resolve(), 500); });
-        setRecords(mockHistory);
-      } catch (error) {
-        console.error('Failed to load giving history:', error);
-      } finally {
-        setIsLoading(false);
-      }
-    };
-    loadHistory();
+  const loadHistory = useCallback(async (refresh = false) => {
+    refresh ? setIsRefreshing(true) : setIsLoading(true);
+    setError('');
+    try {
+      setRecords(await givingService.getHistory());
+    } catch {
+      setError('We could not load your giving history.');
+    } finally {
+      setIsLoading(false);
+      setIsRefreshing(false);
+    }
   }, []);
 
-  const formatDate = (dateStr: string) => {
-    const date = new Date(dateStr);
-    return date.toLocaleDateString('en-US', {
-      month: 'short',
-      day: 'numeric',
-      year: 'numeric',
-    });
-  };
+  useEffect(() => { void loadHistory(); }, [loadHistory]);
 
-  const renderRecord = ({ item }: { item: GivingRecord }) => (
-    <Card style={styles.recordCard}>
-      <View style={styles.recordHeader}>
-        <View>
-          <Text style={styles.recordType}>
-            {item.type.replace('_', ' ').toUpperCase()}
-          </Text>
-          <Text style={styles.recordDate}>{formatDate(item.createdAt)}</Text>
-        </View>
-        <Text style={styles.recordAmount}>
-          ${item.amount.toFixed(2)}
-        </Text>
-      </View>
-      <View style={styles.recordFooter}>
-        <Text style={styles.recordMethod}>
-          {item.paymentMethod.replace('_', ' ')}
-        </Text>
-        <View
-          style={[
-            styles.statusBadge,
-            { backgroundColor: (statusColors[item.status] || colors.muted) + '20' },
-          ]}
-        >
-          <Text
-            style={[
-              styles.statusText,
-              { color: statusColors[item.status] || colors.muted },
-            ]}
-          >
-            {item.status}
-          </Text>
-        </View>
-      </View>
-      {item.note && <Text style={styles.recordNote}>{item.note}</Text>}
-    </Card>
+  const totalMinor = useMemo(
+    () => records.filter((record) => record.status === 'success').reduce((sum, record) => sum + record.grossMinor, 0),
+    [records],
   );
 
-  // Calculate total
-  const total = records
-    .filter((r) => r.status === 'completed')
-    .reduce((sum, r) => sum + r.amount, 0);
-
   if (isLoading) {
-    return (
-      <View style={styles.loading}>
-        <ActivityIndicator size="large" color={colors.primary} />
-      </View>
-    );
+    return <View style={styles.center}><ActivityIndicator size="large" color={colors.primary} /><Text style={styles.loadingText}>Loading your gifts…</Text></View>;
   }
 
   return (
     <View style={styles.container}>
-      {/* Summary */}
       <View style={styles.summary}>
-        <Text style={styles.summaryLabel}>Total Given</Text>
-        <Text style={styles.summaryAmount}>${total.toFixed(2)}</Text>
+        <Text style={styles.summaryLabel}>Confirmed giving</Text>
+        <Text style={styles.summaryAmount}>{formatMoney(totalMinor)}</Text>
+        <Text style={styles.summaryDetail}>{records.length} {records.length === 1 ? 'record' : 'records'} in your history</Text>
       </View>
-
       <FlatList
         data={records}
         keyExtractor={(item) => item.id}
-        renderItem={renderRecord}
         contentContainerStyle={styles.list}
-        showsVerticalScrollIndicator={false}
+        refreshControl={<RefreshControl refreshing={isRefreshing} onRefresh={() => void loadHistory(true)} tintColor={colors.primary} />}
+        renderItem={({ item }) => (
+          <Card style={styles.recordCard}>
+            <View style={styles.recordHeader}>
+              <View style={styles.recordInfo}>
+                <Text style={styles.recordType}>{item.type.replaceAll('_', ' ')}</Text>
+                <Text style={styles.recordDate}>{new Date(item.occurredAt || item.createdAt).toLocaleDateString('en-GH', { day: 'numeric', month: 'short', year: 'numeric' })}</Text>
+              </View>
+              <Text style={styles.recordAmount}>{formatMoney(item.grossMinor, item.currency)}</Text>
+            </View>
+            <View style={styles.recordFooter}>
+              <Text style={styles.channel}>{item.channel.replaceAll('_', ' ')}</Text>
+              <View style={[styles.status, { backgroundColor: `${statusColors[item.status]}18` }]}>
+                <Text style={[styles.statusText, { color: statusColors[item.status] }]}>{item.status}</Text>
+              </View>
+            </View>
+            {item.levyMinor > 0 ? <Text style={styles.levy}>Includes {formatMoney(item.levyMinor, item.currency)} E-Levy</Text> : null}
+          </Card>
+        )}
         ListEmptyComponent={
           <View style={styles.empty}>
-            <Text style={styles.emptyText}>No giving records yet.</Text>
+            <Text style={styles.emptyTitle}>{error ? 'History unavailable' : 'Your first gift will appear here'}</Text>
+            <Text style={styles.emptyBody}>{error || 'Completed and pending gifts are kept together so you can always trace what happened.'}</Text>
+            {error ? <TouchableOpacity onPress={() => void loadHistory()} accessibilityRole="button"><Text style={styles.retry}>Try again</Text></TouchableOpacity> : null}
           </View>
         }
       />
@@ -164,90 +84,27 @@ export function GivingHistoryScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: colors.background,
-  },
-  loading: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: colors.background,
-  },
-  summary: {
-    backgroundColor: colors.primary,
-    padding: spacing.xl,
-    alignItems: 'center',
-  },
-  summaryLabel: {
-    fontSize: typography.sizes.md,
-    color: 'rgba(255,255,255,0.8)',
-  },
-  summaryAmount: {
-    fontSize: typography.sizes['4xl'],
-    fontWeight: typography.weights.bold,
-    color: '#FFFFFF',
-    marginTop: spacing.xs,
-  },
-  list: {
-    padding: spacing.xl,
-  },
-  recordCard: {
-    marginBottom: spacing.md,
-  },
-  recordHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'flex-start',
-    marginBottom: spacing.sm,
-  },
-  recordType: {
-    fontSize: typography.sizes.md,
-    fontWeight: typography.weights.semibold,
-    color: colors.text,
-  },
-  recordDate: {
-    fontSize: typography.sizes.sm,
-    color: colors.muted,
-    marginTop: 2,
-  },
-  recordAmount: {
-    fontSize: typography.sizes.xl,
-    fontWeight: typography.weights.bold,
-    color: colors.text,
-  },
-  recordFooter: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  recordMethod: {
-    fontSize: typography.sizes.sm,
-    color: colors.muted,
-    textTransform: 'capitalize',
-  },
-  statusBadge: {
-    paddingHorizontal: spacing.sm,
-    paddingVertical: 2,
-    borderRadius: borderRadius.full,
-  },
-  statusText: {
-    fontSize: typography.sizes.xs,
-    fontWeight: typography.weights.semibold,
-    textTransform: 'capitalize',
-  },
-  recordNote: {
-    fontSize: typography.sizes.sm,
-    color: colors.textSecondary,
-    fontStyle: 'italic',
-    marginTop: spacing.sm,
-  },
-  empty: {
-    alignItems: 'center',
-    paddingTop: spacing['4xl'],
-  },
-  emptyText: {
-    fontSize: typography.sizes.base,
-    color: colors.muted,
-  },
+  container: { flex: 1, backgroundColor: colors.background },
+  center: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.background },
+  loadingText: { color: colors.muted, fontSize: typography.sizes.md, marginTop: spacing.md },
+  summary: { backgroundColor: colors.text, paddingHorizontal: spacing.xl, paddingVertical: spacing['2xl'] },
+  summaryLabel: { color: 'rgba(255,255,255,.6)', fontSize: typography.sizes.md },
+  summaryAmount: { color: colors.surface, fontSize: typography.sizes['4xl'], fontWeight: typography.weights.bold, letterSpacing: -1.2, marginTop: spacing.xs },
+  summaryDetail: { color: colors.primaryLight, fontSize: typography.sizes.sm, marginTop: spacing.sm },
+  list: { width: '100%', maxWidth: 680, alignSelf: 'center', padding: spacing.base, flexGrow: 1 },
+  recordCard: { marginBottom: spacing.md },
+  recordHeader: { flexDirection: 'row', justifyContent: 'space-between', gap: spacing.md },
+  recordInfo: { flex: 1 },
+  recordType: { color: colors.text, fontSize: typography.sizes.base, fontWeight: typography.weights.semibold, textTransform: 'capitalize' },
+  recordDate: { color: colors.muted, fontSize: typography.sizes.sm, marginTop: 3 },
+  recordAmount: { color: colors.text, fontSize: typography.sizes.lg, fontWeight: typography.weights.bold },
+  recordFooter: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: spacing.md },
+  channel: { color: colors.textSecondary, fontSize: typography.sizes.sm, textTransform: 'capitalize' },
+  status: { borderRadius: borderRadius.full, paddingHorizontal: spacing.sm, paddingVertical: 3 },
+  statusText: { fontSize: typography.sizes.xs, fontWeight: typography.weights.bold, textTransform: 'capitalize' },
+  levy: { color: colors.muted, fontSize: typography.sizes.xs, marginTop: spacing.sm },
+  empty: { alignItems: 'center', paddingHorizontal: spacing.xl, paddingTop: spacing['4xl'] },
+  emptyTitle: { color: colors.text, fontSize: typography.sizes.lg, fontWeight: typography.weights.semibold, textAlign: 'center' },
+  emptyBody: { color: colors.muted, fontSize: typography.sizes.md, lineHeight: 21, textAlign: 'center', marginTop: spacing.sm },
+  retry: { color: colors.primary, fontWeight: typography.weights.semibold, marginTop: spacing.lg },
 });

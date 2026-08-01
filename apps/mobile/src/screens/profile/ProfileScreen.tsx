@@ -1,258 +1,86 @@
 import React from 'react';
-import {
-  View,
-  Text,
-  ScrollView,
-  StyleSheet,
-  TouchableOpacity,
-  Alert,
-} from 'react-native';
+import { Alert, Linking, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { useNavigation } from '@react-navigation/native';
+import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { Avatar } from '../../components/common/Avatar';
-import { Card } from '../../components/common/Card';
 import { Button } from '../../components/common/Button';
+import { Card } from '../../components/common/Card';
 import { useAuth } from '../../hooks/useAuth';
-import { colors, typography, spacing, borderRadius } from '../../theme';
+import { borderRadius, colors, spacing, typography } from '../../theme';
+import type { RootStackParamList } from '../../components/navigation/AppNavigator';
 
-interface MenuItem {
-  label: string;
-  icon: string;
-  onPress?: () => void;
-  danger?: boolean;
-}
-
-// TODO: Replace with real group data from API
-const mockGroups = [
-  { id: '1', name: 'Worship Team', role: 'Member' },
-  { id: '2', name: 'Bible Study Group', role: 'Leader' },
-  { id: '3', name: 'Youth Ministry', role: 'Volunteer' },
-];
+type ProfileNav = NativeStackNavigationProp<RootStackParamList>;
 
 export function ProfileScreen() {
+  const navigation = useNavigation<ProfileNav>();
   const { user, logout } = useAuth();
+  const fullName = `${user?.firstName || 'Member'} ${user?.lastName || ''}`.trim();
 
-  const fullName =
-    `${user?.firstName || 'User'} ${user?.lastName || ''}`.trim();
+  const handleLogout = () => Alert.alert('Sign out?', 'You will need a new code or your password to return.', [
+    { text: 'Cancel', style: 'cancel' },
+    { text: 'Sign out', style: 'destructive', onPress: () => void logout() },
+  ]);
 
-  const handleLogout = () => {
-    Alert.alert('Logout', 'Are you sure you want to log out?', [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Logout',
-        style: 'destructive',
-        onPress: () => logout(),
-      },
-    ]);
-  };
-
-  const menuItems: MenuItem[] = [
-    { label: 'Edit Profile', icon: '\u270E' },
-    { label: 'Notifications', icon: '\u266A' },
-    { label: 'Privacy & Security', icon: '\u26BF' },
-    { label: 'Giving Statements', icon: '\u2637' },
-    { label: 'Help & Support', icon: '\u2753' },
-    { label: 'About ALTAR OS', icon: '\u24D8' },
+  const menu = [
+    { label: 'Notifications', detail: 'Messages and push alerts', action: () => navigation.navigate('Notifications') },
+    { label: 'Giving history', detail: 'Receipts and pending gifts', action: () => navigation.navigate('GivingHistory') },
+    { label: 'Welfare & care', detail: 'Private pastoral support', action: () => navigation.navigate('Welfare') },
+    { label: 'Privacy', detail: 'How Altar OS handles your data', action: () => void Linking.openURL('https://altar-os.com/privacy') },
+    { label: 'Help centre', detail: 'Get support from our team', action: () => void Linking.openURL('https://altar-os.com/help') },
   ];
 
   return (
-    <ScrollView style={styles.container} showsVerticalScrollIndicator={false}>
-      {/* Profile Header */}
-      <View style={styles.profileHeader}>
-        <Avatar
-          name={fullName}
-          uri={user?.avatar}
-          size="xl"
-          style={styles.avatar}
-        />
+    <ScrollView style={styles.container} contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+      <View style={styles.header}>
+        <Avatar name={fullName} uri={user?.avatar} size="xl" />
         <Text style={styles.name}>{fullName}</Text>
-        <Text style={styles.email}>{user?.email || 'member@church.org'}</Text>
-        {user?.phone && <Text style={styles.phone}>{user.phone}</Text>}
-        {user?.churchName && (
-          <View style={styles.churchBadge}>
-            <Text style={styles.churchBadgeText}>{user.churchName}</Text>
-          </View>
-        )}
+        <Text style={styles.contact}>{user?.phone || user?.email || 'Member account'}</Text>
+        <View style={styles.churchBadge}><Text style={styles.churchText}>{user?.churchName || 'Altar OS member'}</Text></View>
       </View>
 
-      {/* Groups */}
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>My Groups</Text>
-        <Card>
-          {mockGroups.map((group, index) => (
-            <TouchableOpacity
-              key={group.id}
-              style={[
-                styles.groupItem,
-                index < mockGroups.length - 1 && styles.groupItemBorder,
-              ]}
-            >
-              <View>
-                <Text style={styles.groupName}>{group.name}</Text>
-                <Text style={styles.groupRole}>{group.role}</Text>
-              </View>
-              <Text style={styles.chevron}>{'\u203A'}</Text>
-            </TouchableOpacity>
-          ))}
-        </Card>
+      <View style={styles.identityRow}>
+        <View><Text style={styles.identityLabel}>ROLE</Text><Text style={styles.identityValue}>{user?.role?.replaceAll('_', ' ') || 'Member'}</Text></View>
+        <View style={styles.identityDivider} />
+        <View><Text style={styles.identityLabel}>SESSION</Text><Text style={styles.identityValue}>Secured on device</Text></View>
       </View>
 
-      {/* Settings Menu */}
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Settings</Text>
-        <Card padded={false}>
-          {menuItems.map((item, index) => (
-            <TouchableOpacity
-              key={item.label}
-              style={[
-                styles.menuItem,
-                index < menuItems.length - 1 && styles.menuItemBorder,
-              ]}
-              onPress={item.onPress}
-            >
-              <View style={styles.menuItemLeft}>
-                <Text style={styles.menuIcon}>{item.icon}</Text>
-                <Text
-                  style={[
-                    styles.menuLabel,
-                    item.danger && styles.menuLabelDanger,
-                  ]}
-                >
-                  {item.label}
-                </Text>
-              </View>
-              <Text style={styles.chevron}>{'\u203A'}</Text>
-            </TouchableOpacity>
-          ))}
-        </Card>
-      </View>
+      <Text style={styles.sectionTitle}>Account</Text>
+      <Card padded={false}>
+        {menu.map((item, index) => (
+          <TouchableOpacity key={item.label} onPress={item.action} style={[styles.menuRow, index > 0 && styles.menuBorder]} accessibilityRole="button">
+            <View style={styles.menuText}><Text style={styles.menuLabel}>{item.label}</Text><Text style={styles.menuDetail}>{item.detail}</Text></View>
+            <Text style={styles.chevron}>›</Text>
+          </TouchableOpacity>
+        ))}
+      </Card>
 
-      {/* Logout */}
-      <View style={styles.logoutSection}>
-        <Button
-          title="Log Out"
-          variant="outline"
-          onPress={handleLogout}
-          fullWidth
-        />
-        <Text style={styles.version}>ALTAR OS v1.0.0</Text>
+      <View style={styles.logout}>
+        <Button title="Sign out" variant="outline" onPress={handleLogout} fullWidth />
+        <Text style={styles.version}>ALTAR OS · 1.0.0</Text>
       </View>
     </ScrollView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: colors.background,
-  },
-  profileHeader: {
-    alignItems: 'center',
-    paddingVertical: spacing['2xl'],
-    paddingHorizontal: spacing.xl,
-    backgroundColor: colors.surface,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.divider,
-  },
-  avatar: {
-    marginBottom: spacing.base,
-  },
-  name: {
-    fontSize: typography.sizes['2xl'],
-    fontWeight: typography.weights.bold,
-    color: colors.text,
-    marginBottom: spacing.xs,
-  },
-  email: {
-    fontSize: typography.sizes.md,
-    color: colors.muted,
-  },
-  phone: {
-    fontSize: typography.sizes.md,
-    color: colors.muted,
-    marginTop: 2,
-  },
-  churchBadge: {
-    backgroundColor: colors.primaryLight + '20',
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.xs,
-    borderRadius: borderRadius.full,
-    marginTop: spacing.md,
-  },
-  churchBadgeText: {
-    fontSize: typography.sizes.sm,
-    color: colors.primary,
-    fontWeight: typography.weights.medium,
-  },
-  section: {
-    paddingHorizontal: spacing.xl,
-    marginTop: spacing.xl,
-  },
-  sectionTitle: {
-    fontSize: typography.sizes.lg,
-    fontWeight: typography.weights.bold,
-    color: colors.text,
-    marginBottom: spacing.md,
-  },
-  groupItem: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingVertical: spacing.md,
-  },
-  groupItemBorder: {
-    borderBottomWidth: 1,
-    borderBottomColor: colors.divider,
-  },
-  groupName: {
-    fontSize: typography.sizes.base,
-    fontWeight: typography.weights.medium,
-    color: colors.text,
-  },
-  groupRole: {
-    fontSize: typography.sizes.sm,
-    color: colors.muted,
-    marginTop: 2,
-  },
-  chevron: {
-    fontSize: 20,
-    color: colors.muted,
-  },
-  menuItem: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingVertical: spacing.base,
-    paddingHorizontal: spacing.base,
-  },
-  menuItemBorder: {
-    borderBottomWidth: 1,
-    borderBottomColor: colors.divider,
-  },
-  menuItemLeft: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  menuIcon: {
-    fontSize: 18,
-    color: colors.muted,
-    marginRight: spacing.md,
-    width: 24,
-    textAlign: 'center',
-  },
-  menuLabel: {
-    fontSize: typography.sizes.base,
-    color: colors.text,
-  },
-  menuLabelDanger: {
-    color: colors.error,
-  },
-  logoutSection: {
-    padding: spacing.xl,
-    paddingBottom: spacing['3xl'],
-    alignItems: 'center',
-  },
-  version: {
-    fontSize: typography.sizes.sm,
-    color: colors.muted,
-    marginTop: spacing.base,
-  },
+  container: { flex: 1, backgroundColor: colors.background },
+  content: { width: '100%', maxWidth: 680, alignSelf: 'center', padding: spacing.base, paddingBottom: spacing['4xl'] },
+  header: { alignItems: 'center', backgroundColor: colors.text, borderRadius: borderRadius['2xl'], padding: spacing['2xl'] },
+  name: { color: colors.surface, fontSize: typography.sizes['2xl'], fontWeight: typography.weights.bold, marginTop: spacing.md },
+  contact: { color: 'rgba(255,255,255,.58)', fontSize: typography.sizes.md, marginTop: spacing.xs },
+  churchBadge: { backgroundColor: 'rgba(109,213,196,.14)', borderRadius: borderRadius.full, paddingHorizontal: spacing.md, paddingVertical: spacing.xs, marginTop: spacing.md },
+  churchText: { color: colors.primaryLight, fontSize: typography.sizes.sm, fontWeight: typography.weights.medium },
+  identityRow: { flexDirection: 'row', justifyContent: 'center', gap: spacing.xl, paddingVertical: spacing.xl },
+  identityDivider: { width: 1, backgroundColor: colors.border },
+  identityLabel: { color: colors.primary, fontSize: typography.sizes.xs, fontWeight: typography.weights.bold, letterSpacing: 1.2 },
+  identityValue: { color: colors.textSecondary, fontSize: typography.sizes.sm, textTransform: 'capitalize', marginTop: 3 },
+  sectionTitle: { color: colors.text, fontSize: typography.sizes.xl, fontWeight: typography.weights.bold, marginBottom: spacing.md },
+  menuRow: { flexDirection: 'row', alignItems: 'center', padding: spacing.base },
+  menuBorder: { borderTopWidth: 1, borderTopColor: colors.divider },
+  menuText: { flex: 1 },
+  menuLabel: { color: colors.text, fontSize: typography.sizes.base, fontWeight: typography.weights.semibold },
+  menuDetail: { color: colors.muted, fontSize: typography.sizes.sm, marginTop: 3 },
+  chevron: { color: colors.muted, fontSize: 26 },
+  logout: { marginTop: spacing['2xl'], alignItems: 'center' },
+  version: { color: colors.muted, fontSize: typography.sizes.xs, marginTop: spacing.base },
 });

@@ -13,6 +13,7 @@ import { Button } from '../../components/common/Button';
 import { Avatar } from '../../components/common/Avatar';
 import { useAuth } from '../../hooks/useAuth';
 import { colors, typography, spacing, borderRadius } from '../../theme';
+import socialService from '../../services/social.service';
 
 export function CreatePostScreen() {
   const navigation = useNavigation();
@@ -28,13 +29,12 @@ export function CreatePostScreen() {
 
     setIsSubmitting(true);
     try {
-      // TODO: Replace with socialService.createPost({ content })
-      await new Promise<void>((resolve) => { setTimeout(() => resolve(), 500); });
-      Alert.alert('Posted!', 'Your post has been shared with the community.', [
+      await socialService.createPost({ content: content.trim() });
+      Alert.alert('Post shared', 'Your post is now visible to your church community.', [
         { text: 'OK', onPress: () => navigation.goBack() },
       ]);
     } catch {
-      Alert.alert('Error', 'Failed to create post. Please try again.');
+      Alert.alert('Post not shared', 'Check your connection and try again.');
     } finally {
       setIsSubmitting(false);
     }

@@ -10,6 +10,12 @@
 package main
 
 import (
+	// Embeds the timezone database. The distroless base image has no
+	// /usr/share/zoneinfo, so without this time.LoadLocation always fails and
+	// quiet hours silently evaluate in UTC — putting a Ghanaian congregation's
+	// 21:00 at the wrong part of the day in every deployed environment.
+	_ "time/tzdata"
+
 	"context"
 	"errors"
 	"flag"
@@ -24,6 +30,7 @@ import (
 
 	"github.com/hayfordstanley/altar-os/internal/platform/config"
 	"github.com/hayfordstanley/altar-os/internal/platform/deps"
+	"github.com/hayfordstanley/altar-os/internal/platform/events"
 	"github.com/hayfordstanley/altar-os/internal/platform/httpx"
 	"github.com/hayfordstanley/altar-os/internal/platform/logging"
 	"github.com/hayfordstanley/altar-os/internal/platform/tracing"
@@ -121,6 +128,26 @@ func run() error {
 	err = service.EnsureIndexes(indexCtx, d)
 	cancelIndexes()
 	if err != nil {
+		return err
+	}
+
+	// Provision the topics the platform publishes. Auto-creation is disabled on
+	// the broker (correctly — it turns a typo into a silently created topic
+	// nobody consumes), so they have to be created explicitly, and doing it at
+	// boot follows the same reasoning as the indexes above.
+	topicCtx, cancelTopics := context.WithTimeout(context.Background(), 30*time.Second)
+	if err := d.Events.EnsureTopics(topicCtx, events.KnownTopics, 3, 1); err != nil {
+		cancelTopics()
+		return err
+	}
+	cancelTopics()
+
+	// Start consuming. This is what turns a completed gift into a receipt; it
+	// was missing entirely, so both halves of that flow were correct and
+	// unconnected.
+	consumerCtx, stopConsumers := context.WithCancel(context.Background())
+	defer stopConsumers()
+	if err := service.StartConsumers(consumerCtx, d); err != nil {
 		return err
 	}
 

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   View,
   Text,
@@ -12,6 +12,7 @@ import { Button } from '../../components/common/Button';
 import { Card } from '../../components/common/Card';
 import { colors, typography, spacing, borderRadius } from '../../theme';
 import type { PrayerRequest, CreatePrayerRequest } from '../../services/spiritual.service';
+import spiritualService from '../../services/spiritual.service';
 
 const categories: { value: CreatePrayerRequest['category']; label: string }[] = [
   { value: 'health', label: 'Health' },
@@ -19,31 +20,6 @@ const categories: { value: CreatePrayerRequest['category']; label: string }[] = 
   { value: 'finances', label: 'Finances' },
   { value: 'spiritual', label: 'Spiritual' },
   { value: 'other', label: 'Other' },
-];
-
-// TODO: Replace with real API data
-const mockPrayerRequests: PrayerRequest[] = [
-  {
-    id: '1',
-    title: 'Healing for my mother',
-    description: 'Please pray for my mother who is recovering from surgery.',
-    isAnonymous: false,
-    category: 'health',
-    prayerCount: 24,
-    status: 'active',
-    createdAt: '2026-03-28T10:00:00Z',
-    authorName: 'Sister Mary',
-  },
-  {
-    id: '2',
-    title: 'Job search guidance',
-    description: 'Praying for direction in my career transition.',
-    isAnonymous: true,
-    category: 'other',
-    prayerCount: 18,
-    status: 'active',
-    createdAt: '2026-03-27T14:30:00Z',
-  },
 ];
 
 export function PrayerScreen() {
@@ -54,7 +30,20 @@ export function PrayerScreen() {
     useState<CreatePrayerRequest['category']>('other');
   const [isAnonymous, setIsAnonymous] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [requests] = useState<PrayerRequest[]>(mockPrayerRequests);
+  const [requests, setRequests] = useState<PrayerRequest[]>([]);
+  const [loadError, setLoadError] = useState('');
+
+  const loadRequests = async () => {
+    setLoadError('');
+    try {
+      const result = await spiritualService.getPrayerRequests({ limit: 30 });
+      setRequests(result.requests);
+    } catch {
+      setLoadError('Prayer requests are unavailable right now.');
+    }
+  };
+
+  useEffect(() => { void loadRequests(); }, []);
 
   const handleSubmit = async () => {
     if (!title.trim() || !description.trim()) {
@@ -64,24 +53,28 @@ export function PrayerScreen() {
 
     setIsSubmitting(true);
     try {
-      // TODO: Replace with spiritualService.createPrayerRequest()
-      await new Promise<void>((resolve) => { setTimeout(() => resolve(), 500); });
-      Alert.alert('Prayer Request Submitted', 'Your prayer request has been shared with the community.');
+      const created = await spiritualService.createPrayerRequest({ title: title.trim(), description: description.trim(), category, isAnonymous });
+      setRequests((current) => [created, ...current]);
+      Alert.alert('Prayer request shared', 'Your church community can now pray with you.');
       setTitle('');
       setDescription('');
       setCategory('other');
       setIsAnonymous(false);
       setShowForm(false);
     } catch {
-      Alert.alert('Error', 'Failed to submit prayer request. Please try again.');
+      Alert.alert('Request not shared', 'Check your connection and try again.');
     } finally {
       setIsSubmitting(false);
     }
   };
 
-  const handlePray = (requestId: string) => {
-    // TODO: Replace with spiritualService.prayForRequest(requestId)
-    Alert.alert('Prayed', 'You have prayed for this request.');
+  const handlePray = async (requestId: string) => {
+    try {
+      const result = await spiritualService.prayForRequest(requestId);
+      setRequests((current) => current.map((request) => request.id === requestId ? { ...request, prayerCount: result.prayerCount } : request));
+    } catch {
+      Alert.alert('Not saved', 'We could not record that prayer. Try again.');
+    }
   };
 
   return (
@@ -168,6 +161,8 @@ export function PrayerScreen() {
       {/* Prayer Requests List */}
       <View style={styles.listSection}>
         <Text style={styles.sectionTitle}>Community Prayer Requests</Text>
+        {loadError ? <Text style={styles.loadError}>{loadError}</Text> : null}
+        {!loadError && requests.length === 0 ? <Card><Text style={styles.emptyText}>No public prayer requests have been shared.</Text></Card> : null}
         {requests.map((request) => (
           <Card key={request.id} style={styles.requestCard}>
             <View style={styles.requestHeader}>
@@ -185,7 +180,7 @@ export function PrayerScreen() {
               </Text>
               <TouchableOpacity
                 style={styles.prayButton}
-                onPress={() => handlePray(request.id)}
+                onPress={() => void handlePray(request.id)}
               >
                 <Text style={styles.prayButtonText}>
                   Pray ({request.prayerCount})
@@ -344,4 +339,6 @@ const styles = StyleSheet.create({
     color: colors.primary,
     fontWeight: typography.weights.semibold,
   },
+  loadError: { color: colors.error, fontSize: typography.sizes.md, marginBottom: spacing.md },
+  emptyText: { color: colors.muted, textAlign: 'center', fontSize: typography.sizes.md },
 });

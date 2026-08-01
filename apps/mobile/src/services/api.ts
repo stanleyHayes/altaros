@@ -1,5 +1,6 @@
 import axios from 'axios';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import type { AxiosError, InternalAxiosRequestConfig } from 'axios';
+import { session } from './session';
 
 // The Go gateway is the single origin. It serves auth, members and finance
 // directly and forwards anything not yet ported to the legacy TypeScript API,
@@ -28,47 +29,57 @@ const api = axios.create({
 api.interceptors.request.use(
   async (config) => {
     try {
-      const token = await AsyncStorage.getItem('accessToken');
+      const token = await session.getAccessToken();
       if (token) {
         config.headers.Authorization = `Bearer ${token}`;
       }
     } catch (error) {
-      console.warn('Failed to retrieve token from AsyncStorage:', error);
+      console.warn('Failed to retrieve the access token:', error);
     }
     return config;
   },
   (error) => Promise.reject(error),
 );
 
+type RetryableRequest = InternalAxiosRequestConfig & { _retry?: boolean };
+let refreshPromise: Promise<string> | null = null;
+
+async function rotateTokens(): Promise<string> {
+  const refreshToken = await session.getRefreshToken();
+  if (!refreshToken) throw new Error('No refresh token is available.');
+
+  const { data } = await axios.post(`${API_BASE_URL}/auth/refresh-token`, {
+    refreshToken,
+  });
+  const tokens = data.tokens ?? data;
+  if (!tokens.accessToken || !tokens.refreshToken) {
+    throw new Error('The server returned an invalid session.');
+  }
+  await session.setTokens(tokens.accessToken, tokens.refreshToken);
+  if (data.user) await session.setUser(data.user);
+  return tokens.accessToken as string;
+}
+
 // Response interceptor: handle 401 and token refresh
 api.interceptors.response.use(
   (response) => response,
-  async (error) => {
-    const originalRequest = error.config;
+  async (error: AxiosError) => {
+    const originalRequest = error.config as RetryableRequest | undefined;
 
-    if (error.response?.status === 401 && !originalRequest._retry) {
+    if (error.response?.status === 401 && originalRequest && !originalRequest._retry) {
       originalRequest._retry = true;
 
       try {
-        const refreshToken = await AsyncStorage.getItem('refreshToken');
-        if (!refreshToken) {
-          await clearTokens();
-          return Promise.reject(error);
-        }
-
-        const { data } = await axios.post(`${API_BASE_URL}/auth/refresh`, {
-          refreshToken,
+        // Refresh tokens rotate and are single-use. Coalesce simultaneous 401s
+        // so two requests never replay one token and revoke the whole family.
+        refreshPromise ??= rotateTokens().finally(() => {
+          refreshPromise = null;
         });
-
-        await AsyncStorage.setItem('accessToken', data.accessToken);
-        if (data.refreshToken) {
-          await AsyncStorage.setItem('refreshToken', data.refreshToken);
-        }
-
-        originalRequest.headers.Authorization = `Bearer ${data.accessToken}`;
+        const accessToken = await refreshPromise;
+        originalRequest.headers.Authorization = `Bearer ${accessToken}`;
         return api(originalRequest);
       } catch (refreshError) {
-        await clearTokens();
+        await clearTokens(true);
         return Promise.reject(refreshError);
       }
     }
@@ -77,9 +88,10 @@ api.interceptors.response.use(
   },
 );
 
-async function clearTokens() {
-  await Promise.all(['accessToken', 'refreshToken', 'user'].map((k) => AsyncStorage.removeItem(k)));
+async function clearTokens(notify = false) {
+  await session.clear();
+  if (notify) session.notifyExpired();
 }
 
-export { clearTokens };
+export { API_BASE_URL, clearTokens };
 export default api;

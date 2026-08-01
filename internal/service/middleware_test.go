@@ -3,6 +3,8 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -56,6 +58,9 @@ func newTestDeps(t *testing.T) *deps.Deps {
 
 	return &deps.Deps{
 		Config: &config.Config{ServiceName: "test", Env: config.Development},
+		// deps.Build always sets a logger; the helper must too, or code that
+		// legitimately logs panics on a nil *slog.Logger.
+		Log:    slog.New(slog.NewTextHandler(io.Discard, nil)),
 		Redis:  rdb,
 		Tokens: issuer,
 	}

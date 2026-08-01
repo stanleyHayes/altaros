@@ -9,33 +9,18 @@ import {
 import { Card } from '../../components/common/Card';
 import { colors, typography, spacing, borderRadius } from '../../theme';
 import type { Devotional } from '../../services/spiritual.service';
-
-// TODO: Replace with real API call
-const mockDevotional: Devotional = {
-  id: '1',
-  title: 'Walking by Faith',
-  scripture:
-    'For we walk by faith, not by sight.',
-  scriptureReference: '2 Corinthians 5:7',
-  content:
-    'Faith is the foundation of our walk with God. It is not about seeing every step ahead, but trusting the One who knows the way. Today, let us be reminded that our faith is not in what we can see or understand, but in the unchanging character of God.\n\nWhen we face uncertainty, we can hold fast to His promises. When the road ahead seems unclear, we can trust that He is guiding our steps. Faith does not eliminate our questions, but it gives us peace in the midst of them.\n\nAs you go through this day, choose to walk by faith. Choose to trust God even when the circumstances around you seem challenging. He is faithful, and He will see you through.',
-  author: 'Pastor James',
-  date: '2026-03-30',
-};
+import spiritualService from '../../services/spiritual.service';
 
 export function DevotionalScreen() {
   const [devotional, setDevotional] = useState<Devotional | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
-    // TODO: Replace with spiritualService.getTodayDevotional()
     const loadDevotional = async () => {
       try {
-        // Simulate API delay
-        await new Promise<void>((resolve) => { setTimeout(() => resolve(), 500); });
-        setDevotional(mockDevotional);
-      } catch (error) {
-        console.error('Failed to load devotional:', error);
+        setDevotional(await spiritualService.getTodayDevotional());
+      } catch {
+        setDevotional(null);
       } finally {
         setIsLoading(false);
       }
@@ -54,7 +39,7 @@ export function DevotionalScreen() {
   if (!devotional) {
     return (
       <View style={styles.loading}>
-        <Text style={styles.emptyText}>No devotional available today.</Text>
+        <Text style={styles.emptyText}>Today&apos;s devotional is not available yet.</Text>
       </View>
     );
   }

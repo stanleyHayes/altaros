@@ -35,6 +35,8 @@ export function Input({
           style,
         ]}
         placeholderTextColor={colors.muted}
+        accessibilityLabel={props.accessibilityLabel ?? label ?? props.placeholder}
+        accessibilityState={{ disabled: props.editable === false }}
         onFocus={(e) => {
           setIsFocused(true);
           props.onFocus?.(e);
@@ -65,6 +67,7 @@ const styles = StyleSheet.create({
     borderColor: colors.border,
     borderRadius: borderRadius.lg,
     paddingHorizontal: spacing.base,
+    minHeight: 52,
     paddingVertical: spacing.md,
     fontSize: typography.sizes.base,
     color: colors.text,

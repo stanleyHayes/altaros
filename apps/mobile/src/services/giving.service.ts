@@ -1,56 +1,72 @@
 import api from './api';
 
+export type GivingType = 'tithe' | 'offering' | 'donation' | 'campaign' | 'pledge_payment';
+export type PaymentChannel = 'mobile_money' | 'card' | 'bank_transfer' | 'ussd';
+export type PaymentStatus = 'pending' | 'success' | 'failed' | 'reversed';
+
 export interface GivingRecord {
   id: string;
-  amount: number;
+  churchId: string;
+  memberId?: string;
+  type: GivingType;
+  channel: PaymentChannel;
+  grossMinor: number;
+  levyMinor: number;
+  netMinor: number;
   currency: string;
-  type: 'tithe' | 'offering' | 'donation' | 'pledge' | 'building_fund';
-  paymentMethod: 'card' | 'bank' | 'mobile_money' | 'cash' | 'ussd' | 'crypto';
-  status: 'completed' | 'pending' | 'failed';
-  reference: string;
+  status: PaymentStatus;
+  providerRef?: string;
+  idempotencyKey: string;
   note?: string;
+  occurredAt: string;
   createdAt: string;
 }
 
 export interface GiveRequest {
-  amount: number;
-  currency?: string;
-  type: GivingRecord['type'];
-  paymentMethod: GivingRecord['paymentMethod'];
+  amount: string;
+  currency: 'GHS';
+  type: GivingType;
+  channel: PaymentChannel;
+  email?: string;
   note?: string;
+  anonymous?: boolean;
+  callbackUrl?: string;
 }
 
-export interface GivingSummary {
-  totalGiven: number;
-  thisMonth: number;
-  thisYear: number;
-  lastGift: GivingRecord | null;
+interface MoneyAmount { minor: number; currency: string }
+export interface LevyQuote {
+  levy: MoneyAmount;
+  total: MoneyAmount;
+  exempt: boolean;
+  reason: string;
+}
+
+export interface GiveResult {
+  transaction: GivingRecord;
+  authorizationUrl?: string;
+  accessCode?: string;
+  levy: LevyQuote;
 }
 
 const givingService = {
-  async give(payload: GiveRequest): Promise<GivingRecord> {
-    const { data } = await api.post<GivingRecord>('/giving', payload);
+  async give(payload: GiveRequest): Promise<GiveResult> {
+    const { data } = await api.post<GiveResult>('/finance/give', payload);
     return data;
   },
 
-  async getHistory(params?: {
-    page?: number;
-    limit?: number;
-    type?: string;
-  }): Promise<{ records: GivingRecord[]; total: number }> {
-    const { data } = await api.get('/giving/history', { params });
+  async getHistory(params?: { from?: string; to?: string }): Promise<GivingRecord[]> {
+    const { data } = await api.get<GivingRecord[]>('/finance/me/giving', { params });
     return data;
   },
 
-  async getSummary(): Promise<GivingSummary> {
-    const { data } = await api.get<GivingSummary>('/giving/summary');
-    return data;
-  },
-
-  async getReceipt(recordId: string): Promise<{ url: string }> {
-    const { data } = await api.get(`/giving/${recordId}/receipt`);
+  async getTransaction(reference: string): Promise<GivingRecord> {
+    const { data } = await api.get<GivingRecord>(`/finance/transactions/${reference}`);
     return data;
   },
 };
+
+export function formatMoney(minor: number, currency = 'GHS'): string {
+  return new Intl.NumberFormat('en-GH', { style: 'currency', currency }).format(minor / 100);
+}
 
 export default givingService;

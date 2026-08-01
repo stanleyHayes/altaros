@@ -1,5 +1,6 @@
 import React from 'react';
 import { NavigationContainer } from '@react-navigation/native';
+import type { NavigatorScreenParams } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { useAuth } from '../../hooks/useAuth';
 import { LoadingScreen } from '../common/LoadingScreen';
@@ -14,7 +15,9 @@ import { GivingHistoryScreen } from '../../screens/giving/GivingHistoryScreen';
 import { EventDetailScreen } from '../../screens/events/EventDetailScreen';
 import { CreatePostScreen } from '../../screens/social/CreatePostScreen';
 import { WelfareScreen } from '../../screens/welfare/WelfareScreen';
+import { NotificationsScreen } from '../../screens/notifications/NotificationsScreen';
 import { colors } from '../../theme';
+import type { TabParamList } from './BottomTabs';
 
 export type AuthStackParamList = {
   Login: undefined;
@@ -23,7 +26,7 @@ export type AuthStackParamList = {
 };
 
 export type RootStackParamList = {
-  MainTabs: undefined;
+  MainTabs: NavigatorScreenParams<TabParamList> | undefined;
   Devotional: undefined;
   Sermons: undefined;
   Prayer: undefined;
@@ -31,6 +34,7 @@ export type RootStackParamList = {
   EventDetail: { eventId: string };
   CreatePost: undefined;
   Welfare: undefined;
+  Notifications: undefined;
 };
 
 const AuthStack = createNativeStackNavigator<AuthStackParamList>();
@@ -55,8 +59,9 @@ function MainNavigator() {
   return (
     <RootStack.Navigator
       screenOptions={{
-        headerStyle: { backgroundColor: colors.primary },
-        headerTintColor: '#FFFFFF',
+        headerStyle: { backgroundColor: colors.background },
+        headerTintColor: colors.text,
+        headerShadowVisible: false,
         headerTitleStyle: { fontWeight: '600' },
       }}
     >
@@ -99,6 +104,11 @@ function MainNavigator() {
         name="Welfare"
         component={WelfareScreen}
         options={{ title: 'Welfare & Support' }}
+      />
+      <RootStack.Screen
+        name="Notifications"
+        component={NotificationsScreen}
+        options={{ title: 'Notifications' }}
       />
     </RootStack.Navigator>
   );

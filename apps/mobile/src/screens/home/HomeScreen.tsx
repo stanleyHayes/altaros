@@ -1,390 +1,174 @@
-import React from 'react';
-import {
-  View,
-  Text,
-  ScrollView,
-  StyleSheet,
-  TouchableOpacity,
-  FlatList,
-} from 'react-native';
-import { useNavigation } from '@react-navigation/native';
+import React, { useCallback, useState } from 'react';
+import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { Avatar } from '../../components/common/Avatar';
 import { Card } from '../../components/common/Card';
 import { useAuth } from '../../hooks/useAuth';
-import { colors, typography, spacing, borderRadius, shadows } from '../../theme';
+import eventService, { type ChurchEvent } from '../../services/event.service';
+import spiritualService, { type Devotional, type Sermon } from '../../services/spiritual.service';
+import { borderRadius, colors, spacing, typography } from '../../theme';
 import type { RootStackParamList } from '../../components/navigation/AppNavigator';
 
 type HomeNav = NativeStackNavigationProp<RootStackParamList>;
 
-// TODO: Replace with real data from API
-const mockAnnouncements = [
-  {
-    id: '1',
-    title: 'Sunday Service Time Change',
-    body: 'Starting next week, our Sunday service will begin at 10:00 AM.',
-    date: '2026-03-29',
-  },
-  {
-    id: '2',
-    title: 'Youth Camp Registration',
-    body: 'Register your children for summer youth camp. Limited spots available!',
-    date: '2026-03-28',
-  },
+const quickActions = [
+  { label: 'Give', symbol: '₵', route: 'Give' as const },
+  { label: 'Events', symbol: '○', route: 'Events' as const },
+  { label: 'Prayer', symbol: '+', screen: 'Prayer' as const },
+  { label: 'Care', symbol: '♡', screen: 'Welfare' as const },
 ];
 
-const mockUpcomingEvents = [
-  {
-    id: '1',
-    title: 'Sunday Worship',
-    date: 'Mar 30',
-    time: '10:00 AM',
-    location: 'Main Sanctuary',
-  },
-  {
-    id: '2',
-    title: 'Bible Study',
-    date: 'Apr 1',
-    time: '7:00 PM',
-    location: 'Fellowship Hall',
-  },
-  {
-    id: '3',
-    title: 'Prayer Night',
-    date: 'Apr 3',
-    time: '6:30 PM',
-    location: 'Chapel',
-  },
-];
-
-const mockSermons = [
-  {
-    id: '1',
-    title: 'Walking in Faith',
-    speaker: 'Pastor James',
-    date: 'Mar 23, 2026',
-  },
-  {
-    id: '2',
-    title: 'The Power of Grace',
-    speaker: 'Pastor Sarah',
-    date: 'Mar 16, 2026',
-  },
-];
-
-interface QuickAction {
-  label: string;
-  icon: string;
-  screen: keyof RootStackParamList;
-  color: string;
+function greeting(): string {
+  const hour = new Date().getHours();
+  if (hour < 12) return 'Good morning';
+  if (hour < 18) return 'Good afternoon';
+  return 'Good evening';
 }
-
-const quickActions: QuickAction[] = [
-  { label: 'Give', icon: '\u2665', screen: 'MainTabs', color: colors.secondary },
-  { label: 'Pray', icon: '\u270B', screen: 'Prayer', color: colors.primary },
-  { label: 'Events', icon: '\u2605', screen: 'MainTabs', color: colors.info },
-  { label: 'Sermons', icon: '\u25B6', screen: 'Sermons', color: colors.success },
-];
 
 export function HomeScreen() {
   const navigation = useNavigation<HomeNav>();
   const { user } = useAuth();
+  const [events, setEvents] = useState<ChurchEvent[]>([]);
+  const [devotional, setDevotional] = useState<Devotional | null>(null);
+  const [sermons, setSermons] = useState<Sermon[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState('');
 
-  const firstName = user?.firstName || 'Member';
+  const loadHome = useCallback(async () => {
+    setIsLoading(true);
+    setError('');
+    const [eventResult, devotionalResult, sermonResult] = await Promise.allSettled([
+      eventService.getUpcoming(3),
+      spiritualService.getTodayDevotional(),
+      spiritualService.getSermons({ limit: 2 }),
+    ]);
+    if (eventResult.status === 'fulfilled') setEvents(eventResult.value);
+    if (devotionalResult.status === 'fulfilled') setDevotional(devotionalResult.value);
+    if (sermonResult.status === 'fulfilled') setSermons(sermonResult.value.sermons);
+    if ([eventResult, devotionalResult, sermonResult].every((result) => result.status === 'rejected')) {
+      setError('Your church updates could not be loaded. Pull down on each section to try again.');
+    }
+    setIsLoading(false);
+  }, []);
+
+  useFocusEffect(useCallback(() => { void loadHome(); }, [loadHome]));
+
+  const fullName = `${user?.firstName ?? 'Member'} ${user?.lastName ?? ''}`.trim();
 
   return (
-    <ScrollView style={styles.container} showsVerticalScrollIndicator={false}>
-      {/* Welcome Header */}
-      <View style={styles.welcomeSection}>
-        <View style={styles.welcomeRow}>
-          <View style={styles.welcomeText}>
-            <Text style={styles.greeting}>Good morning,</Text>
-            <Text style={styles.userName}>{firstName}</Text>
-          </View>
-          <Avatar
-            name={`${user?.firstName || 'U'} ${user?.lastName || ''}`}
-            uri={user?.avatar}
-            size="lg"
-          />
+    <ScrollView style={styles.container} contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+      <View style={styles.topRow}>
+        <View style={styles.greetingWrap}>
+          <Text style={styles.greeting}>{greeting()},</Text>
+          <Text style={styles.name}>{user?.firstName || 'Member'}.</Text>
+          <Text style={styles.church}>{user?.churchName || 'Your church community'}</Text>
         </View>
-        {user?.churchName && (
-          <Text style={styles.churchName}>{user.churchName}</Text>
-        )}
+        <Avatar name={fullName} uri={user?.avatar} size="lg" />
       </View>
 
-      {/* Quick Actions */}
-      <View style={styles.quickActions}>
+      <View style={styles.actionGrid}>
         {quickActions.map((action) => (
           <TouchableOpacity
             key={action.label}
-            style={styles.quickAction}
-            // `screen` is a union of route names, so the params type cannot be
-            // narrowed statically. `as never` is React Navigation's documented
-            // escape hatch for dynamically-chosen routes that take no params.
-            onPress={() => navigation.navigate(action.screen as never)}
-            activeOpacity={0.7}
+            style={styles.action}
+            onPress={() => action.route
+              ? navigation.navigate('MainTabs', { screen: action.route })
+              : navigation.navigate(action.screen)}
+            accessibilityRole="button"
+            accessibilityLabel={action.label}
           >
-            <View
-              style={[styles.quickActionIcon, { backgroundColor: action.color }]}
-            >
-              <Text style={styles.quickActionEmoji}>{action.icon}</Text>
-            </View>
-            <Text style={styles.quickActionLabel}>{action.label}</Text>
+            <View style={styles.actionIcon}><Text style={styles.actionSymbol}>{action.symbol}</Text></View>
+            <Text style={styles.actionLabel}>{action.label}</Text>
           </TouchableOpacity>
         ))}
       </View>
 
-      {/* Announcements */}
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Announcements</Text>
-        {mockAnnouncements.map((announcement) => (
-          <Card key={announcement.id} style={styles.announcementCard}>
-            <Text style={styles.announcementTitle}>{announcement.title}</Text>
-            <Text style={styles.announcementBody}>{announcement.body}</Text>
-            <Text style={styles.announcementDate}>{announcement.date}</Text>
-          </Card>
-        ))}
-      </View>
+      {error ? <Card style={styles.errorCard}><Text style={styles.errorText}>{error}</Text><TouchableOpacity onPress={() => void loadHome()}><Text style={styles.retry}>Try again</Text></TouchableOpacity></Card> : null}
 
-      {/* Upcoming Events */}
-      <View style={styles.section}>
-        <View style={styles.sectionHeader}>
-          <Text style={styles.sectionTitle}>Upcoming Events</Text>
-          <TouchableOpacity onPress={() => navigation.navigate('MainTabs')}>
-            <Text style={styles.seeAll}>See All</Text>
-          </TouchableOpacity>
+      <View style={styles.sectionHeader}>
+        <Text style={styles.sectionKicker}>FOR TODAY</Text>
+        <Text style={styles.sectionTitle}>A quiet place to begin.</Text>
+      </View>
+      <TouchableOpacity onPress={() => navigation.navigate('Devotional')} activeOpacity={.82}>
+        <Card style={styles.devotionalCard}>
+          <Text style={styles.devotionalRef}>{devotional?.scriptureReference || (isLoading ? 'Loading…' : 'Daily devotional')}</Text>
+          <Text style={styles.devotionalTitle}>{devotional?.title || (isLoading ? 'Preparing today’s reading' : 'No devotional has been published today')}</Text>
+          {devotional?.scripture ? <Text style={styles.devotionalText} numberOfLines={3}>“{devotional.scripture}”</Text> : null}
+          <Text style={styles.cardLink}>Read today&apos;s devotional →</Text>
+        </Card>
+      </TouchableOpacity>
+
+      <View style={styles.sectionHeaderRow}>
+        <View>
+          <Text style={styles.sectionKicker}>COMING UP</Text>
+          <Text style={styles.sectionTitle}>Gather together.</Text>
         </View>
-        <FlatList
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          data={mockUpcomingEvents}
-          keyExtractor={(item) => item.id}
-          contentContainerStyle={styles.eventsList}
-          renderItem={({ item }) => (
-            <TouchableOpacity
-              style={styles.eventCard}
-              onPress={() =>
-                navigation.navigate('EventDetail', { eventId: item.id })
-              }
-              activeOpacity={0.7}
-            >
-              <View style={styles.eventDateBadge}>
-                <Text style={styles.eventDateText}>{item.date}</Text>
-              </View>
-              <Text style={styles.eventTitle}>{item.title}</Text>
-              <Text style={styles.eventTime}>{item.time}</Text>
-              <Text style={styles.eventLocation}>{item.location}</Text>
-            </TouchableOpacity>
-          )}
-        />
+        <TouchableOpacity onPress={() => navigation.navigate('MainTabs', { screen: 'Events' })}><Text style={styles.seeAll}>All events</Text></TouchableOpacity>
       </View>
-
-      {/* Recent Sermons */}
-      <View style={[styles.section, styles.lastSection]}>
-        <View style={styles.sectionHeader}>
-          <Text style={styles.sectionTitle}>Recent Sermons</Text>
-          <TouchableOpacity onPress={() => navigation.navigate('Sermons')}>
-            <Text style={styles.seeAll}>See All</Text>
-          </TouchableOpacity>
-        </View>
-        {mockSermons.map((sermon) => (
-          <Card key={sermon.id} style={styles.sermonCard}>
-            <View style={styles.sermonRow}>
-              <View style={styles.playButton}>
-                <Text style={styles.playIcon}>{'\u25B6'}</Text>
-              </View>
-              <View style={styles.sermonInfo}>
-                <Text style={styles.sermonTitle}>{sermon.title}</Text>
-                <Text style={styles.sermonMeta}>
-                  {sermon.speaker} \u2022 {sermon.date}
-                </Text>
-              </View>
+      {events.length === 0 && !isLoading ? <Text style={styles.emptyText}>No upcoming events have been published.</Text> : events.map((event) => {
+        const date = new Date(event.startDate);
+        return (
+          <TouchableOpacity key={event.id} onPress={() => navigation.navigate('EventDetail', { eventId: event.id })} activeOpacity={.8}>
+            <View style={styles.eventRow}>
+              <View style={styles.dateTile}><Text style={styles.dateMonth}>{date.toLocaleDateString('en-GH', { month: 'short' })}</Text><Text style={styles.dateDay}>{date.getDate()}</Text></View>
+              <View style={styles.eventInfo}><Text style={styles.eventTitle}>{event.title}</Text><Text style={styles.eventMeta}>{date.toLocaleTimeString('en-GH', { hour: 'numeric', minute: '2-digit' })} · {event.location}</Text></View>
+              <Text style={styles.chevron}>›</Text>
             </View>
-          </Card>
-        ))}
+          </TouchableOpacity>
+        );
+      })}
+
+      <View style={styles.sectionHeaderRow}>
+        <View><Text style={styles.sectionKicker}>LISTEN AGAIN</Text><Text style={styles.sectionTitle}>Recent messages.</Text></View>
+        <TouchableOpacity onPress={() => navigation.navigate('Sermons')}><Text style={styles.seeAll}>All sermons</Text></TouchableOpacity>
       </View>
+      {sermons.length === 0 && !isLoading ? <Text style={styles.emptyText}>No sermons are available yet.</Text> : sermons.map((sermon) => (
+        <TouchableOpacity key={sermon.id} onPress={() => navigation.navigate('Sermons')} style={styles.sermonRow} accessibilityRole="button">
+          <View style={styles.play}><Text style={styles.playText}>▶</Text></View>
+          <View style={styles.eventInfo}><Text style={styles.eventTitle}>{sermon.title}</Text><Text style={styles.eventMeta}>{sermon.speaker} · {sermon.duration}</Text></View>
+        </TouchableOpacity>
+      ))}
     </ScrollView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: colors.background,
-  },
-  welcomeSection: {
-    backgroundColor: colors.primary,
-    paddingHorizontal: spacing.xl,
-    paddingTop: spacing.base,
-    paddingBottom: spacing['2xl'],
-    borderBottomLeftRadius: borderRadius['2xl'],
-    borderBottomRightRadius: borderRadius['2xl'],
-  },
-  welcomeRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  welcomeText: {
-    flex: 1,
-  },
-  greeting: {
-    fontSize: typography.sizes.base,
-    color: 'rgba(255,255,255,0.8)',
-  },
-  userName: {
-    fontSize: typography.sizes['3xl'],
-    fontWeight: typography.weights.bold,
-    color: '#FFFFFF',
-  },
-  churchName: {
-    fontSize: typography.sizes.sm,
-    color: 'rgba(255,255,255,0.7)',
-    marginTop: spacing.xs,
-  },
-  quickActions: {
-    flexDirection: 'row',
-    justifyContent: 'space-around',
-    paddingHorizontal: spacing.base,
-    marginTop: -spacing.lg,
-    marginBottom: spacing.base,
-  },
-  quickAction: {
-    alignItems: 'center',
-  },
-  quickActionIcon: {
-    width: 56,
-    height: 56,
-    borderRadius: 28,
-    alignItems: 'center',
-    justifyContent: 'center',
-    ...shadows.md,
-  },
-  quickActionEmoji: {
-    fontSize: 22,
-    color: '#FFFFFF',
-  },
-  quickActionLabel: {
-    fontSize: typography.sizes.sm,
-    color: colors.text,
-    fontWeight: typography.weights.medium,
-    marginTop: spacing.xs,
-  },
-  section: {
-    paddingHorizontal: spacing.xl,
-    marginTop: spacing.xl,
-  },
-  lastSection: {
-    marginBottom: spacing['2xl'],
-  },
-  sectionHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: spacing.md,
-  },
-  sectionTitle: {
-    fontSize: typography.sizes.lg,
-    fontWeight: typography.weights.bold,
-    color: colors.text,
-    marginBottom: spacing.md,
-  },
-  seeAll: {
-    fontSize: typography.sizes.md,
-    color: colors.primary,
-    fontWeight: typography.weights.medium,
-    marginBottom: spacing.md,
-  },
-  announcementCard: {
-    marginBottom: spacing.md,
-  },
-  announcementTitle: {
-    fontSize: typography.sizes.base,
-    fontWeight: typography.weights.semibold,
-    color: colors.text,
-    marginBottom: spacing.xs,
-  },
-  announcementBody: {
-    fontSize: typography.sizes.md,
-    color: colors.textSecondary,
-    lineHeight: 20,
-  },
-  announcementDate: {
-    fontSize: typography.sizes.sm,
-    color: colors.muted,
-    marginTop: spacing.sm,
-  },
-  eventsList: {
-    paddingRight: spacing.xl,
-  },
-  eventCard: {
-    backgroundColor: colors.surface,
-    borderRadius: borderRadius.lg,
-    padding: spacing.base,
-    marginRight: spacing.md,
-    width: 160,
-    ...shadows.sm,
-  },
-  eventDateBadge: {
-    backgroundColor: colors.primaryLight + '20',
-    paddingHorizontal: spacing.sm,
-    paddingVertical: spacing.xs,
-    borderRadius: borderRadius.sm,
-    alignSelf: 'flex-start',
-    marginBottom: spacing.sm,
-  },
-  eventDateText: {
-    fontSize: typography.sizes.sm,
-    color: colors.primary,
-    fontWeight: typography.weights.semibold,
-  },
-  eventTitle: {
-    fontSize: typography.sizes.md,
-    fontWeight: typography.weights.semibold,
-    color: colors.text,
-    marginBottom: spacing.xs,
-  },
-  eventTime: {
-    fontSize: typography.sizes.sm,
-    color: colors.textSecondary,
-  },
-  eventLocation: {
-    fontSize: typography.sizes.sm,
-    color: colors.muted,
-    marginTop: 2,
-  },
-  sermonCard: {
-    marginBottom: spacing.md,
-  },
-  sermonRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  playButton: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: colors.primary,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: spacing.md,
-  },
-  playIcon: {
-    color: '#FFFFFF',
-    fontSize: 16,
-    marginLeft: 2,
-  },
-  sermonInfo: {
-    flex: 1,
-  },
-  sermonTitle: {
-    fontSize: typography.sizes.base,
-    fontWeight: typography.weights.semibold,
-    color: colors.text,
-  },
-  sermonMeta: {
-    fontSize: typography.sizes.sm,
-    color: colors.muted,
-    marginTop: 2,
-  },
+  container: { flex: 1, backgroundColor: colors.background },
+  content: { width: '100%', maxWidth: 720, alignSelf: 'center', padding: spacing.base, paddingBottom: spacing['4xl'] },
+  topRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: colors.text, borderRadius: borderRadius['2xl'], padding: spacing.xl },
+  greetingWrap: { flex: 1 },
+  greeting: { color: 'rgba(255,255,255,.62)', fontSize: typography.sizes.base },
+  name: { color: colors.surface, fontSize: typography.sizes['3xl'], lineHeight: 35, fontWeight: typography.weights.bold, letterSpacing: -1 },
+  church: { color: colors.primaryLight, fontSize: typography.sizes.sm, marginTop: spacing.sm },
+  actionGrid: { flexDirection: 'row', justifyContent: 'space-between', marginVertical: spacing.xl, paddingHorizontal: spacing.sm },
+  action: { alignItems: 'center', minWidth: 58 },
+  actionIcon: { width: 50, height: 50, borderRadius: 17, backgroundColor: colors.secondaryLight, alignItems: 'center', justifyContent: 'center' },
+  actionSymbol: { color: colors.primaryDark, fontSize: typography.sizes.xl, fontWeight: typography.weights.bold },
+  actionLabel: { color: colors.text, fontSize: typography.sizes.sm, fontWeight: typography.weights.medium, marginTop: spacing.sm },
+  errorCard: { backgroundColor: '#FFF7F5', borderColor: '#EBCDC8', marginBottom: spacing.xl },
+  errorText: { color: colors.error, fontSize: typography.sizes.md, lineHeight: 20 },
+  retry: { color: colors.primary, fontWeight: typography.weights.semibold, marginTop: spacing.sm },
+  sectionHeader: { marginTop: spacing.md, marginBottom: spacing.md },
+  sectionHeaderRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-end', marginTop: spacing['2xl'], marginBottom: spacing.md },
+  sectionKicker: { color: colors.primary, fontSize: typography.sizes.xs, fontWeight: typography.weights.bold, letterSpacing: 1.4 },
+  sectionTitle: { color: colors.text, fontSize: typography.sizes.xl, fontWeight: typography.weights.bold, letterSpacing: -.5, marginTop: 3 },
+  seeAll: { color: colors.primary, fontSize: typography.sizes.sm, fontWeight: typography.weights.semibold, paddingBottom: 2 },
+  devotionalCard: { backgroundColor: colors.secondaryLight, borderColor: '#CBE8E0', padding: spacing.xl },
+  devotionalRef: { color: colors.primaryDark, fontSize: typography.sizes.sm, fontWeight: typography.weights.bold },
+  devotionalTitle: { color: colors.text, fontSize: typography.sizes['2xl'], fontWeight: typography.weights.bold, letterSpacing: -.6, marginTop: spacing.md },
+  devotionalText: { color: colors.textSecondary, fontSize: typography.sizes.base, lineHeight: 24, marginTop: spacing.md },
+  cardLink: { color: colors.primaryDark, fontSize: typography.sizes.sm, fontWeight: typography.weights.semibold, marginTop: spacing.lg },
+  eventRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: spacing.md, borderBottomWidth: 1, borderBottomColor: colors.divider },
+  dateTile: { width: 50, height: 56, borderRadius: borderRadius.md, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border, alignItems: 'center', justifyContent: 'center', marginRight: spacing.md },
+  dateMonth: { color: colors.primary, fontSize: typography.sizes.xs, fontWeight: typography.weights.bold, textTransform: 'uppercase' },
+  dateDay: { color: colors.text, fontSize: typography.sizes.xl, fontWeight: typography.weights.bold },
+  eventInfo: { flex: 1 },
+  eventTitle: { color: colors.text, fontSize: typography.sizes.base, fontWeight: typography.weights.semibold },
+  eventMeta: { color: colors.muted, fontSize: typography.sizes.sm, marginTop: 3 },
+  chevron: { color: colors.muted, fontSize: 26 },
+  emptyText: { color: colors.muted, fontSize: typography.sizes.md, paddingVertical: spacing.lg },
+  sermonRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: spacing.md },
+  play: { width: 46, height: 46, borderRadius: 16, backgroundColor: colors.text, alignItems: 'center', justifyContent: 'center', marginRight: spacing.md },
+  playText: { color: colors.primaryLight, fontSize: typography.sizes.sm, marginLeft: 2 },
 });

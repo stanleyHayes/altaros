@@ -14,8 +14,13 @@ import (
 
 	"github.com/redis/go-redis/v9"
 
+	"strings"
+
+	"github.com/hayfordstanley/altar-os/internal/domain/notification"
+	"github.com/hayfordstanley/altar-os/internal/domain/notification/transport"
 	"github.com/hayfordstanley/altar-os/internal/platform/audit"
 	"github.com/hayfordstanley/altar-os/internal/platform/config"
+	"github.com/hayfordstanley/altar-os/internal/platform/events"
 	"github.com/hayfordstanley/altar-os/internal/platform/httpx"
 	"github.com/hayfordstanley/altar-os/internal/platform/mongodb"
 	"github.com/hayfordstanley/altar-os/internal/platform/token"
@@ -29,6 +34,9 @@ type Deps struct {
 	Redis  *redis.Client
 	Tokens *token.Issuer
 	Audit  *audit.Logger
+	// Events is the Kafka bus. It satisfies the Publisher interface every
+	// domain declares, so it drops into the arguments that used to be nil.
+	Events *events.Bus
 }
 
 // Build connects everything, verifying each dependency before returning.
@@ -66,9 +74,26 @@ func Build(ctx context.Context, cfg *config.Config, log *slog.Logger) (*Deps, er
 		return nil, err
 	}
 
+	bus, err := events.NewBus(ctx, events.Config{
+		Brokers:       cfg.Kafka.Brokers,
+		ConsumerGroup: cfg.Kafka.ConsumerGroup,
+		Source:        cfg.ServiceName,
+		Log:           log,
+	})
+	if err != nil {
+		// Kafka is how a completed gift becomes a receipt. Starting without it
+		// would mean quietly dropping every domain event, so this is fatal in
+		// the same way Redis is — and for the same reason: the failure would
+		// otherwise be invisible until a member complains.
+		_ = db.Close(ctx)
+		_ = rdb.Close()
+		return nil, fmt.Errorf("deps: kafka at %v: %w", cfg.Kafka.Brokers, err)
+	}
+
 	log.Info("dependencies ready",
 		slog.String("mongo", cfg.Mongo.Database),
 		slog.String("redis", cfg.Redis.Addr),
+		slog.Bool("kafka", bus.Enabled()),
 	)
 
 	return &Deps{
@@ -78,6 +103,7 @@ func Build(ctx context.Context, cfg *config.Config, log *slog.Logger) (*Deps, er
 		Redis:  rdb,
 		Tokens: issuer,
 		Audit:  audit.NewLogger(db),
+		Events: bus,
 	}, nil
 }
 
@@ -85,6 +111,12 @@ func Build(ctx context.Context, cfg *config.Config, log *slog.Logger) (*Deps, er
 func (d *Deps) Close(ctx context.Context) {
 	if d == nil {
 		return
+	}
+	if d.Events != nil {
+		// Before Redis and Mongo: the bus flushes pending produces and leaves
+		// its consumer group cleanly, and both of those may need the other
+		// connections still open.
+		d.Events.Close()
 	}
 	if d.Redis != nil {
 		_ = d.Redis.Close()
@@ -135,4 +167,60 @@ func (d *Deps) Checkers() []httpx.Checker {
 		MongoChecker{DB: d.Mongo},
 		RedisChecker{Client: d.Redis},
 	}
+}
+
+// Transports returns the notification transports for this environment.
+//
+// Each refuses to send when unconfigured rather than pretending to succeed, so
+// a deployment missing Africa's Talking credentials records suppressed
+// messages with a reason instead of reporting delivery for messages nobody
+// received. That distinction is the whole point: an SMS that was never sent is
+// indistinguishable from one the member ignored.
+func (d *Deps) Transports() []notification.Transport {
+	if d == nil || d.Config == nil {
+		return nil
+	}
+	return []notification.Transport{
+		transport.NewSMS(transport.SMSConfig{
+			APIKey:   d.Config.AfricasTkg.APIKey,
+			Username: d.Config.AfricasTkg.Username,
+			SenderID: d.Config.AfricasTkg.SenderID,
+		}),
+		transport.NewEmail(transport.EmailConfig{
+			APIKey: d.Config.Resend.APIKey,
+			From:   d.Config.Resend.FromEmail,
+		}),
+	}
+}
+
+// Location is the timezone quiet hours are evaluated in.
+//
+// Derived from the data region rather than hard-coded to UTC: quiet hours in
+// UTC put a Ghanaian congregation's 21:00 at the wrong part of the day for
+// every market east or west of it, and "we texted them at 3am" is not a bug
+// anyone reports — they simply stop reading the messages.
+func (d *Deps) Location() *time.Location {
+	if d == nil || d.Config == nil {
+		return time.UTC
+	}
+	zones := map[string]string{
+		"gh": "Africa/Accra",
+		"ng": "Africa/Lagos",
+		"ke": "Africa/Nairobi",
+		"za": "Africa/Johannesburg",
+	}
+	name, ok := zones[strings.ToLower(d.Config.DataRegion)]
+	if !ok {
+		return time.UTC
+	}
+	loc, err := time.LoadLocation(name)
+	if err != nil {
+		// The distroless image has no tzdata unless the binary embeds it, so
+		// this can genuinely fail. UTC is wrong but predictable, and the log
+		// says so rather than leaving someone to work it out from complaints.
+		d.Log.Warn("timezone unavailable; quiet hours will use UTC",
+			slog.String("zone", name), slog.String("error", err.Error()))
+		return time.UTC
+	}
+	return loc
 }

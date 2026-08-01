@@ -1,21 +1,22 @@
 export const colors = {
-  primary: '#6B4C9A',
-  primaryLight: '#8B6FBB',
-  primaryDark: '#4A3470',
-  secondary: '#FF6B6B',
-  secondaryLight: '#FF8E8E',
-  secondaryDark: '#E04848',
-  background: '#FAFAFA',
+  primary: '#157F73',
+  primaryLight: '#6DD5C4',
+  primaryDark: '#0E5B53',
+  secondary: '#A7C4A0',
+  secondaryLight: '#DFF6F0',
+  secondaryDark: '#607D64',
+  background: '#F7FBF8',
   surface: '#FFFFFF',
-  text: '#1A1A2E',
-  textSecondary: '#4A4A5A',
-  muted: '#6B7280',
-  border: '#E5E7EB',
-  divider: '#F3F4F6',
-  success: '#10B981',
-  warning: '#F59E0B',
-  error: '#EF4444',
-  info: '#3B82F6',
+  surfaceMuted: '#EFF6F2',
+  text: '#102A27',
+  textSecondary: '#58706C',
+  muted: '#718580',
+  border: '#DCE8E3',
+  divider: '#EAF1ED',
+  success: '#287A55',
+  warning: '#A86F18',
+  error: '#A84545',
+  info: '#397B8D',
 } as const;
 
 export const typography = {
@@ -57,35 +58,35 @@ export const spacing = {
 } as const;
 
 export const borderRadius = {
-  sm: 4,
-  md: 8,
-  lg: 12,
-  xl: 16,
-  '2xl': 20,
+  sm: 6,
+  md: 10,
+  lg: 14,
+  xl: 18,
+  '2xl': 26,
   full: 9999,
 } as const;
 
 export const shadows = {
   sm: {
-    shadowColor: '#000',
+    shadowColor: '#153D37',
     shadowOffset: { width: 0, height: 1 },
     shadowOpacity: 0.05,
     shadowRadius: 2,
     elevation: 1,
   },
   md: {
-    shadowColor: '#000',
+    shadowColor: '#153D37',
     shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
+    shadowOpacity: 0.08,
+    shadowRadius: 8,
+    elevation: 2,
   },
   lg: {
-    shadowColor: '#000',
+    shadowColor: '#153D37',
     shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.15,
-    shadowRadius: 8,
-    elevation: 5,
+    shadowOpacity: 0.11,
+    shadowRadius: 16,
+    elevation: 4,
   },
 } as const;
 

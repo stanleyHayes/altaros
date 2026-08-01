@@ -6,24 +6,72 @@ import (
 	"log/slog"
 
 	"github.com/hayfordstanley/altar-os/internal/domain/auth"
+	"github.com/hayfordstanley/altar-os/internal/domain/notification"
+	"github.com/hayfordstanley/altar-os/internal/domain/notification/transport"
 	"github.com/hayfordstanley/altar-os/internal/platform/deps"
 )
 
 // smsSenderFor returns the SMS transport for this environment.
 //
-// The real Africa's Talking / Hubtel transport lands in WP-15. Until then
-// development logs the message so the OTP flow is usable locally, and any
-// non-development environment refuses to send rather than pretending to.
+// The real Africa's Talking transport landed in WP-15 but was never connected
+// here, so OTP delivery still went through a development stub — meaning a
+// production deployment WITH valid credentials would still have refused to send
+// a login code. Configured credentials are now used.
 //
-// That refusal is deliberate. The TypeScript API this replaces shipped a
-// StubSmsService that logged to console and returned success, which is exactly
-// how a "we sent you a code" screen ends up in front of a member who will
-// never receive one.
+// The fallbacks are unchanged and deliberate. Development logs the code so the
+// OTP flow is usable locally. A non-development environment with no credentials
+// refuses rather than pretending, because the TypeScript API this replaces
+// shipped a StubSmsService that logged to console and returned success — which
+// is exactly how a "we sent you a code" screen ends up in front of a member who
+// will never receive one.
 func smsSenderFor(d *deps.Deps) auth.SMSSender {
+	if d.Config.AfricasTkg.APIKey != "" && d.Config.AfricasTkg.Username != "" {
+		return &realSMS{
+			transport: transport.NewSMS(transport.SMSConfig{
+				APIKey:   d.Config.AfricasTkg.APIKey,
+				Username: d.Config.AfricasTkg.Username,
+				SenderID: d.Config.AfricasTkg.SenderID,
+			}),
+			log: d.Log,
+		}
+	}
+
 	if d.Config.Env.RequiresRealSecrets() {
+		// WP-05 already fails the boot when a service that requires these is
+		// missing them, so reaching here means a service that does not list
+		// them as required. Refuse anyway rather than degrade to logging.
 		return &unconfiguredSMS{}
 	}
 	return &logSMS{log: d.Log}
+}
+
+// realSMS adapts the notification transport to the auth SMSSender port.
+//
+// The two interfaces differ because they were built for different callers:
+// notification sends a Message, auth sends a string. Adapting here keeps auth
+// from importing the notification package, which would couple the login path to
+// the whole messaging domain.
+type realSMS struct {
+	transport *transport.SMS
+	log       *slog.Logger
+}
+
+func (s *realSMS) Send(ctx context.Context, to, message string) error {
+	// KindTransactional: a login code is not marketing. It must not be gated on
+	// communications consent or held by quiet hours — someone signing in at
+	// 23:00 needs their code at 23:00.
+	_, err := s.transport.Send(ctx, to, notification.Message{
+		Channel: notification.ChannelSMS,
+		Kind:    notification.KindTransactional,
+		Body:    message,
+	})
+	if err != nil {
+		// The number is deliberately not logged: an OTP failure paired with
+		// its recipient puts a phone number in the logs for every failed login.
+		s.log.Error("could not send an SMS", slog.String("error", err.Error()))
+		return err
+	}
+	return nil
 }
 
 // logSMS prints the message. Development only.

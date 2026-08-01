@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   View,
   Text,
@@ -11,17 +11,7 @@ import { Input } from '../../components/common/Input';
 import { Button } from '../../components/common/Button';
 import { Card } from '../../components/common/Card';
 import { colors, typography, spacing, borderRadius } from '../../theme';
-
-type WelfareCategory = 'medical' | 'financial' | 'bereavement' | 'food' | 'other';
-type RequestStatus = 'submitted' | 'in_review' | 'approved' | 'closed';
-
-interface WelfareRequest {
-  id: string;
-  category: WelfareCategory;
-  summary: string;
-  status: RequestStatus;
-  submittedAt: string;
-}
+import welfareService, { type WelfareCategory, type WelfareRequest, type WelfareStatus } from '../../services/welfare.service';
 
 const categories: { value: WelfareCategory; label: string }[] = [
   { value: 'medical', label: 'Medical' },
@@ -31,44 +21,31 @@ const categories: { value: WelfareCategory; label: string }[] = [
   { value: 'other', label: 'Other' },
 ];
 
-const statusLabels: Record<RequestStatus, string> = {
+const statusLabels: Record<WelfareStatus, string> = {
   submitted: 'Submitted',
   in_review: 'In review',
   approved: 'Approved',
   closed: 'Closed',
 };
 
-const statusColors: Record<RequestStatus, string> = {
+const statusColors: Record<WelfareStatus, string> = {
   submitted: colors.info,
   in_review: colors.warning,
   approved: colors.success,
   closed: colors.muted,
 };
 
-// TODO: Replace with real API data (GET /welfare/requests).
-const mockRequests: WelfareRequest[] = [
-  {
-    id: '1',
-    category: 'medical',
-    summary: 'Support with hospital bills after surgery.',
-    status: 'in_review',
-    submittedAt: '2026-07-24T09:00:00Z',
-  },
-  {
-    id: '2',
-    category: 'food',
-    summary: 'Food support for the family this month.',
-    status: 'approved',
-    submittedAt: '2026-07-12T14:30:00Z',
-  },
-];
-
 export function WelfareScreen() {
   const [category, setCategory] = useState<WelfareCategory>('medical');
   const [summary, setSummary] = useState('');
   const [details, setDetails] = useState('');
   const [submitting, setSubmitting] = useState(false);
-  const [requests] = useState<WelfareRequest[]>(mockRequests);
+  const [requests, setRequests] = useState<WelfareRequest[]>([]);
+  const [loadError, setLoadError] = useState('');
+
+  useEffect(() => {
+    welfareService.listMine().then(setRequests).catch(() => setLoadError('Your requests could not be loaded.'));
+  }, []);
 
   const handleSubmit = async () => {
     if (!summary.trim()) {
@@ -78,14 +55,16 @@ export function WelfareScreen() {
 
     setSubmitting(true);
     try {
-      // TODO: wire to POST /welfare/requests
-      await new Promise<void>((resolve) => { setTimeout(() => resolve(), 600); });
+      const created = await welfareService.create({ category, summary: summary.trim(), details: details.trim() || undefined });
+      setRequests((current) => [created, ...current]);
       Alert.alert(
         'Request sent',
         'Your request has been sent privately to the pastoral team. Someone will reach out to you.',
       );
       setSummary('');
       setDetails('');
+    } catch {
+      Alert.alert('Request not sent', 'Check your connection and try again.');
     } finally {
       setSubmitting(false);
     }
@@ -100,9 +79,9 @@ export function WelfareScreen() {
         {
           text: 'Send alert',
           style: 'destructive',
-          // TODO: wire to POST /welfare/emergency
-          onPress: () =>
-            Alert.alert('Alert sent', 'The pastoral team has been notified.'),
+          onPress: () => void welfareService.emergency(details.trim() || undefined)
+            .then(() => Alert.alert('Alert sent', 'The pastoral team has been notified.'))
+            .catch(() => Alert.alert('Alert not sent', 'Call your local emergency service if you are in immediate danger.')),
         },
       ],
     );
@@ -183,6 +162,7 @@ export function WelfareScreen() {
 
       {/* Existing requests */}
       <Text style={styles.sectionTitle}>Your requests</Text>
+      {loadError ? <Text style={styles.loadError}>{loadError}</Text> : null}
       {requests.length === 0 ? (
         <Card>
           <Text style={styles.emptyText}>You have no welfare requests yet.</Text>
@@ -341,6 +321,7 @@ const styles = StyleSheet.create({
     color: colors.muted,
     textAlign: 'center',
   },
+  loadError: { color: colors.error, fontSize: typography.sizes.md, marginBottom: spacing.md },
   footerSpace: {
     height: spacing['3xl'],
   },

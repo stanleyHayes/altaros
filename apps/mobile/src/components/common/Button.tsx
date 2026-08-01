@@ -22,6 +22,7 @@ interface ButtonProps {
   fullWidth?: boolean;
   style?: ViewStyle;
   textStyle?: TextStyle;
+  accessibilityLabel?: string;
 }
 
 export function Button({
@@ -34,6 +35,7 @@ export function Button({
   fullWidth = false,
   style,
   textStyle,
+  accessibilityLabel,
 }: ButtonProps) {
   const buttonStyles = [
     styles.base,
@@ -58,6 +60,9 @@ export function Button({
       onPress={onPress}
       disabled={disabled || loading}
       activeOpacity={0.7}
+      accessibilityRole="button"
+      accessibilityLabel={accessibilityLabel ?? title}
+      accessibilityState={{ disabled: disabled || loading, busy: loading }}
     >
       {loading ? (
         <ActivityIndicator

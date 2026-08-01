@@ -18,7 +18,7 @@ func buildMember(d *deps.Deps) http.Handler { return standalone(memberRoutes(d))
 
 // memberRoutes registers the member CRM endpoints onto a router.
 func memberRoutes(d *deps.Deps) routeSet {
-	svc := member.NewService(d.Mongo, nil, d.Config.DataRegion)
+	svc := member.NewService(d.Mongo, d.Events, d.Config.DataRegion)
 
 	return func(r chi.Router) {
 		r.Group(func(r chi.Router) {

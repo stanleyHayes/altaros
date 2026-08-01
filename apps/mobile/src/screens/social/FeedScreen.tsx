@@ -7,6 +7,7 @@ import {
   TouchableOpacity,
   ActivityIndicator,
   TextInput,
+  RefreshControl,
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -15,79 +16,42 @@ import { Card } from '../../components/common/Card';
 import { colors, typography, spacing, borderRadius } from '../../theme';
 import type { RootStackParamList } from '../../components/navigation/AppNavigator';
 import type { Post } from '../../services/social.service';
+import socialService from '../../services/social.service';
 
 type FeedNav = NativeStackNavigationProp<RootStackParamList>;
-
-// TODO: Replace with real API data
-const mockPosts: Post[] = [
-  {
-    id: '1',
-    content:
-      'What an incredible service today! The worship was so uplifting. Grateful for our church family.',
-    authorId: 'u1',
-    authorName: 'Sarah Johnson',
-    likesCount: 24,
-    commentsCount: 5,
-    isLiked: false,
-    createdAt: '2026-03-29T15:30:00Z',
-  },
-  {
-    id: '2',
-    content:
-      'Prayer group meets every Wednesday at 7 PM. All are welcome! Let us lift each other up in prayer.',
-    authorId: 'u2',
-    authorName: 'Pastor James',
-    likesCount: 45,
-    commentsCount: 12,
-    isLiked: true,
-    createdAt: '2026-03-28T10:00:00Z',
-  },
-  {
-    id: '3',
-    content:
-      'Just finished reading through the book of Psalms. So many beautiful verses to meditate on.',
-    authorId: 'u3',
-    authorName: 'Michael Chen',
-    likesCount: 18,
-    commentsCount: 3,
-    isLiked: false,
-    createdAt: '2026-03-27T20:15:00Z',
-  },
-];
 
 export function FeedScreen() {
   const navigation = useNavigation<FeedNav>();
   const [posts, setPosts] = useState<Post[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState('');
 
-  useEffect(() => {
-    // TODO: Replace with socialService.getFeed()
-    const loadFeed = async () => {
-      try {
-        await new Promise<void>((resolve) => { setTimeout(() => resolve(), 500); });
-        setPosts(mockPosts);
-      } catch (error) {
-        console.error('Failed to load feed:', error);
-      } finally {
-        setIsLoading(false);
-      }
-    };
-    loadFeed();
-  }, []);
+  const loadFeed = async (refresh = false) => {
+    refresh ? setRefreshing(true) : setIsLoading(true);
+    setError('');
+    try {
+      const result = await socialService.getFeed({ limit: 30 });
+      setPosts(result.posts);
+    } catch {
+      setError('We could not load the community feed.');
+    } finally {
+      setIsLoading(false);
+      setRefreshing(false);
+    }
+  };
 
-  const handleLike = (postId: string) => {
-    // TODO: Replace with socialService.likePost / unlikePost
-    setPosts((prev) =>
-      prev.map((p) =>
-        p.id === postId
-          ? {
-              ...p,
-              isLiked: !p.isLiked,
-              likesCount: p.isLiked ? p.likesCount - 1 : p.likesCount + 1,
-            }
-          : p,
-      ),
-    );
+  useEffect(() => { void loadFeed(); }, []);
+
+  const handleLike = async (post: Post) => {
+    setPosts((current) => current.map((item) => item.id === post.id ? { ...item, isLiked: !item.isLiked, likesCount: item.likesCount + (item.isLiked ? -1 : 1) } : item));
+    try {
+      const result = post.isLiked ? await socialService.unlikePost(post.id) : await socialService.likePost(post.id);
+      setPosts((current) => current.map((item) => item.id === post.id ? { ...item, likesCount: result.likesCount } : item));
+    } catch {
+      setPosts((current) => current.map((item) => item.id === post.id ? post : item));
+      setError('Your reaction was not saved. Try again.');
+    }
   };
 
   const timeAgo = (dateStr: string): string => {
@@ -117,7 +81,9 @@ export function FeedScreen() {
       <View style={styles.actionRow}>
         <TouchableOpacity
           style={styles.actionButton}
-          onPress={() => handleLike(item.id)}
+          onPress={() => void handleLike(item)}
+          accessibilityRole="button"
+          accessibilityLabel={item.isLiked ? 'Unlike post' : 'Like post'}
         >
           <Text
             style={[
@@ -160,6 +126,7 @@ export function FeedScreen() {
         keyExtractor={(item) => item.id}
         renderItem={renderPost}
         contentContainerStyle={styles.list}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => void loadFeed(true)} tintColor={colors.primary} />}
         showsVerticalScrollIndicator={false}
         ListHeaderComponent={
           <TouchableOpacity
@@ -175,7 +142,7 @@ export function FeedScreen() {
         ListEmptyComponent={
           <View style={styles.empty}>
             <Text style={styles.emptyText}>
-              No posts yet. Be the first to share!
+              {error || 'No posts yet. Be the first to share.'}
             </Text>
           </View>
         }

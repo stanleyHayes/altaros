@@ -1,5 +1,6 @@
 import React from 'react';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
+import { Ionicons } from '@expo/vector-icons';
 import { HomeScreen } from '../../screens/home/HomeScreen';
 import { GivingScreen } from '../../screens/giving/GivingScreen';
 import { FeedScreen } from '../../screens/social/FeedScreen';
@@ -17,32 +18,24 @@ export type TabParamList = {
 
 const Tab = createBottomTabNavigator<TabParamList>();
 
-// Simple text-based icons since we cannot guarantee vector icons are installed
-function TabIcon({ name, color }: { name: string; color: string }) {
-  const iconMap: Record<string, string> = {
-    Home: '\u2302',
-    Give: '\u2665',
-    Community: '\u263A',
-    Events: '\u2605',
-    Profile: '\u263B',
+function TabIcon({ name, color, focused }: { name: string; color: string; focused: boolean }) {
+  const iconMap = {
+    Home: focused ? 'home' : 'home-outline',
+    Give: focused ? 'heart' : 'heart-outline',
+    Community: focused ? 'people' : 'people-outline',
+    Events: focused ? 'calendar' : 'calendar-outline',
+    Profile: focused ? 'person' : 'person-outline',
   };
-  const React_ = require('react');
-  const { Text } = require('react-native');
-  return React_.createElement(Text, {
-    style: { fontSize: 22, color, marginBottom: -2 },
-  }, iconMap[name] || '\u25CF');
+  return <Ionicons name={iconMap[name as keyof typeof iconMap] as never} size={21} color={color} />;
 }
 
 export function BottomTabs() {
   return (
     <Tab.Navigator
       screenOptions={({ route }) => ({
-        headerStyle: {
-          backgroundColor: colors.primary,
-          elevation: 0,
-          shadowOpacity: 0,
-        },
-        headerTintColor: '#FFFFFF',
+        headerStyle: { backgroundColor: colors.background },
+        headerShadowVisible: false,
+        headerTintColor: colors.text,
         headerTitleStyle: {
           fontWeight: typography.weights.semibold,
           fontSize: typography.sizes.lg,
@@ -53,23 +46,24 @@ export function BottomTabs() {
           backgroundColor: colors.surface,
           borderTopColor: colors.border,
           borderTopWidth: 1,
-          paddingBottom: 4,
-          paddingTop: 4,
-          height: 56,
+          paddingBottom: 7,
+          paddingTop: 7,
+          height: 66,
+          elevation: 0,
         },
         tabBarLabelStyle: {
           fontSize: typography.sizes.xs,
           fontWeight: typography.weights.medium,
         },
-        tabBarIcon: ({ color }: { color: string }) => (
-          <TabIcon name={route.name} color={color} />
+        tabBarIcon: ({ color, focused }: { color: string; focused: boolean }) => (
+          <TabIcon name={route.name} color={color} focused={focused} />
         ),
       })}
     >
       <Tab.Screen
         name="Home"
         component={HomeScreen}
-        options={{ title: 'ALTAR OS' }}
+        options={{ title: 'Home', headerShown: false }}
       />
       <Tab.Screen
         name="Give"

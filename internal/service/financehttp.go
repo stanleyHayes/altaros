@@ -36,7 +36,10 @@ func financeRoutes(d *deps.Deps) routeSet {
 		DefaultCommissionBasisPoints: DefaultCommissionBasisPoints,
 	})
 	directory := &churchDirectory{churches: church.NewService(d.Mongo)}
-	svc := finance.NewService(d.Mongo, gateway, directory, nil)
+	// d.Events, not nil: this is what makes giving.completed actually reach
+	// the notification service. It was nil until now, so the receipt half of
+	// WP-15 could never fire however correct both halves were in isolation.
+	svc := finance.NewService(d.Mongo, gateway, directory, d.Events)
 
 	return func(r chi.Router) {
 		// The webhook is registered OUTSIDE the auth middleware on purpose:

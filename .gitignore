@@ -6,6 +6,7 @@ dist
 .vercel
 coverage
 *.tsbuildinfo
+.expo/
 
 # Go
 /altar

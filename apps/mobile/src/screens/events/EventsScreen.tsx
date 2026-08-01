@@ -14,62 +14,9 @@ import { Button } from '../../components/common/Button';
 import { colors, typography, spacing, borderRadius } from '../../theme';
 import type { RootStackParamList } from '../../components/navigation/AppNavigator';
 import type { ChurchEvent } from '../../services/event.service';
+import eventService from '../../services/event.service';
 
 type EventsNav = NativeStackNavigationProp<RootStackParamList>;
-
-// TODO: Replace with real API data
-const mockEvents: ChurchEvent[] = [
-  {
-    id: '1',
-    title: 'Sunday Worship Service',
-    description: 'Join us for our weekly worship service with praise and the Word.',
-    startDate: '2026-03-30T10:00:00Z',
-    endDate: '2026-03-30T12:00:00Z',
-    location: 'Main Sanctuary',
-    category: 'worship',
-    isRsvped: true,
-    attendeeCount: 150,
-    organizer: 'Worship Team',
-  },
-  {
-    id: '2',
-    title: 'Midweek Bible Study',
-    description: 'Deep dive into the book of Romans. Bring your Bible and a friend!',
-    startDate: '2026-04-01T19:00:00Z',
-    endDate: '2026-04-01T20:30:00Z',
-    location: 'Fellowship Hall',
-    category: 'fellowship',
-    isRsvped: false,
-    attendeeCount: 35,
-    organizer: 'Pastor James',
-  },
-  {
-    id: '3',
-    title: 'Youth Night',
-    description: 'Games, worship, and a message for our young people.',
-    startDate: '2026-04-04T18:00:00Z',
-    endDate: '2026-04-04T20:00:00Z',
-    location: 'Youth Center',
-    category: 'youth',
-    isRsvped: false,
-    attendeeCount: 42,
-    maxAttendees: 60,
-    organizer: 'Youth Ministry',
-  },
-  {
-    id: '4',
-    title: 'Community Outreach Day',
-    description: 'Serving our local community with food and supplies.',
-    startDate: '2026-04-05T09:00:00Z',
-    endDate: '2026-04-05T14:00:00Z',
-    location: 'Community Park',
-    address: '123 Main Street',
-    category: 'outreach',
-    isRsvped: false,
-    attendeeCount: 28,
-    organizer: 'Outreach Committee',
-  },
-];
 
 const categoryColors: Record<string, string> = {
   worship: colors.primary,
@@ -84,15 +31,16 @@ export function EventsScreen() {
   const navigation = useNavigation<EventsNav>();
   const [events, setEvents] = useState<ChurchEvent[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState('');
 
   useEffect(() => {
-    // TODO: Replace with eventService.getEvents()
     const loadEvents = async () => {
       try {
-        await new Promise<void>((resolve) => { setTimeout(() => resolve(), 500); });
-        setEvents(mockEvents);
-      } catch (error) {
-        console.error('Failed to load events:', error);
+        setError('');
+        const result = await eventService.getEvents({ upcoming: true, limit: 50 });
+        setEvents(result.events);
+      } catch {
+        setError('We could not load upcoming events.');
       } finally {
         setIsLoading(false);
       }
@@ -112,21 +60,19 @@ export function EventsScreen() {
     };
   };
 
-  const handleRsvp = (eventId: string) => {
-    // TODO: Replace with eventService.rsvp / cancelRsvp
-    setEvents((prev) =>
-      prev.map((e) =>
-        e.id === eventId
-          ? {
-              ...e,
-              isRsvped: !e.isRsvped,
-              attendeeCount: e.isRsvped
-                ? e.attendeeCount - 1
-                : e.attendeeCount + 1,
-            }
-          : e,
-      ),
-    );
+  const handleRsvp = async (event: ChurchEvent) => {
+    try {
+      const response = event.isRsvped
+        ? await eventService.cancelRsvp(event.id)
+        : await eventService.rsvp(event.id);
+      setEvents((current) => current.map((item) => item.id === event.id ? {
+        ...item,
+        isRsvped: response.status === 'confirmed',
+        attendeeCount: response.attendeeCount,
+      } : item));
+    } catch {
+      setError('We could not update that RSVP. Try again.');
+    }
   };
 
   const renderEvent = ({ item }: { item: ChurchEvent }) => {
@@ -175,7 +121,7 @@ export function EventsScreen() {
               title={item.isRsvped ? 'Cancel RSVP' : 'RSVP'}
               variant={item.isRsvped ? 'outline' : 'primary'}
               size="sm"
-              onPress={() => handleRsvp(item.id)}
+              onPress={() => void handleRsvp(item)}
             />
           </View>
         </Card>
@@ -201,7 +147,7 @@ export function EventsScreen() {
       showsVerticalScrollIndicator={false}
       ListEmptyComponent={
         <View style={styles.empty}>
-          <Text style={styles.emptyText}>No upcoming events.</Text>
+          <Text style={styles.emptyText}>{error || 'No upcoming events have been published yet.'}</Text>
         </View>
       }
     />
