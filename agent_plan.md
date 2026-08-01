@@ -496,7 +496,11 @@ The PDF names four events. A working system needs a governed catalog with a vers
 
 | WP-11 | ✅ done | Organization → Church(branch) → Department → Group, with sub-branches. `VisibleChurchIDs` is the single place cross-branch reach is decided: Org Admin sees every branch in their denomination, Church Admin/leader/member see exactly one, Super Admin sees all. Reach stops at the organization boundary; circular re-parenting refused. |
 
-Not yet started: WP-12 (member service) onward.
+| WP-12 | ✅ done | Member CRM with E.164 normalisation at every write. **Acceptance met:** 1,000 rows across 6 phone spellings → 1,000 members, zero duplicates, every stored number E.164. Dedupe runs twice (within-file and against-stored), so re-importing a file updates rather than doubles the congregation, and bad rows are reported per-row instead of failing the file. Status is a journey (visitor → new convert → active …), defaulting to *visitor* rather than *active* so engagement metrics aren't inflated by import. |
+
+Not yet started: WP-13 (payment gateway) onward.
+
+**Index trap worth recording:** the phone uniqueness index was first written `unique + sparse`, which is wrong on a compound key. A compound sparse index only skips a document when **every** indexed field is missing, and `churchId` is never missing — so every phone-less pastoral record indexed as `null` and the second one collided with the first. Since most of a congregation has no phone on file initially, that breaks the common case, not an edge case. Both optional-field indexes now use `partialFilterExpression: {field: {$exists: true}}`. Single-field sparse indexes (auth's `email`/`phone`) are unaffected and were left alone.
 
 ### Phase 0 — Salvage & foundation
 
