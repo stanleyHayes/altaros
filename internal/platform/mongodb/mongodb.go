@@ -382,6 +382,21 @@ func (t *TenantCollection) DeleteOne(ctx context.Context, filter any) (*mongo.De
 	return t.coll.DeleteOne(ctx, scoped)
 }
 
+// DeleteMany deletes every matching document within the caller's church.
+//
+// The tenant predicate matters more here than anywhere else in this file. An
+// unscoped DeleteOne removes one wrong row; an unscoped DeleteMany with a loose
+// filter removes a collection. `{"versionId": x}` looks safe until the day two
+// churches hold documents that match — and scopedFilter is what makes that
+// impossible rather than unlikely.
+func (t *TenantCollection) DeleteMany(ctx context.Context, filter any) (*mongo.DeleteResult, error) {
+	scoped, err := t.scopedFilter(ctx, filter)
+	if err != nil {
+		return nil, err
+	}
+	return t.coll.DeleteMany(ctx, scoped)
+}
+
 // Aggregate runs a pipeline within the caller's church.
 //
 // The tenant predicate is PREPENDED as its own $match stage rather than merged

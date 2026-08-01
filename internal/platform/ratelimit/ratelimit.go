@@ -178,6 +178,14 @@ var (
 	// a guard against a runaway client loop taking the database with it.
 	Write = Rule{Name: "write", Limit: 120, Window: time.Minute}
 
+	// PublicSite covers a church's own website, which is read by its
+	// congregation, by search engines and by the AI crawlers §13.4 names.
+	// Generous, because this is the one surface where traffic is the point —
+	// tight enough that a scraper walking every page of every church is not
+	// free. The responses are edge-cacheable, so most real traffic never
+	// reaches this counter at all.
+	PublicSite = Rule{Name: "public_site", Limit: 300, Window: time.Minute}
+
 	// RedeemInvitation covers the two unauthenticated endpoints that accept an
 	// invitation token. The token itself is 32 random bytes, so guessing one is
 	// not the threat — the endpoint doing a database lookup per attempt is. A

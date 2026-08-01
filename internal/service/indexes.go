@@ -12,6 +12,7 @@ import (
 	"github.com/hayfordstanley/altar-os/internal/domain/invitation"
 	"github.com/hayfordstanley/altar-os/internal/domain/member"
 	"github.com/hayfordstanley/altar-os/internal/domain/rbac"
+	"github.com/hayfordstanley/altar-os/internal/domain/site"
 	"github.com/hayfordstanley/altar-os/internal/platform/deps"
 )
 
@@ -42,6 +43,7 @@ func EnsureIndexes(ctx context.Context, d *deps.Deps) error {
 		{"notification", newNotificationService(d).EnsureIndexes},
 		{"rbac", rbac.NewService(d.Mongo).EnsureIndexes},
 		{"invitation", invitation.NewService(d.Mongo).EnsureIndexes},
+		{"site", site.NewService(d.Mongo).EnsureIndexes},
 	}
 
 	for _, step := range steps {

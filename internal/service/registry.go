@@ -48,6 +48,7 @@ func routeSets(d *deps.Deps) map[string]routeSet {
 		"member":       memberRoutes(d),
 		"finance":      financeRoutes(d),
 		"notification": notificationRoutes(d),
+		"site":         siteRoutes(d),
 	}
 }
 
@@ -67,6 +68,7 @@ func init() {
 		"church":        buildChurch,
 		"rbac":          buildRBAC,
 		"invitation":    buildInvitation,
+		"site":          buildSite,
 		"event":         placeholder("event", "events, RSVP, QR check-in, attendance"),
 		"communication": placeholder("communication", "broadcast + targeted messaging"),
 		"ai":            placeholder("ai", "sermon assistant, member insights, prayer chat"),
@@ -104,15 +106,11 @@ func Lookup(name string) (Builder, error) {
 func buildGateway(d *deps.Deps) http.Handler {
 	r := chi.NewRouter()
 
-	// Host-based tenancy (WP-39). Mounted FIRST and outside every other group,
-	// because it must run for unauthenticated requests to a church's public
-	// site — a visitor reading service times has no session to scope from.
-	//
-	// A no-op unless PUBLIC_BASE_DOMAIN is set, which is why a local gateway on
-	// localhost:8080 is unaffected: there are no subdomains to resolve.
-	if d.Config != nil && d.Config.PublicBaseDomain != "" {
-		r.Use(tenantFromHost(d))
-	}
+	// Host-based tenancy (WP-39) is NOT applied here. cmd/altar wraps the whole
+	// root router with it, which covers this router, the readiness endpoints and
+	// the NotFound handler that serves a church's public site. Applying it again
+	// here would run the resolution twice per request against two separate
+	// caches — the same answer, paid for twice.
 
 	// What church this request was addressed to. The public site renderer reads
 	// it, and it is also how an operator confirms a subdomain resolves without
@@ -160,7 +158,7 @@ func buildGateway(d *deps.Deps) http.Handler {
 // A plain list rather than a key set of routeSets: building the route sets
 // constructs live services against the database, so asking "which services
 // exist" must not require a connection.
-var implementedNames = []string{"auth", "church", "finance", "gateway", "invitation", "member", "notification", "rbac"}
+var implementedNames = []string{"auth", "church", "finance", "gateway", "invitation", "member", "notification", "rbac", "site"}
 
 // Implemented lists the services with real routes, sorted. The gateway is
 // included because it serves its own index.

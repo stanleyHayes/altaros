@@ -18,6 +18,7 @@ import (
 	"github.com/hayfordstanley/altar-os/internal/domain/finance"
 	"github.com/hayfordstanley/altar-os/internal/domain/member"
 	"github.com/hayfordstanley/altar-os/internal/domain/rbac"
+	"github.com/hayfordstanley/altar-os/internal/domain/site"
 	"github.com/hayfordstanley/altar-os/internal/platform/money"
 	"github.com/hayfordstanley/altar-os/internal/platform/mongodb"
 	"github.com/hayfordstanley/altar-os/internal/platform/tenancy"
@@ -113,12 +114,74 @@ func New(db *mongodb.DB, opt Options) *Seeder {
 
 // Reset removes everything a previous seed created, and nothing else.
 func (s *Seeder) Reset(ctx context.Context) error {
+	// Website content first, and by CHURCH rather than by marker.
+	//
+	// The site service writes through TenantCollection, which stamps churchId
+	// and not the seed marker — so a marker-based delete would find nothing and
+	// silently leave every seeded page behind, to be re-created on the next run
+	// and collide on the unique page-slug index. Removing them by the churches
+	// that are about to be deleted is the accurate way to say "what this
+	// seeder made", and it has to happen BEFORE those churches go, because
+	// afterwards there is nothing left to identify them by.
+	if err := s.resetWebsites(ctx); err != nil {
+		return err
+	}
+
 	collections := []string{
 		"organizations", "churches", "users", "members", "transactions",
 		"consents", "notifications", "notification_preferences", "event_outbox",
 	}
 	for _, name := range collections {
 		res, err := s.raw.Collection(name).DeleteMany(ctx, bson.M{MarkerField: Marker})
+		if err != nil {
+			return fmt.Errorf("seed: reset %s: %w", name, err)
+		}
+		if res.DeletedCount > 0 {
+			s.opt.Log.Info("removed seeded documents",
+				slog.String("collection", name),
+				slog.Int64("count", res.DeletedCount))
+		}
+	}
+	return nil
+}
+
+// resetWebsites removes CMS content belonging to seeded churches.
+//
+// Also removes the roles the seeder provisions, for the same reason: they are
+// written through the tenant wrapper and carry no marker, so a second seed run
+// would otherwise find the old church's roles gone with the church and leave
+// orphans behind.
+func (s *Seeder) resetWebsites(ctx context.Context) error {
+	cursor, err := s.raw.Collection("churches").Find(ctx,
+		bson.M{MarkerField: Marker},
+		options.Find().SetProjection(bson.M{"_id": 1}))
+	if err != nil {
+		return fmt.Errorf("seed: find seeded churches: %w", err)
+	}
+	var churches []struct {
+		ID bson.ObjectID `bson:"_id"`
+	}
+	if err := cursor.All(ctx, &churches); err != nil {
+		return fmt.Errorf("seed: read seeded churches: %w", err)
+	}
+	if len(churches) == 0 {
+		return nil
+	}
+
+	ids := make(bson.A, 0, len(churches))
+	for _, c := range churches {
+		// Both storage forms, because Mongoose writes an ObjectId and early Go
+		// documents wrote a string (ADR-005).
+		ids = append(ids, c.ID, c.ID.Hex())
+	}
+	filter := bson.M{"churchId": bson.M{"$in": ids}}
+
+	for _, name := range []string{
+		site.PageCollection, site.VersionCollection,
+		site.BlockCollection, site.ThemeCollection,
+		"roles",
+	} {
+		res, err := s.raw.Collection(name).DeleteMany(ctx, filter)
 		if err != nil {
 			return fmt.Errorf("seed: reset %s: %w", name, err)
 		}
@@ -191,6 +254,10 @@ func (s *Seeder) Run(ctx context.Context) (*Result, error) {
 			return nil, err
 		}
 		result.Transactions += txs
+
+		if err := s.website(ctx, churchID, b.name, b.city); err != nil {
+			return nil, err
+		}
 
 		s.opt.Log.Info("seeded church",
 			slog.String("church", b.name),
@@ -748,4 +815,108 @@ func (s *Seeder) roleIDFor(ctx context.Context, churchID bson.ObjectID, legacyRo
 		return ""
 	}
 	return role.ID.Hex()
+}
+
+// website gives a church a published home page (WP-40).
+//
+// Seeded because a CMS with no content cannot be judged: the interesting
+// questions — does the draft stay private, does rollback restore, does the
+// public renderer see only what is published — all need a page that exists.
+// It also means `make seed` produces a subdomain that actually serves
+// something, which is what makes WP-39 demonstrable rather than described.
+func (s *Seeder) website(ctx context.Context, churchID bson.ObjectID, name, city string) error {
+	scoped := s.scope(churchID)
+	svc := site.NewService(s.db)
+
+	if err := svc.EnsureIndexes(scoped); err != nil {
+		return fmt.Errorf("seed: site indexes: %w", err)
+	}
+
+	home, err := svc.CreatePage(scoped, site.PageInput{
+		Slug:  "",
+		Title: name,
+		SEODescription: fmt.Sprintf(
+			"%s is a church in %s. Join us on Sunday.", name, city),
+		InNav:    true,
+		NavOrder: 10,
+	})
+	if err != nil {
+		return fmt.Errorf("seed: create home page: %w", err)
+	}
+
+	blocks := []site.BlockInput{
+		{Type: site.BlockHero, Data: map[string]any{
+			"heading":    name,
+			"subheading": "A place to belong, in " + city + ".",
+			"ctaLabel":   "Plan your visit",
+			"ctaUrl":     "/visit",
+		}},
+		{Type: site.BlockServiceTimes, Data: map[string]any{
+			"services": []any{
+				map[string]any{
+					"name": "Sunday Worship", "time": "9:00 AM",
+					"location": "Main Auditorium",
+				},
+				map[string]any{
+					"name": "Midweek Service", "time": "Wednesday 6:30 PM",
+					"location": "Fellowship Hall",
+				},
+			},
+		}},
+		// The three that read the church's own records, so a seeded site shows
+		// what "never re-typed" means rather than only asserting it.
+		{Type: site.BlockEvents, Data: map[string]any{"limit": 3}},
+		{Type: site.BlockGivingCTA, Data: map[string]any{
+			"body": "Your giving supports the work of this church.",
+		}},
+		{Type: site.BlockRichText, Data: map[string]any{"content": []any{
+			map[string]any{
+				"type": "heading", "level": 2,
+				"spans": []any{map[string]any{"text": "New here?"}},
+			},
+			map[string]any{
+				"type": "paragraph",
+				"spans": []any{
+					map[string]any{"text": "Come as you are. We would love to meet you — "},
+					map[string]any{
+						"text": "get in touch", "marks": []any{"link"}, "href": "/contact",
+					},
+					map[string]any{"text": " before you visit."},
+				},
+			},
+		}}},
+	}
+	if _, err := svc.SetBlocks(scoped, home.ID.Hex(), blocks); err != nil {
+		return fmt.Errorf("seed: home page blocks: %w", err)
+	}
+	if _, err := svc.Publish(scoped, home.ID.Hex(), "Initial site"); err != nil {
+		return fmt.Errorf("seed: publish home page: %w", err)
+	}
+
+	// A second page left as an UNPUBLISHED draft, deliberately. It is what
+	// makes "the public sees only what is published" observable in the seeded
+	// data rather than only in a test.
+	draft, err := svc.CreatePage(scoped, site.PageInput{
+		Slug: "visit", Title: "Plan your visit", InNav: true, NavOrder: 20,
+	})
+	if err != nil {
+		return fmt.Errorf("seed: create visit page: %w", err)
+	}
+	if _, err := svc.SetBlocks(scoped, draft.ID.Hex(), []site.BlockInput{
+		{Type: site.BlockRichText, Data: map[string]any{"content": []any{
+			map[string]any{
+				"type":  "paragraph",
+				"spans": []any{map[string]any{"text": "Parking is behind the building."}},
+			},
+		}}},
+	}); err != nil {
+		return fmt.Errorf("seed: visit page blocks: %w", err)
+	}
+
+	if _, err := svc.SetTheme(scoped, site.Theme{
+		Palette: "warm", Typography: "classic", Mode: "light",
+	}); err != nil {
+		return fmt.Errorf("seed: theme: %w", err)
+	}
+	return nil
 }
