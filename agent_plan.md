@@ -39,7 +39,7 @@ This was audited directly against the repo, not assumed. **The PDF describes a s
 
 | Layer | PDF says | Repo actually has | Verdict |
 |---|---|---|---|
-| Mobile | React Native | Expo + React Native, `expo-router`, `expo-camera`, `expo-notifications`, `expo-secure-store` | ⚠️ **Right stack, currently broken** (§0.2) |
+| Mobile | React Native | Expo + React Native, React Navigation, `expo-camera`, `expo-notifications`, `expo-secure-store` | 🟡 **Builds and exports; WP-19 native/provider QA still open** (§0.2) |
 | Web admin | React + TypeScript | React + MUI + Vite — `dashboard`, `web`, `admin`, `marketing` | ⚠️ **Right stack, 3 of 4 broken** (§0.2) |
 | Backend | Golang microservices, gRPC + REST | TypeScript / Express / Mongoose, hexagonal ports-and-adapters | ❌ **Diverges** |
 | Database | MySQL + Redis | MongoDB (Mongoose), no Redis | ❌ **Diverges** |
@@ -120,6 +120,37 @@ Confirmed by the project owner, 31 Jul 2026. These are settled; do not relitigat
 2. **Referential integrity.** No foreign keys. Cross-collection consistency is enforced in the service layer, and multi-document writes that must be atomic use transactions (available on a replica set; the single-node local container is fine for development but production needs a replica set).
 3. **Tenant isolation.** §4.5's "leading column of every index" becomes "`church_id` is the **first field of every compound index**", and the query wrapper still refuses to build a tenant-scoped filter without it. The guarantee is unchanged; the mechanism is.
 **Consequence:** §5's `CREATE TABLE` definitions are superseded — read them as the **field-level contract** (names, types, required/optional, money as minor units, the unique constraints that make payments idempotent), and implement them as MongoDB collections with equivalent unique indexes. The two `uq_idempotency` / `uq_provider_ref` constraints in §5.2 remain **mandatory unique indexes**: they are what stop a retried payment webhook from recording a tithe twice.
+
+
+### ADR-006 — Identity is workspace-scoped. The same person is a different user in each church.
+
+**Decision (1 Aug 2026):** every account belongs to exactly one church. Signing in requires a **workspace** (the church's slug) alongside the credential, and uniqueness moves from global `email` to compound `(churchId, email)` and `(churchId, phone)`.
+
+**Why this is forced rather than chosen.** WP-12 already established that the same phone number may legitimately belong to two churches — a member who attends one congregation and helps run another's youth ministry is ordinary, not an edge case. Today `users.email` is globally unique in **both** writers (Mongoose declares `unique: true`, Go declares `email_unique`), so that person cannot have an account in the second church at all. Requiring a workspace at login is what makes per-church identity possible, and per-church identity is what makes "a private workspace only for its members" true rather than aspirational.
+
+**What it costs, stated plainly.** This is a **breaking index change on a shared collection** (ADR-005: the Go services and the legacy TypeScript API write the same database). Dropping a unique index while both writers are live is the kind of migration that fails quietly, so it is sequenced explicitly in WP-35 and gated behind a backfill that proves no `(churchId, email)` collisions exist before the old index is dropped.
+
+**Consequence for the login screen:** the workspace is pre-filled and hidden when the user is already on `grace.altaros.com` — the subdomain *is* the workspace. It is only typed on the shared `app.altaros.com` entry point. A member of one church should never have to know they are in a multi-tenant system.
+
+### ADR-007 — Every church gets a subdomain and a site it controls.
+
+**Decision:** `<slug>.altaros.com` serves that church's own public website, built by the church from a fixed block library. A church may later point its own domain at the platform.
+
+**Why a block library and not free HTML.** A church editor is not a web developer, and an editor that accepts arbitrary HTML or CSS is an XSS vector aimed at that church's own members — the people most likely to trust the page. Blocks are typed, validated on both sides, and rendered by components the platform owns. The cost is that a church cannot build *anything*; the benefit is that it cannot build something that harms its congregation.
+
+**Not a Webflow clone.** v1 ships roughly a dozen block types that cover what a church site actually contains, and deliberately omits a free-form layout engine, custom code blocks, and per-block CSS. Those are the features that turn a CMS into a support burden.
+
+### ADR-008 — Permissions are an overlay on a role, not a copy of one.
+
+**Decision:** a user's effective permissions are computed, never stored as a snapshot:
+
+```
+effective = (role.permissions − user.revoked) ∪ user.granted, then dependency-expanded
+```
+
+**Why this is the whole design.** The requirements contain an apparent contradiction: an individual's permissions must be alterable *without affecting the role* (5), and role permissions must be updatable (8). A snapshot satisfies 5 and breaks 8 — edit the role and nobody's permissions change. A pure role reference satisfies 8 and breaks 5 — there is nowhere to put an individual grant. The overlay satisfies both, because the role is read live and the individual's deltas are applied on top.
+
+**The behaviour this implies, which someone should agree to explicitly:** if an admin grants Ama `finance:read` individually, and the role she holds *later loses* `finance:read`, **Ama keeps it**. That is what "altered without affecting the original role permissions" means, and it is correct — but it means an admin removing a permission from a role has not necessarily removed it from everyone, and the UI must say so. See §10 Q-11.
 
 ---
 
@@ -506,6 +537,10 @@ The PDF names four events. A working system needs a governed catalog with a vers
 
 | WP-16 | ✅ done | Gateway serves auth + member + finance under one origin, with JWT→tenant middleware, role allowlists and per-record ownership checks — and **forwards everything not yet ported to the legacy TypeScript API**, so the frontends see one origin for the whole platform. **Verified against a live server, not just in tests:** login → create a member (`024 123 4567` stored as `+233241234567`) → list → record cash (`"1,250.50"` → 125050 minor) → summary totalling **GHS 1,625.75 exactly**; a MEMBER role gets 403 on the congregation list and the church books; an unsigned, forged or tampered webhook gets 401, a correctly-signed one 200; and with the gateway on :8080, `auth/me`, `members`, `finance/summary` (Go) plus `events` and `churches` (proxied) **all return 200 from one token**. Dashboard, web, admin and mobile now default to the Go origin; all four typecheck and the dashboard builds. |
 
+**Mobile product pass — 1 Aug 2026 (pre-WP-19, goal still active).** The Expo app now boots through the correct `expo/AppEntry` path, stores access/refresh tokens in SecureStore on native, normalises both the Go `{user,tokens}` response and the legacy flat response, clears invalid restored sessions, and coalesces simultaneous refreshes so a rotating refresh token cannot be replayed by two racing 401s. Phone OTP is the primary sign-in path. Every production mock was removed: home, MoMo-first giving/history, events/RSVPs, community posts/reactions, devotionals, sermons, prayers, welfare, notifications, and profile actions now use service boundaries against the gateway and expose loading, empty, error, refresh, accessibility, and global offline states. Giving sends decimal strings to `/finance/give`, displays the server's E-Levy quote and total debit before opening Paystack, and never presents pending money as confirmed giving. The UI now uses the Altar OS green system, proper tab icons, responsive content caps, and generated native app icons.
+
+**Evidence:** `npx tsc -p apps/mobile/tsconfig.json --noEmit` passes; Jest passes **12/12** auth-contract, Ghana phone-normalisation, registration-envelope, minor-unit money, non-mutating giving-quote, payment-settlement, and legacy event-route tests. Registration now resolves the visible church code through `/churches/slug/:slug`, sends the legacy route's real `{name,email,phone,password,churchId}` contract, unwraps its response, and canonicalises Ghana-local `024…` numbers to `+233…` so OTP lookup can match stored accounts. Giving review is now genuinely non-mutating: `/finance/give/quote` returns the cumulative daily levy and total without creating a transaction, `/finance/give` refuses to initialise Paystack unless `acceptedTotalMinor` exactly matches the current server quote, and the `altaros://giving/complete` deep link verifies the returned provider reference before showing success. The event client uses the real church-scoped list and shared RSVP endpoints instead of speculative routes, and does not invent attendee identities the API does not expose. `npx expo export --platform all --output-dir /tmp/altar-mobile-export-20260801-giving-lifecycle` produces web, iOS, and Android bundles from the mobile workspace; the focused Go quote-acceptance test and service compile pass. Expo web starts without runtime errors after pinning app-local `react-dom@19.2.3` to match Expo's React. Expo Doctor passes 18/20 checks; its remaining two findings are monorepo-resolution reports (it sees both app-local Expo-compatible React/safe-area packages and root web-workspace copies, and reports `.expo` because a generated log was already committed despite both current ignore rules matching). **Still open:** the iPhone 16 Pro simulator booted, but native visual QA did not complete; a second official Expo Go fetch reached only 1% after a sustained retry and was stopped. No physical-device OTP/MoMo/SMS run has happened. WP-19 therefore remains open and still needs staging infrastructure plus real provider test credentials. Social, spiritual, welfare, and member-notification HTTP routes also remain Phase 2 work and must not be represented as live until the WP-19 gate permits their owning work packages.
+
 | WP-17 | ✅ done | CI now runs the Go suite against **real MongoDB and Redis service containers** with the race detector, builds a 22.4MB distroless image, and smoke-tests a booted gateway. **Done when** was "a PR runs Go + TS pipelines" — it does, plus three checks the spec did not ask for and this codebase has already needed. |
 
 | WP-18 | 🟡 manifests done, cluster run gated on CI | kustomize base + dev/staging/prod overlays, HPA, PDB, sealed-secret placeholders, and the **readiness endpoint the base was documented as probing but which did not exist**. **Verified locally:** all three overlays render, and all 25 resources validate against the real Kubernetes schemas via kubeconform (the 1 skipped is the SealedSecret CRD). **Outstanding:** `kubectl apply -k deploy/overlays/dev` on an actual cluster — no cluster is available in this environment, so a CI job now creates a kind cluster, loads the image, applies the dev overlay and waits for `rollout status`, which only completes once a pod passes readiness. That is the acceptance criterion, run on every PR. |
@@ -788,6 +823,221 @@ SaaS subscription tiers, transaction-fee split reporting, premium feature gating
 
 ---
 
+## §11. Workspace-scoped identity (ADR-006)
+
+### 11.1 What "workspace" means here
+
+The workspace is the **church**, addressed by its `slug`. Three things follow.
+
+**Login carries a workspace.** `LoginRequest` gains `workspace`. On `grace.altaros.com` it is filled from the hostname and never shown; on the shared `app.altaros.com` it is a field on the form. A member of one church should never learn that they are inside a multi-tenant system.
+
+**Identity is per-church.** `(churchId, email)` and `(churchId, phone)` are unique; `email` alone is not. One person attending two churches has two accounts, and that is the honest model — their role, permissions, giving history and consent are all per-church, and merging them into one identity would mean deciding which church's data an unscoped session may see. There is no good answer to that question, so the design avoids being asked it.
+
+**Every credential lookup is scoped.** `findByEmail(email)` becomes `findByEmail(churchID, email)`. The same applies to OTP: Redis keys become `otp:code:<workspace>:<phone>`, or a code sent for one church would verify against another.
+
+### 11.2 The failure that matters: enumeration
+
+A wrong workspace, a wrong email, an email that exists in a different church, and a workspace that does not exist must be **one indistinguishable answer**, in one indistinguishable time.
+
+> "We could not sign you in. Check the workspace and your details."
+
+Anything more specific turns the login form into a directory. "No such workspace" enumerates customers — competitively useful and, for a church in a hostile region, a safety problem. "That email is not in this workspace" tells an attacker which of a leaked credential dump belongs to which congregation. The existing auth service already runs bcrypt against a dummy hash when the account is missing, precisely so the timing does not leak; workspace resolution must be inside that same constant-time envelope rather than a cheap early return in front of it.
+
+### 11.3 Invitations
+
+Members and staff arrive by invitation, not self-signup, in the default configuration.
+
+```
+invitations: {
+  _id, churchId, email, phone,
+  roleId,                     // the role they get on acceptance
+  invitedBy, invitedAt,
+  tokenHash,                  // SHA-256; the raw token only ever exists in the link
+  expiresAt,                  // 7 days
+  acceptedAt, acceptedUserId,
+  revokedAt
+}
+```
+
+- The token is **hashed at rest**, like the OTP codes in WP-10. An invitation link in a leaked database backup is otherwise a working account.
+- Single-use and expiring. An invitation that never expires is a permanent unauthenticated path into a church's data.
+- Accepting creates the user **inside the inviting church** — the workspace is carried by the token, never typed, so an invitation cannot be redirected at another church.
+- Re-inviting an existing member is idempotent: it revokes the outstanding invitation and issues a new one, rather than accumulating live tokens.
+
+---
+
+## §12. RBAC (ADR-008)
+
+### 12.1 Permission naming
+
+`resource:action`, where action is one of `create`, `read`, `update`, `delete`. Resources are the domains this platform already has: `member`, `finance`, `event`, `communication`, `prayer`, `welfare`, `role`, `page`, `settings`, `report`.
+
+`role:create` is itself a permission, which is what makes requirement 1 — "roles can be created by an admin **with the right permissions**" — expressible rather than hard-coded.
+
+### 12.2 The dependency rule, enforced twice
+
+**One cannot hold `create`, `update` or `delete` on a resource without `read` on it.** A permission set that violates this is not stored:
+
+1. **On write** — saving a role or an override that grants `finance:update` without `finance:read` is rejected with the reason, so an admin sees the rule rather than discovering it later.
+2. **On expansion** — computing effective permissions adds the implied `read`. Belt and braces: the first stops bad data being created, the second makes existing data safe.
+
+The rule exists because the alternative is incoherent. A user who may edit a giving record but not read one gets an edit form full of blanks that overwrites real values with them.
+
+### 12.3 Effective permissions
+
+```
+effective = expand( (role.permissions − user.revoked) ∪ user.granted )
+```
+
+Computed at token issue and re-computed at every refresh — so a role edit reaches every holder within one access-token lifetime (15 minutes), and sooner if the change bumps their permission version and forces a refresh.
+
+```
+roles:  { _id, churchId, name, description, permissions[], isSystem, version, createdBy, ... }
+users:  { ..., roleId, permissionOverrides: { granted[], revoked[] } }
+```
+
+`isSystem` marks the three roles every church starts with — Admin, Staff, Member — which may be **copied but not deleted**. A church that deletes its only admin role has locked itself out, and the recovery is a support ticket against a production database.
+
+### 12.4 Getting a change to a signed-in user
+
+The repo already has the mechanism: Redis-backed revocation with a token family (WP-10). A permission change writes a new `permVersion` for the affected users; the auth middleware compares the token's version against Redis and rejects a stale one, which the client's existing refresh interceptor turns into a silent re-issue. A *removal* of permission therefore takes effect immediately rather than at expiry — which is the direction that matters, since the risk is someone retaining access they should have lost.
+
+### 12.5 The rule that must not be softened
+
+**Hiding a button is not authorisation.**
+
+Requirement 7 is a UX requirement and is worth implementing exactly as stated — a member should not see a Delete they cannot use. But every one of those routes and buttons must *also* be enforced server-side, because the client is under the user's control and "the button was not rendered" is not a security boundary. The frontend uses permissions to decide what to *show*; the gateway uses them to decide what to *allow*. The plan treats a route protected only in the UI as an open route.
+
+Concretely, the existing `requireRole(...)` allowlist becomes `requirePermission("finance:read")`, and `selfOrLeader` keeps its ownership check on top — a member may read *their own* giving without holding `finance:read` over the congregation.
+
+### 12.6 Frontend shape
+
+The access token carries the effective permission list, so the UI needs no extra round trip. Then:
+
+- `<Can do="member:create">` renders children or nothing.
+- A route guard returns 404, not 403, for a resource the user cannot read. 403 confirms the thing exists.
+- Nav items filter themselves, so a Staff member does not see a Finance section that rejects them on click.
+
+---
+
+## §13. Per-church sites and the CMS (ADR-007)
+
+### 13.1 Routing
+
+```
+grace.altaros.com     → Grace Chapel's public site
+app.altaros.com       → the shared login / workspace picker
+admin.altaros.com     → platform admin
+api.altaros.com       → the gateway
+```
+
+A `tenantFromHost` middleware resolves the Host header to a church and puts it in the request scope, cached in Redis with a short TTL because it is on every request to the public site. An unknown subdomain gets a **branded "no such church" page, not a 404 from the router** — the visitor typed a church name, and a raw 404 tells them nothing.
+
+**Reserved slugs are refused at church creation, not patched later:** `www, api, app, admin, mail, smtp, ftp, cdn, static, assets, blog, help, support, status, docs, dev, staging, test, internal, dashboard, my, secure, login, auth, pay, checkout`. A church legitimately called "Apostolic Prayer International" must not be able to take `api`.
+
+### 13.2 Certificates
+
+`*.altaros.com` is a **single wildcard certificate** via cert-manager with a DNS-01 solver — the only challenge type that can prove a wildcard. That covers every church on the platform subdomain with one certificate and no per-church issuance.
+
+A church using **its own domain** (`gracechapel.org`) is a different problem: one certificate per domain, issued on demand, against a CA with rate limits. That is where the operational cost lives, and it is why custom domains are a **separate, later work package** (WP-41) rather than part of the subdomain feature. Shipping subdomains does not commit us to custom domains.
+
+### 13.3 The content model
+
+```
+pages         { _id, churchId, slug, title, seoDescription, navOrder,
+                draftVersionId, publishedVersionId, createdAt, updatedAt }
+pageVersions  { _id, churchId, pageId, number, status, publishedAt, publishedBy, note }
+blocks        { _id, churchId, versionId, type, position, data }
+siteThemes    { _id, churchId, palette, typography, logo, favicon, mode }
+```
+
+**Versioning at the page, not the block.** Publishing is then "point `publishedVersionId` at this version", and rollback is "point it at an earlier one" — both atomic, both instant, neither requiring the block rows to be touched. Versioning per block makes both operations a multi-row migration that can half-fail.
+
+**Position is a sparse integer** (10, 20, 30…), so inserting between two blocks is one write rather than renumbering the page.
+
+**Draft and published are different versions**, so a half-finished edit is never live, and a church can leave a page mid-edit for a week without consequence.
+
+### 13.4 The block library (v1)
+
+Chosen from what a church website actually contains, not from what a page builder usually offers:
+
+`hero` · `rich_text` · `service_times` · `sermons` · `events` · `giving_cta` · `leadership` · `contact_and_directions` · `live_stream` · `gallery` · `announcements` · `spacer`
+
+`events`, `sermons` and `giving_cta` **read from the platform's own data**. A church that adds an event in the dashboard should not then re-type it into its website; that duplication is how a church site becomes wrong within a month.
+
+**Deliberately not in v1:** custom HTML, custom CSS, a free-form drag canvas, per-block responsive overrides, A/B tests, forms builder. Each is the feature that turns a CMS into a support queue.
+
+### 13.5 The security boundary
+
+The editor is a church staff member, and the audience is that church's own congregation — the people most likely to trust whatever the page says. So:
+
+- **No block accepts HTML or script.** `rich_text` is a constrained subset (headings, bold, italic, lists, links) sanitised server-side on save and again on render.
+- **Every URL is validated** against an allowlist of schemes. `javascript:` in a link field is the cheapest possible XSS.
+- **Uploads go to Cloudinary**, typed and size-limited, never served from the platform's own origin — an uploaded file on the same origin as the session cookie is a much larger problem than an uploaded file on a CDN.
+- **A CSP on the public site** that does not permit inline script, so a sanitiser bug is not automatically an exploit.
+
+---
+
+## §14. Design directives
+
+These apply to every surface built from here, and to the retrofit in WP-42.
+
+**Loading is skeletal, not spinners.** A skeleton in the shape of the content preserves layout and tells the user what is coming; a spinner says only "wait" and then reflows the page under them. Spinners are permitted only for an action with no known result shape — a payment redirect, say.
+
+**Both themes are first-class.** Dark and light are chosen by the user and default to the system preference. Every token is defined in both; nothing hard-codes a colour. A church hall is dark and a phone in Accra at midday is not.
+
+**Cards in a row are the same height, with actions docked at the bottom.** `display: flex; flex-direction: column` on the card, `margin-top: auto` on the action row. Ragged card bottoms are the single most common tell of a generic admin template.
+
+**Motion is part of the build, not a pass at the end.** Ease-out curves; no bounce. Every animation needs a `prefers-reduced-motion` alternative — the 404 pages already taught this lesson (see the WP-16 notes).
+
+**A drawn visual language, used with discipline.** Doodles and custom shapes are the brand, and the requirement is that the platform should not look like anything else. The way that fails is scattering decoration until the interface is noisy; the way it works is *one* coherent hand-drawn system — consistent line weight, a defined shape vocabulary for buttons and cards, illustration reserved for empty states, splash, 404, and section headers rather than sprayed across data-dense screens. A finance table should be calm. The empty state above it can be delightful.
+
+**Splash and 404 on every surface.** Both exist on the four web apps and mobile already; the remaining apps match, and the splash must never gate first paint on a network call.
+
+**Icons everywhere a label is repeated**, never icon-only for a destructive action.
+
+**Latest package versions**, per the existing convention in this repo.
+
+
+### Phase 3 — Workspaces, RBAC and church sites (added 1 Aug 2026)
+
+These are sequenced so the risk-carrying migration happens once, early, and everything else builds on it. **WP-35 and WP-36 are prerequisites for the rest and should not be parallelised with them.**
+
+**WP-35 · Workspace-scoped identity migration** — Depends on: WP-10, WP-16
+Compound `(churchId,email)` and `(churchId,phone)` uniqueness replacing the global `email_unique`. Workspace on `LoginRequest`, OTP keys namespaced by workspace, every credential lookup church-scoped. The legacy Mongoose schema declares `email: {unique: true}` on the same collection (ADR-005), so this is a coordinated index change across two live writers.
+**Sequence, and it matters:** (1) add the compound indexes alongside the existing one; (2) backfill and *prove* zero `(churchId,email)` collisions; (3) update both writers to scope their lookups; (4) only then drop `email_unique`. Dropping first leaves a window where two churches can register the same email and the compound index build then fails.
+**Done when:** the same email address holds an account in two churches; signing in to one cannot see the other's data; and a wrong workspace, wrong password, and non-existent workspace return the same message in the same time.
+
+**WP-36 · RBAC core** — Depends on: WP-35
+`roles`, `permissions`, `permissionOverrides`; effective-permission computation; dependency expansion (`write ⇒ read`) enforced on write and on expansion; `requirePermission` replacing `requireRole`; permissions in the access token; `permVersion` invalidation through the existing Redis revocation path. Three system roles per church (Admin, Staff, Member) that can be copied but not deleted.
+**Done when:** an admin creates a role, assigns it, grants one extra permission to one user, then edits the role — and that user keeps their individual grant while picking up the role's change, within one token refresh. Removing a permission takes effect on the next request, not at token expiry.
+
+**WP-37 · Invitations** — Depends on: WP-36, WP-15
+Invite staff and members with an initial role. Hashed single-use tokens, 7-day expiry, workspace carried by the token. Delivery over the notification service (email and SMS), which means it is consent-aware and quiet-hours-aware for free.
+**Done when:** an invited member accepts, lands in the inviting church with the intended role, and the token cannot be reused; an expired or revoked token gives the same answer as a forged one.
+
+**WP-38 · Permission-aware UI** — Depends on: WP-36
+`<Can>`, permission-filtered navigation, 404-not-403 for unreadable resources, and the action buttons genuinely absent rather than disabled. Applied across `dashboard`, `web` and `admin`.
+**Done when:** a Member-role session renders no Finance nav, no Delete buttons, and a direct URL to a finance route returns the not-found page — **and the same request without the UI still returns 403 from the gateway**, proving the UI is not the boundary.
+
+**WP-39 · Subdomain routing** — Depends on: WP-35
+`tenantFromHost` middleware, reserved-slug refusal at church creation, the wildcard `*.altaros.com` certificate via cert-manager DNS-01, a branded unknown-church page, and ingress for the wildcard host.
+**Done when:** `grace.altaros.com` resolves to Grace Chapel over TLS with no per-church certificate step, and a church cannot be created with the slug `api`.
+
+**WP-40 · Church site CMS** — Depends on: WP-39
+`pages`, `pageVersions`, `blocks`, `siteThemes`; the v1 block library; draft/publish/rollback; Cloudinary media; sanitisation on save and render; CSP on the public origin. Editor in the dashboard, renderer on the public subdomain.
+**Done when:** a church adds a page, arranges blocks, publishes, and the live site changes — while the draft was invisible until publish and a rollback restores the previous version in one action. A block whose text contains `<script>` renders as text.
+
+**WP-41 · Custom domains** — Depends on: WP-40
+Per-domain certificate issuance, domain verification, and the rate-limit handling that per-tenant certificates require. Deliberately separate from WP-39, so shipping subdomains does not commit the platform to the operational cost of customer domains.
+**Done when:** a church points its own domain at the platform, and issuance failures are visible and retryable rather than silent.
+
+**WP-42 · Design-system retrofit** — Depends on: WP-38
+The §14 directives applied across every existing surface: skeletons replacing spinners, dark/light tokens, equal-height cards with docked actions, the shape and doodle vocabulary, motion with reduced-motion alternatives, splash and 404 everywhere.
+**Done when:** no surface uses a spinner where the result shape is known; every card row is flush at the bottom; both themes pass contrast on body text; and every animation has a reduced-motion path.
+
+---
+
 ## §8. What this plan adds beyond the PDF
 
 The PDF is a strong skeleton. These are the gaps that research and the repo audit surfaced — each is already assigned to a WP above.
@@ -826,6 +1076,12 @@ The PDF is a strong skeleton. These are the gaps that research and the repo audi
 | R-7 | Bible translation shipped without a commercial licence | Medium-High | WP-28 restricts to public domain until licences are signed |
 | R-8 | AI produces doctrinally objectionable output, or mishandles a crisis disclosure | **Critical (safety)** | WP-30 guardrails 1 and 2; crisis escalation tested with seeded phrases |
 | R-9 | SMS costs exceed subscription revenue | Medium | WP-22 cost preview; WP-23 WhatsApp as cheaper primary; per-plan metering |
+| R-10 | **The `email_unique` migration (WP-35) is coordinated across two live writers on one shared collection.** Dropping the global index before both writers scope their lookups leaves a window where two churches register the same address, after which the compound index build fails and the fix is manual data surgery | **High** | WP-35's four-step sequence: add compound indexes → backfill and prove zero collisions → update both writers → only then drop. Never the other order |
+| R-11 | **A permission enforced only in the UI.** Requirement 7 hides routes and buttons, which reads as security and is not — the client is under the user's control | **Critical** | §12.5: every hidden route also enforced at the gateway. WP-38's acceptance explicitly asserts the API still returns 403 with the UI bypassed |
+| R-12 | **A permission removed from a role is not removed from users who hold it individually** (ADR-008, Q-11) — an admin believes access is revoked when it is not | High | Role editor warns and lists affected users; a "clear individual overrides" action. Needs the Q-11 decision before WP-36 ships |
+| R-13 | **A church CMS block becomes an XSS vector aimed at that church's own congregation** — the audience most likely to trust the page | **Critical** | §13.5: no HTML or script in any block, sanitisation on save *and* render, URL scheme allowlist, uploads off-origin to Cloudinary, CSP on the public site |
+| R-14 | **Custom-domain certificate issuance scales per customer** and hits CA rate limits as churches are onboarded in batches | Medium-High | WP-41 is deliberately separate from WP-39, so subdomains ship without taking on this cost; issuance failures must be visible and retryable, never silent |
+| R-15 | A church takes a **reserved subdomain** (`api`, `admin`, `www`) and breaks platform routing | Medium | Reserved-slug list refused at church creation in WP-39, not patched after the fact |
 | R-10 | Kafka operational burden pre-launch | Medium | Single-node KRaft in dev; ADR-004 keeps the deploy simple; revisit managed Kafka at scale |
 | R-11 | Solo/small team across 8 services + 5 frontends + compliance | High | ADR-004 single-binary deploy; strict WP dependency order; Phase 3 items deferrable but never skippable pre-launch |
 
@@ -841,6 +1097,11 @@ Blocking or near-blocking. Each needs an owner decision; none should stall Phase
 - **Q-4:** Who bears transaction fees — church, giver, or split? Materially changes giving conversion. **Provisionally answered in code:** the adapter defaults `bearer` to `subaccount`, so the church bears Paystack's fee as a cost of its own collection, which follows from ADR-002 making the church the merchant. It is one config field to change — but changing it after churches have seen their first settlement statement is a trust problem, so it should be decided before the first live charge.
 - **Q-5:** Is there a launch partner denomination? A branch network as design partner would validate WP-11's hierarchy against reality before it hardens.
 - **Q-6 (new, blocks WP-13's acceptance):** Does ALTAR OS have a **Paystack account with test-mode keys**? The adapter is written and covered, but "a test-mode MoMo charge settles to a test subaccount with the platform split applied" cannot be demonstrated without credentials. Two things can only be confirmed against the real API: that a subaccount can actually be created with a **mobile money** settlement destination (Paystack Ghana's supported MoMo settlement codes are not documented in a form worth guessing at), and that `transaction_charge` behaves as documented against a live split. Until then WP-13 stays 🟡.
+- **Q-9 (new, blocks WP-35):** Can one person hold **one login across several churches** with a workspace picker after authenticating, or must they hold separate accounts? The plan assumes separate accounts, because a single identity spanning churches forces a decision about what an unscoped session may see and there is no safe answer. A picker is possible later as a convenience layer over separate accounts. Confirm before the index migration, because it is hard to reverse.
+- **Q-10 (new):** Is **self-signup** allowed, or is every account invited? §11.3 assumes invitation-only by default with self-signup as a per-church setting. It changes the abuse surface: open signup on a subdomain lets anyone create an account inside a church's workspace.
+- **Q-11 (new, needs an explicit decision):** Under ADR-008, if a permission is granted to a user individually and later **removed from their role**, the user **keeps it**. That follows directly from requirement 5, but it means "remove finance access from the Staff role" does not remove it from everyone. Should the role editor warn and list the users with individual grants, and should there be a "clear individual overrides" action? Recommended: yes to both — the alternative is a permission removal an admin believes worked.
+- **Q-12 (new):** **Who pays for a custom domain** (WP-41), and is it a paid tier feature? Per-domain certificate issuance is the one part of this plan with a per-tenant operational cost that grows with customer count.
+- **Q-13 (new):** Do church sites need to be **indexed by Google**? If yes, the public renderer must be server-rendered rather than a client-side SPA, which changes the hosting shape in WP-40. Churches generally do want to be found, so the plan assumes yes.
 - **Q-8 (new):** How does a member **find their church at signup**? The web register form asks for a "church code", but the API accepts only `churchId` (a 24-character ObjectId) or `churchName` (which *creates* a church and makes the registrant its admin — wrong for a member joining one). The form now passes the entered value as `churchId`, which works only if an admin shares the raw id. A friendly short code needs either a lookup endpoint (`GET /churches/by-code/:code`) or a `code` field on the church record with a resolve step in registration. Small, but it sits directly on the member-activation path §2.2 identifies as the actual hard problem.
 - **Q-7 (new):** Is the **commission rate** set? The code takes it as basis points per subaccount with a platform default, so nothing is hard-coded — but the rate is the business model (§2.2: the transaction-fee line out-earns the SaaS line at scale), and it is written into each church's subaccount at creation. Changing it later means updating every existing subaccount.
 - **Q-6:** Target device floor. WP-45 assumes Android 8 / 2GB. Confirm or adjust.
