@@ -8,18 +8,17 @@ package service
 
 import (
 	"fmt"
-	"log/slog"
 	"net/http"
 	"sort"
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/hayfordstanley/altar-os/internal/platform/config"
+	"github.com/hayfordstanley/altar-os/internal/platform/deps"
 	"github.com/hayfordstanley/altar-os/internal/platform/httpx"
 )
 
 // Builder returns the routes a service mounts under /api/v1.
-type Builder func(cfg *config.Config, log *slog.Logger) http.Handler
+type Builder func(d *deps.Deps) http.Handler
 
 // registry is the full set of runnable services.
 //
@@ -31,7 +30,7 @@ var registry map[string]Builder
 func init() {
 	registry = map[string]Builder{
 		"gateway":       buildGateway,
-		"auth":          placeholder("auth", "login, OTP, JWT issue/refresh, RBAC"),
+		"auth":          buildAuth,
 		"church":        placeholder("church", "organizations, branches, departments, groups"),
 		"member":        placeholder("member", "member CRM, households, status pipeline"),
 		"finance":       placeholder("finance", "giving, campaigns, pledges, ledger"),
@@ -61,17 +60,21 @@ func Lookup(name string) (Builder, error) {
 	return b, nil
 }
 
-// buildGateway fronts the platform: it terminates client requests, and will
-// authenticate, rate-limit and resolve tenancy before forwarding over gRPC.
-func buildGateway(cfg *config.Config, log *slog.Logger) http.Handler {
+// buildGateway fronts the platform. It currently also serves the auth routes
+// directly, so the existing frontends have a single origin to talk to while
+// the remaining services are still placeholders.
+func buildGateway(d *deps.Deps) http.Handler {
 	r := chi.NewRouter()
+
 	r.Get("/", func(w http.ResponseWriter, _ *http.Request) {
 		httpx.JSON(w, http.StatusOK, map[string]any{
 			"service":  "gateway",
 			"services": Names(),
-			"region":   cfg.DataRegion,
+			"region":   d.Config.DataRegion,
 		})
 	})
+
+	r.Mount("/", buildAuth(d))
 	return r
 }
 
@@ -79,7 +82,7 @@ func buildGateway(cfg *config.Config, log *slog.Logger) http.Handler {
 // routes yet. It exists so the topology is real and runnable from day one;
 // each is replaced as its work package lands.
 func placeholder(name, responsibility string) Builder {
-	return func(cfg *config.Config, log *slog.Logger) http.Handler {
+	return func(_ *deps.Deps) http.Handler {
 		r := chi.NewRouter()
 		r.Get("/", func(w http.ResponseWriter, _ *http.Request) {
 			httpx.JSON(w, http.StatusOK, map[string]any{

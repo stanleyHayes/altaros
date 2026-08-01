@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/hayfordstanley/altar-os/internal/platform/config"
+	"github.com/hayfordstanley/altar-os/internal/platform/deps"
 	"github.com/hayfordstanley/altar-os/internal/platform/httpx"
 	"github.com/hayfordstanley/altar-os/internal/platform/logging"
 	"github.com/hayfordstanley/altar-os/internal/service"
@@ -61,8 +62,23 @@ func run() error {
 
 	log := logging.New(cfg.ServiceName, string(cfg.Env), *logLevel)
 
+	// Connect everything up front: a process that starts is a process that can
+	// serve. Discovering mid-request that Redis is unreachable would mean
+	// issuing tokens that cannot be revoked.
+	startCtx, cancelStart := context.WithTimeout(context.Background(), 30*time.Second)
+	d, err := deps.Build(startCtx, cfg, log)
+	cancelStart()
+	if err != nil {
+		return err
+	}
+	defer func() {
+		closeCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		d.Close(closeCtx)
+	}()
+
 	root := httpx.NewRouter(cfg, log)
-	root.Mount("/api/v1", build(cfg, log))
+	root.Mount("/api/v1", build(d))
 
 	srv := &http.Server{
 		Addr:              fmt.Sprintf(":%d", cfg.HTTPPort),

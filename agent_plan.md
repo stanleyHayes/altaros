@@ -492,7 +492,9 @@ The PDF names four events. A working system needs a governed catalog with a vers
 
 | WP-08 | 🟡 partial | **Audit log done:** append-only, tenant-scoped, records *reads* of sensitive resources (prayer, welfare, exports) and denied attempts, attributing the actor from the request scope rather than the caller. Reading a prayer request writes an audit row — proven by test. **Outstanding:** OpenTelemetry tracing (gateway → service → DB) is not implemented. |
 
-Not yet started: Phase 1 (WP-10 onward).
+| WP-10 | ✅ done | Auth service in Go: phone OTP (new — was a 501 stub), password login, refresh with rotation, revocation. Verified over HTTP against **the same MongoDB and bcrypt hashes the TypeScript API wrote**, so no migration is needed at cutover. Replayed refresh tokens revoke the whole family; expired and revoked tokens rejected. |
+
+Not yet started: WP-11 (org/branch hierarchy) onward.
 
 ### Phase 0 — Salvage & foundation
 
