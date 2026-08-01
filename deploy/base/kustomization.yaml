@@ -17,6 +17,7 @@ resources:
   - pdb.yaml
   - ingress.yaml
   - certificate.yaml
+  - custom-domains.yaml
 
 images:
   - name: altar-os

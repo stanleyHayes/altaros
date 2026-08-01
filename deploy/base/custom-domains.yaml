@@ -1,0 +1,192 @@
+# TLS for churches serving their site from their OWN domain (WP-41, §13.2).
+#
+# §13.2 compared two patterns and could not settle them from documentation:
+#
+#   cert-manager Certificate per domain — declarative, reconciled by an
+#     operator, but one Kubernetes resource per tenant domain. Onboarding a
+#     church becomes a cluster write, and the operator reconciles every
+#     Certificate on a loop whose cost grows with customer count.
+#
+#   Caddy on-demand TLS — issues on the first TLS handshake for an unknown
+#     host, renews and cleans up on its own, and needs NO per-tenant resource
+#     at all. Onboarding a church stays a database row, which is the same
+#     property that makes subdomains cheap.
+#
+# On-demand is chosen, and the deciding argument is the one §13.2 already
+# names: it "requires an `ask` endpoint that checks the domain against the
+# database — without it, anyone pointing DNS at us triggers issuance". That
+# endpoint is not a cost of the approach, it is the approach. It has to exist
+# either way, because a per-domain Certificate resource still needs something
+# to decide which domains deserve one — and with on-demand that decision lives
+# in one place, is unit-tested, and is the same check that decides whether the
+# domain resolves at all.
+#
+# The binding limit when onboarding in batches is 300 NEW ORDERS per account
+# per 3 hours, not the per-domain one. `ask` is what keeps that budget spent on
+# real customers: without it, a single attacker with a wildcard DNS zone can
+# exhaust it and stop every legitimate church onboarding, with every attempt
+# attributed to us.
+#
+# The wildcard for *.altaros.com stays in certificate.yaml. Subdomains and
+# customer domains are deliberately served by different mechanisms, because
+# only one of them has a per-tenant cost.
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: caddy-config
+  labels:
+    app.kubernetes.io/name: altar-os
+    app.kubernetes.io/component: tls-custom-domains
+data:
+  Caddyfile: |
+    {
+      # On-demand issuance, gated on the ask endpoint. The gateway answers 200
+      # only for a domain a church has claimed AND proven ownership of by DNS.
+      # A non-2xx is a refusal, so a gateway outage fails CLOSED — no new
+      # certificates — rather than issuing for anything asked of it.
+      on_demand_tls {
+        ask http://gateway.altar-prod.svc.cluster.local/api/v1/tls/allow
+
+        # A second ceiling under the ask endpoint. If a bug ever made `ask`
+        # permissive, this bounds the damage to the ACME account rather than
+        # letting one incident consume the 300-orders-per-3-hours budget.
+        interval 2m
+        burst 5
+      }
+
+      # Staging while this is being proven out. Let's Encrypt production has
+      # rate limits that a misconfiguration burns for a week; staging does not.
+      # Removing this line is the deliberate step that makes issuance real.
+      acme_ca https://acme-staging-v02.api.letsencrypt.org/directory
+
+      email ops@altaros.com
+    }
+
+    # Every host NOT under altaros.com — that is, every customer domain.
+    # The wildcard certificate covers our own subdomains, so they never reach
+    # this block and never trigger on-demand issuance.
+    https:// {
+      tls {
+        on_demand
+      }
+
+      reverse_proxy http://gateway.altar-prod.svc.cluster.local {
+        # The Host header must survive unchanged: it IS the tenant identifier,
+        # and the gateway resolves the church from it. A proxy that rewrites it
+        # breaks every custom domain at once, and silently.
+        header_up Host {host}
+        header_up X-Forwarded-For {remote_host}
+        header_up X-Forwarded-Proto {scheme}
+      }
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: caddy-custom-domains
+  labels:
+    app.kubernetes.io/name: altar-os
+    app.kubernetes.io/component: tls-custom-domains
+spec:
+  # Two for availability, and no more without shared certificate storage:
+  # each replica keeps its own certificates on disk, so N replicas mean each
+  # domain is issued up to N times. That multiplies the ACME budget by the
+  # replica count, which is exactly the resource this design protects.
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: altar-os
+      app.kubernetes.io/component: tls-custom-domains
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: altar-os
+        app.kubernetes.io/component: tls-custom-domains
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      containers:
+        - name: caddy
+          image: caddy:2-alpine
+          ports:
+            - name: https
+              containerPort: 443
+            - name: http
+              containerPort: 80
+          volumeMounts:
+            - name: config
+              mountPath: /etc/caddy
+            - name: data
+              mountPath: /data
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              # Memory only. A CPU limit adds tail latency through CFS
+              # throttling even on an idle node, and this sits on the TLS
+              # handshake path where that is felt directly.
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+      volumes:
+        - name: config
+          configMap:
+            name: caddy-config
+        - name: data
+          # A PVC, not emptyDir. Certificates live here, and on emptyDir every
+          # pod restart re-issues every customer domain — which is both an
+          # outage-shaped spike in ACME orders and a fast way to hit the rate
+          # limit during an incident.
+          persistentVolumeClaim:
+            claimName: caddy-certificates
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: caddy-certificates
+  labels:
+    app.kubernetes.io/name: altar-os
+    app.kubernetes.io/component: tls-custom-domains
+spec:
+  accessModes:
+    # ReadWriteOnce, which is why replicas is 2 rather than higher and why
+    # both must schedule to the same node — or this becomes ReadWriteMany and
+    # a storage class that supports it. The alternative is Caddy's clustered
+    # storage backend, which is the change to make when custom domains grow
+    # past what two replicas serve.
+    - ReadWriteOnce
+  resources:
+    requests:
+      # Certificates are small; this is generous for thousands of domains.
+      storage: 2Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: caddy-custom-domains
+  labels:
+    app.kubernetes.io/name: altar-os
+    app.kubernetes.io/component: tls-custom-domains
+spec:
+  # A LoadBalancer of its own, because customer domains point their CNAME
+  # here. Its address is what the CNAME target resolves to, and it must be
+  # stable — a church cannot be asked to edit DNS because we changed load
+  # balancers.
+  type: LoadBalancer
+  selector:
+    app.kubernetes.io/name: altar-os
+    app.kubernetes.io/component: tls-custom-domains
+  ports:
+    - name: https
+      port: 443
+      targetPort: https
+    - name: http
+      port: 80
+      targetPort: http

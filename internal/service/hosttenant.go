@@ -11,8 +11,10 @@ import (
 	"time"
 
 	"github.com/hayfordstanley/altar-os/internal/domain/church"
+	"github.com/hayfordstanley/altar-os/internal/domain/customdomain"
 	"github.com/hayfordstanley/altar-os/internal/platform/deps"
 	"github.com/hayfordstanley/altar-os/internal/platform/httpx"
+	"github.com/hayfordstanley/altar-os/internal/platform/tenancy"
 )
 
 // Host-based tenant resolution (WP-39, §13.1).
@@ -106,15 +108,25 @@ func SubdomainOf(host, base string) string {
 // the same binary can serve the gateway and the public sites.
 func tenantFromHost(d *deps.Deps) func(http.Handler) http.Handler {
 	svc := church.NewService(d.Mongo)
+	domains := customdomain.NewService(d.Mongo)
 	cache := newHostCache(hostCacheTTL)
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			slug := SubdomainOf(r.Host, d.Config.PublicBaseDomain)
 			if slug == "" || church.IsReservedSlug(slug) {
-				// Not a church subdomain. The platform's own hosts are reserved
-				// slugs by construction, which is what makes this one check
-				// rather than two lists that can disagree.
+				// Not a subdomain of ours. It may still be a church's OWN
+				// domain (WP-41), so that is checked before giving up —
+				// gracechapel.org has no subdomain to read and is every bit as
+				// much that church's site as grace-chapel.altaros.com.
+				//
+				// Checked SECOND, and that order matters: the platform's own
+				// hosts are excluded above, so no custom-domain record can
+				// capture api.altaros.com however it was created.
+				if resolved, ok := resolveCustomDomain(r, d, domains, cache); ok {
+					next.ServeHTTP(w, r.WithContext(withHostChurch(r.Context(), resolved)))
+					return
+				}
 				next.ServeHTTP(w, r)
 				return
 			}
@@ -314,4 +326,60 @@ func holdingPage(escapedName string) string {
   </main>
 </body>
 </html>`
+}
+
+// resolveCustomDomain resolves a church's OWN domain to its church (WP-41).
+//
+// Shares the host cache with subdomain resolution, keyed by the full hostname
+// rather than a slug. A custom domain is on every request to that church's
+// site — including every image — so it cannot be a database read each time, and
+// misses are cached for the same reason: a name pointed at us that we do not
+// serve should be cheap to refuse.
+func resolveCustomDomain(
+	r *http.Request,
+	d *deps.Deps,
+	domains *customdomain.Service,
+	cache *hostCache,
+) (HostChurch, bool) {
+	host := strings.ToLower(strings.TrimSuffix(strings.TrimSpace(r.Host), "."))
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	if host == "" || net.ParseIP(host) != nil {
+		return HostChurch{}, false
+	}
+
+	// "host:" rather than the bare hostname, so a custom domain and a subdomain
+	// slug can never collide in one cache.
+	key := "host:" + host
+	if cached, ok := cache.get(key); ok {
+		return cached.church, cached.found
+	}
+
+	churchID, err := domains.ChurchFor(r.Context(), host)
+	if err != nil {
+		if !errors.Is(err, customdomain.ErrNotFound) {
+			d.Log.Error("could not resolve a custom domain",
+				"host", host, "error", err.Error())
+		}
+		cache.put(key, hostResolution{})
+		return HostChurch{}, false
+	}
+
+	// Read inside that church's own scope rather than through an unscoped
+	// lookup. The tenant wrapper's guarantee is worth keeping even here, where
+	// the church id came from a hostname we resolved ourselves — an unscoped
+	// accessor added for one caller is the one that gets reused later.
+	scoped := tenancy.WithScope(r.Context(), tenancy.Scope{ChurchID: churchID})
+	found, err := church.NewService(d.Mongo).ByID(scoped, churchID)
+	if err != nil {
+		// The domain points at a church that is gone or inactive. Cached as a
+		// miss so a stale record does not cost a lookup per request.
+		cache.put(key, hostResolution{})
+		return HostChurch{}, false
+	}
+
+	resolved := HostChurch{ID: found.ID.Hex(), Name: found.Name, Slug: found.Slug}
+	cache.put(key, hostResolution{found: true, church: resolved})
+	return resolved, true
 }

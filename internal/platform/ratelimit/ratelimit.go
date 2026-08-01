@@ -178,6 +178,12 @@ var (
 	// a guard against a runaway client loop taking the database with it.
 	Write = Rule{Name: "write", Limit: 120, Window: time.Minute}
 
+	// VerifyDomain bounds custom-domain verification, which makes a real DNS
+	// query per call against somebody else's nameserver. A church waiting for
+	// a record to propagate clicks "check again" repeatedly, and that is a
+	// lookup storm aimed at their registrar with our name on it.
+	VerifyDomain = Rule{Name: "verify_domain", Limit: 20, Window: 10 * time.Minute}
+
 	// PublicSite covers a church's own website, which is read by its
 	// congregation, by search engines and by the AI crawlers §13.4 names.
 	// Generous, because this is the one surface where traffic is the point —

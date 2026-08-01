@@ -14,6 +14,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 	"golang.org/x/crypto/bcrypt"
 
+	"github.com/hayfordstanley/altar-os/internal/domain/church"
 	"github.com/hayfordstanley/altar-os/internal/domain/consent"
 	"github.com/hayfordstanley/altar-os/internal/domain/finance"
 	"github.com/hayfordstanley/altar-os/internal/domain/member"
@@ -384,7 +385,13 @@ func (s *Seeder) church(ctx context.Context, orgID bson.ObjectID, name, slug, ci
 		"email":          "info@" + slug + ".org",
 		"timezone":       "Africa/Accra",
 		"currency":       "GHS",
-		"plan":           "growth",
+		// A valid ChurchPlan. "growth" was written here and is not one of
+		// free/basic/pro/enterprise — it never surfaced because the seeder
+		// ADOPTS the churches that already exist rather than creating them, so
+		// the invalid value only lands on a genuinely fresh database. An
+		// unrecognised plan normalises to FREE, so a church seeded that way
+		// would silently lose the paid features WP-41 gates on.
+		"plan": string(church.PlanPro),
 		// A test-mode subaccount, so the giving path has somewhere to settle.
 		// ADR-002: money settles to the CHURCH, never to ALTAR OS.
 		"payoutSubaccountCode": "ACCT_seed_" + strings.ReplaceAll(slug, "-", "_"),
