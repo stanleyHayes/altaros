@@ -385,11 +385,13 @@ function AiPrayerChat() {
                             ? "rgba(255,255,255,0.15)"
                             : "rgba(103,58,183,0.06)",
                         borderRadius: 2,
-                        borderLeft: "3px solid",
+                        // The tinted panel and the accented reference already
+                        // set the quotation apart.
+                        border: "1px solid",
                         borderColor:
                           msg.role === "user"
-                            ? "rgba(255,255,255,0.5)"
-                            : "primary.main",
+                            ? "rgba(255,255,255,0.25)"
+                            : "rgba(103,58,183,0.18)",
                       }}
                     >
                       <Typography

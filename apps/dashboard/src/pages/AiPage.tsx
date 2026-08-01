@@ -540,6 +540,8 @@ function InsightsTab() {
         <Card
           key={insight.id}
           sx={{
+            // Severity reads from the border colour and the two chips in the
+            // header. A thickened left edge restated it a fourth time.
             border: "1px solid",
             borderColor:
               insight.severity === "high"
@@ -547,7 +549,6 @@ function InsightsTab() {
                 : insight.severity === "medium"
                   ? "warning.light"
                   : "success.light",
-            borderLeftWidth: 4,
           }}
         >
           <CardContent>
@@ -803,9 +804,14 @@ function PrayerTab() {
                             ? "rgba(255,255,255,0.15)"
                             : "primary.50",
                         borderRadius: 1,
-                        borderLeft: "3px solid",
+                        // The tinted panel and the accented reference already
+                        // set the quotation apart; a coloured left edge was
+                        // decoration on top of a distinction already made.
+                        border: "1px solid",
                         borderColor:
-                          msg.role === "user" ? "rgba(255,255,255,0.5)" : "primary.main",
+                          msg.role === "user"
+                            ? "rgba(255,255,255,0.25)"
+                            : "primary.100",
                       }}
                     >
                       <Typography

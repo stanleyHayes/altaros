@@ -52,7 +52,29 @@ export default function NotFoundPage() {
               0%, 100% { background-position: 0% center; }
               50% { background-position: 100% center; }
             }
-          `}</style>
+          
+        /* Vestibular safety. These pages animate perpetually — floating
+           items, a wobbling church, a blinking face, a wiggling button — and
+           continuous motion is exactly what triggers nausea and dizziness for
+           people with vestibular disorders. A 404 is already a moment of
+           friction; it must not also make someone unwell.
+
+           The page is fully legible without any of it, so the reduced-motion
+           path removes the motion rather than substituting a gentler version:
+           there is nothing here that motion communicates. Static transitions
+           are kept so focus and hover states remain perceivable. */
+        @media (prefers-reduced-motion: reduce) {
+          *,
+          *::before,
+          *::after {
+            animation: none !important;
+            transition-duration: 0.01ms !important;
+          }
+          .draw-line {
+            stroke-dashoffset: 0 !important;
+          }
+        }
+      `}</style>
 
           <Typography
             variant="h4"

@@ -180,11 +180,19 @@ export default function Sidebar({
         "& .MuiDrawer-paper": {
           width: drawerWidth,
           boxSizing: "border-box",
+          // Ease-out rather than MUI's `sharp` (an ease-in-out): the panel
+          // should leave immediately and settle, not accelerate into motion.
+          // Width is a layout property and normally not worth animating, but
+          // here the width IS what changes, so there is nothing cheaper to
+          // animate instead.
           transition: theme.transitions.create("width", {
-            easing: theme.transitions.easing.sharp,
+            easing: "cubic-bezier(0.22, 1, 0.36, 1)",
             duration: theme.transitions.duration.enteringScreen,
           }),
           overflowX: "hidden",
+          "@media (prefers-reduced-motion: reduce)": {
+            transition: "none",
+          },
         },
       }}
     >
