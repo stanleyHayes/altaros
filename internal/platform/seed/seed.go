@@ -112,6 +112,28 @@ func New(db *mongodb.DB, opt Options) *Seeder {
 	}
 }
 
+// branch is one church the seeder maintains.
+type branch struct {
+	name, slug, city string
+	members          int
+}
+
+// branches is the single list of churches this seeder owns.
+//
+// Reset reads it too, and that is the point of it being one list: the seeder
+// ADOPTS a church that already has one of these slugs rather than creating a
+// duplicate, so an adopted church carries no seed marker and a marker-based
+// reset never touches it — or anything written into it. Identifying those
+// churches by slug is the only accurate answer to "which churches does this
+// seeder write to".
+func (s *Seeder) branches() []branch {
+	return []branch{
+		{"Grace Chapel International", "grace-chapel", "Accra", s.opt.MembersPerChurch},
+		{"Living Word Assembly", "living-word-assembly", "Kumasi", s.opt.MembersPerChurch * 2 / 3},
+		{"Calvary Temple", "calvary-temple", "Takoradi", s.opt.MembersPerChurch / 2},
+	}
+}
+
 // Reset removes everything a previous seed created, and nothing else.
 func (s *Seeder) Reset(ctx context.Context) error {
 	// Website content first, and by CHURCH rather than by marker.
@@ -152,8 +174,21 @@ func (s *Seeder) Reset(ctx context.Context) error {
 // would otherwise find the old church's roles gone with the church and leave
 // orphans behind.
 func (s *Seeder) resetWebsites(ctx context.Context) error {
+	slugs := make([]string, 0, 3)
+	for _, b := range s.branches() {
+		slugs = append(slugs, b.slug)
+	}
+
+	// Marker OR slug. The marker alone misses every church the seeder ADOPTED
+	// rather than created — and those are exactly the churches whose roles and
+	// website it has been writing into, so a marker-only reset leaves them
+	// accumulating across runs. That is not hypothetical: it left eleven
+	// leftover roles on one church before this was fixed.
 	cursor, err := s.raw.Collection("churches").Find(ctx,
-		bson.M{MarkerField: Marker},
+		bson.M{"$or": bson.A{
+			bson.M{MarkerField: Marker},
+			bson.M{"slug": bson.M{"$in": slugs}},
+		}},
 		options.Find().SetProjection(bson.M{"_id": 1}))
 	if err != nil {
 		return fmt.Errorf("seed: find seeded churches: %w", err)
@@ -207,14 +242,7 @@ func (s *Seeder) Run(ctx context.Context) (*Result, error) {
 	// A denomination with branches, because WP-11's whole point is that an org
 	// admin sees across branches and a branch admin does not. One church would
 	// never exercise that.
-	branches := []struct {
-		name, slug, city string
-		members          int
-	}{
-		{"Grace Chapel International", "grace-chapel", "Accra", s.opt.MembersPerChurch},
-		{"Living Word Assembly", "living-word-assembly", "Kumasi", s.opt.MembersPerChurch * 2 / 3},
-		{"Calvary Temple", "calvary-temple", "Takoradi", s.opt.MembersPerChurch / 2},
-	}
+	branches := s.branches()
 
 	for _, b := range branches {
 		churchID, err := s.church(ctx, orgID, b.name, b.slug, b.city)
