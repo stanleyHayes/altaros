@@ -470,9 +470,37 @@ func (s *Service) roleFor(ctx context.Context, user userRecord) (*Role, error) {
 		return nil, err
 	}
 
-	// No system roles yet in this church. An empty role is the safe answer:
-	// the user holds nothing until someone provisions the roles, which fails
-	// closed rather than granting by default.
+	// The church has no system roles. Provision them now, then retry.
+	//
+	// This is a write on a read path, which is worth justifying rather than
+	// hiding. EnsureSystemRoles was originally called from exactly one place —
+	// the seeder — so every church that did not come out of `make seed` had no
+	// roles at all, `roleFor` fell through to an empty set, and every person in
+	// that church INCLUDING ITS ADMINISTRATOR held nothing. Failing closed is
+	// right; failing closed for every real customer while passing every test
+	// against seeded data is not.
+	//
+	// A creation hook alone would not fix it. Under ADR-005 the legacy
+	// TypeScript API writes the same database and creates churches itself, and
+	// it has never heard of roles — so the only place that can be sure a church
+	// has them is the point where they are needed. It is idempotent, bounded to
+	// three documents once per church, and safe under concurrency because the
+	// unique index on (churchId, slug) settles the race.
+	if err := s.EnsureSystemRoles(ctx); err != nil {
+		return nil, fmt.Errorf("rbac: provision system roles: %w", err)
+	}
+
+	role, err = s.RoleBySlug(ctx, slug)
+	if err == nil {
+		return role, nil
+	}
+	if !errors.Is(err, ErrRoleNotFound) {
+		return nil, err
+	}
+
+	// Provisioning ran and the role still is not there. Something is wrong that
+	// this layer cannot fix, and an empty role is the safe answer: the user
+	// holds nothing, which fails closed rather than granting by default.
 	return &Role{Name: "unassigned", Permissions: nil, Version: 0}, nil
 }
 
