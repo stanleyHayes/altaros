@@ -175,7 +175,7 @@ func Load(serviceName string) (*Config, error) {
 			"http://localhost:8081",
 		}),
 		DataRegion:   getenv("DATA_REGION", "gh"),
-		LegacyAPIURL: getenv("LEGACY_API_URL", "http://localhost:3001"),
+		LegacyAPIURL: getenvOptional("LEGACY_API_URL", "http://localhost:3001"),
 
 		Mongo: MongoConfig{
 			URI:            getenv("MONGODB_URI", "mongodb://localhost:27017"),
@@ -310,6 +310,22 @@ func (c *Config) validate() error {
 func getenv(key, fallback string) string {
 	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
 		return v
+	}
+	return fallback
+}
+
+// getenvOptional returns the value whenever the variable is SET, even to the
+// empty string, and falls back only when it is absent entirely.
+//
+// This matters wherever empty is a meaningful setting rather than "not
+// configured". LEGACY_API_URL is the case in point: empty means "do not proxy
+// anywhere", which is what CI passes and what production needs once the legacy
+// API retires. Through getenv, setting it empty silently restored the default
+// and the service would have tried to forward production traffic to
+// localhost:3001.
+func getenvOptional(key, fallback string) string {
+	if v, ok := os.LookupEnv(key); ok {
+		return strings.TrimSpace(v)
 	}
 	return fallback
 }

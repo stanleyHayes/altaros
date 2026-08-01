@@ -6,6 +6,13 @@ on:
   pull_request:
     branches: [main, develop]
 
+# A new push to the same branch cancels the previous run: a queue of stale
+# builds delays the one that matters and burns runner minutes on commits
+# nobody is waiting for.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   lint:
     name: Lint
@@ -20,7 +27,7 @@ jobs:
       - run: npm run lint
 
   test:
-    name: Test
+    name: Test (TypeScript)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -32,7 +39,7 @@ jobs:
       - run: npm run test
 
   build:
-    name: Build
+    name: Build (TypeScript)
     runs-on: ubuntu-latest
     needs: [lint, test]
     steps:
@@ -69,16 +76,197 @@ jobs:
     name: Go build & test
     runs-on: ubuntu-latest
     needs: [contracts]
+
+    # Real MongoDB and Redis, not mocks. Almost every guarantee in this
+    # codebase — tenant isolation, payment idempotency, the unique indexes that
+    # stop a replayed webhook recording a tithe twice — is only meaningful
+    # against a real database, and several bugs reached main precisely because
+    # they only appear there.
+    services:
+      mongodb:
+        image: mongo:7
+        ports: ["27017:27017"]
+        options: >-
+          --health-cmd "mongosh --quiet --eval 'db.runCommand({ping:1}).ok'"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      MONGODB_URI: mongodb://localhost:27017
+      REDIS_ADDR: localhost:6379
+      # Without this the integration tests skip when a dependency is missing,
+      # and the job reports success having executed almost none of them. A
+      # green check on a skipped test suite is worse than a red one.
+      REQUIRE_INFRA: "1"
+
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version: "1.26"
           cache: true
-      # Uses the same make targets developers run locally, so CI and local
-      # cannot drift. They also scope Go commands away from node_modules,
-      # which contains a vendored Go package (flatted) that `./...` picks up.
+
+      # The same make targets developers run locally, so CI and local cannot
+      # drift. They also scope Go commands away from node_modules, which
+      # contains a vendored Go package (flatted) that `./...` picks up.
       - run: make fmt-check
       - run: make vet
       - run: make build
-      - run: make test
+
+      # -race because the concurrency guarantees here are load-bearing:
+      # settlement is a compare-and-set, and notification dedupe decides
+      # whether a member gets one receipt or eight.
+      - name: Test with race detector
+        run: make test-ci
+
+      - name: Confirm no integration test was skipped
+        run: |
+          # Belt and braces alongside REQUIRE_INFRA: a test that skips for any
+          # other reason still hides a hole, and the summary line is the only
+          # place that shows up.
+          if grep -q -- "--- SKIP" test-output.txt; then
+            echo "::error::Integration tests were skipped in CI:"
+            grep -- "--- SKIP" test-output.txt
+            exit 1
+          fi
+          echo "No skipped tests."
+
+  # The gateway must actually boot against real dependencies. `go build`
+  # proves it compiles; this proves it starts, creates its indexes, and
+  # serves. Index creation in particular has failed at boot twice — once on a
+  # legacy Mongoose index name, once because it was never called at all.
+  smoke:
+    name: Gateway smoke test
+    runs-on: ubuntu-latest
+    needs: [go]
+
+    services:
+      mongodb:
+        image: mongo:7
+        ports: ["27017:27017"]
+        options: >-
+          --health-cmd "mongosh --quiet --eval 'db.runCommand({ping:1}).ok'"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+          cache: true
+
+      - name: Boot the gateway and check it serves
+        env:
+          MONGODB_URI: mongodb://localhost:27017
+          MONGODB_DATABASE: altar_ci_smoke
+          REDIS_ADDR: localhost:6379
+          JWT_SECRET: ci-smoke-test-secret-not-used-anywhere-else
+          PORT: "8080"
+          # No legacy API in CI, so unported routes should 404 rather than
+          # hang trying to reach one.
+          LEGACY_API_URL: ""
+        run: |
+          set -euo pipefail
+          go run ./cmd/altar -service=gateway &
+          GATEWAY_PID=$!
+          trap 'kill $GATEWAY_PID 2>/dev/null || true' EXIT
+
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:8080/health >/dev/null; then break; fi
+            if ! kill -0 $GATEWAY_PID 2>/dev/null; then
+              echo "::error::The gateway exited during startup"
+              exit 1
+            fi
+            sleep 1
+          done
+
+          echo "--- health ---"
+          curl -sf http://localhost:8080/health | tee /dev/stderr | grep -q '"status":"ok"'
+
+          echo "--- mounted services ---"
+          curl -sf http://localhost:8080/api/v1/ | tee /dev/stderr | grep -q '"finance"'
+
+          # An unauthenticated request to a tenant-scoped route must be
+          # refused. If this ever returns 200, the tenant wrapper is being
+          # reached without a scope.
+          echo "--- unauthenticated members ---"
+          code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/api/v1/members)
+          if [ "$code" != "401" ]; then
+            echo "::error::Unauthenticated /members returned $code, expected 401"
+            exit 1
+          fi
+
+          # A webhook with no valid signature must never be accepted.
+          echo "--- unsigned webhook ---"
+          code=$(curl -s -o /dev/null -w '%{http_code}' -X POST \
+            http://localhost:8080/api/v1/finance/webhooks/paystack \
+            -H 'Content-Type: application/json' -d '{"event":"charge.success"}')
+          if [ "$code" = "200" ]; then
+            echo "::error::An unsigned webhook was accepted"
+            exit 1
+          fi
+
+          echo "Smoke test passed."
+
+      - name: Verify the required indexes were created
+        env:
+          MONGODB_DATABASE: altar_ci_smoke
+        run: |
+          set -euo pipefail
+          # These two are correctness constraints, not optimisations: they are
+          # what stops a retried payment webhook recording a tithe twice.
+          docker run --rm --network host mongo:7 mongosh \
+            "mongodb://localhost:27017/altar_ci_smoke" --quiet --eval '
+              const names = db.transactions.getIndexes().map(i => i.name);
+              const required = ["uq_idempotency", "uq_provider_ref"];
+              const missing = required.filter(n => !names.includes(n));
+              if (missing.length) {
+                print("MISSING INDEXES: " + missing.join(", "));
+                quit(1);
+              }
+              print("payment idempotency indexes present: " + required.join(", "));
+            '
+
+  # A distroless image, built on every PR so a broken Dockerfile is caught
+  # before a deploy rather than during one.
+  image:
+    name: Container image
+    runs-on: ubuntu-latest
+    needs: [go]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build the service image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          load: true
+          tags: altar-os:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Confirm the image runs and reports its services
+        run: |
+          set -euo pipefail
+          # -help exits without needing a database, which makes this a genuine
+          # check of the image rather than of the infrastructure around it.
+          docker run --rm altar-os:ci -help 2>&1 | tee /dev/stderr | grep -q gateway

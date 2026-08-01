@@ -13,6 +13,7 @@ import (
 
 	"github.com/hayfordstanley/altar-os/internal/platform/config"
 	"github.com/hayfordstanley/altar-os/internal/platform/mongodb"
+	"github.com/hayfordstanley/altar-os/internal/platform/testsupport"
 	"github.com/hayfordstanley/altar-os/internal/platform/token"
 )
 
@@ -85,12 +86,12 @@ func newHarness(t *testing.T) (*harness, context.Context) {
 		ConnectTimeout: 3 * time.Second,
 	})
 	if err != nil {
-		t.Skipf("MongoDB unavailable (run `make infra-up`): %v", err)
+		testsupport.SkipOrFail(t, "MongoDB", err)
 	}
 
 	rdb := redis.NewClient(&redis.Options{Addr: redisAddr, DB: 14})
 	if err := rdb.Ping(connectCtx).Err(); err != nil {
-		t.Skipf("Redis unavailable (run `make infra-up`): %v", err)
+		testsupport.SkipOrFail(t, "Redis", err)
 	}
 	_ = rdb.FlushDB(ctx)
 

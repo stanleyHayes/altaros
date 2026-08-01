@@ -2,6 +2,7 @@ package config
 
 import (
 	"errors"
+	"os"
 	"strings"
 	"testing"
 )
@@ -132,5 +133,49 @@ func TestRejectsUnknownEnv(t *testing.T) {
 
 	if _, err := Load("gateway"); err == nil {
 		t.Fatal("APP_ENV=prod should be rejected rather than silently treated as production")
+	}
+}
+
+// Empty is a meaningful value for the legacy proxy: it means "do not forward
+// anywhere". Treating it as unset restored the default, so a production
+// deployment that explicitly disabled the proxy would have tried to forward
+// traffic to localhost:3001 — and CI, which passes it empty, would have hung
+// against a legacy API that is not running.
+func TestEmptyLegacyAPIURLDisablesTheProxy(t *testing.T) {
+	t.Setenv("LEGACY_API_URL", "")
+
+	cfg, err := Load("gateway")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.LegacyAPIURL != "" {
+		t.Fatalf("LegacyAPIURL = %q; setting it empty must disable the proxy, not restore the default",
+			cfg.LegacyAPIURL)
+	}
+}
+
+// Absent, on the other hand, should keep the development default so a
+// developer running `make run` gets a working platform without configuration.
+func TestAbsentLegacyAPIURLUsesTheDevelopmentDefault(t *testing.T) {
+	os.Unsetenv("LEGACY_API_URL")
+
+	cfg, err := Load("gateway")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.LegacyAPIURL == "" {
+		t.Fatal("with the variable absent, the development default should apply")
+	}
+}
+
+func TestLegacyAPIURLIsTrimmed(t *testing.T) {
+	t.Setenv("LEGACY_API_URL", "  http://legacy.internal:3001  ")
+
+	cfg, err := Load("gateway")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.LegacyAPIURL != "http://legacy.internal:3001" {
+		t.Errorf("LegacyAPIURL = %q, want it trimmed", cfg.LegacyAPIURL)
 	}
 }

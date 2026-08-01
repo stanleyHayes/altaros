@@ -11,6 +11,7 @@ import (
 	"github.com/hayfordstanley/altar-os/internal/platform/config"
 	"github.com/hayfordstanley/altar-os/internal/platform/mongodb"
 	"github.com/hayfordstanley/altar-os/internal/platform/tenancy"
+	"github.com/hayfordstanley/altar-os/internal/platform/testsupport"
 )
 
 // capturePublisher records emitted events.
@@ -55,7 +56,7 @@ func newService(t *testing.T) (*Service, *capturePublisher, context.Context) {
 		ConnectTimeout: 3 * time.Second,
 	})
 	if err != nil {
-		t.Skipf("MongoDB unavailable (run `make infra-up`): %v", err)
+		testsupport.SkipOrFail(t, "MongoDB", err)
 	}
 	t.Cleanup(func() {
 		c, cancel := context.WithTimeout(context.Background(), 10*time.Second)

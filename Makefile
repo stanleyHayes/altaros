@@ -34,6 +34,21 @@ vet: ## Run go vet
 test: ## Run Go tests
 	@$(GO) test $(PKGS) -count=1
 
+# test-ci differs from test in two ways that matter only in CI:
+#   REQUIRE_INFRA turns an unreachable database into a failure rather than a
+#   skip, so the job cannot pass having run nothing; and -race is on because
+#   the concurrency guarantees here are load-bearing (settlement is a
+#   compare-and-set, notification dedupe decides one receipt versus eight).
+#
+# The full log goes to a file the workflow inspects for skips; only the summary
+# reaches the console. The exit status is captured rather than piped, because
+# `go test | tee` reports tee's success and would make every failure green.
+test-ci: ## Run Go tests as CI does: race detector on, skips are failures
+	@REQUIRE_INFRA=1 $(GO) test $(PKGS) -count=1 -race -v > test-output.txt 2>&1; \
+	status=$$?; \
+	grep -E '^(--- FAIL|--- SKIP|ok  |FAIL|panic:)' test-output.txt || true; \
+	exit $$status
+
 run: ## Run one service: make run SERVICE=gateway PORT=8090
 	@PORT=$(PORT) $(GO) run ./cmd/altar -service=$(SERVICE)
 

@@ -506,7 +506,15 @@ The PDF names four events. A working system needs a governed catalog with a vers
 
 | WP-16 | ✅ done | Gateway serves auth + member + finance under one origin, with JWT→tenant middleware, role allowlists and per-record ownership checks — and **forwards everything not yet ported to the legacy TypeScript API**, so the frontends see one origin for the whole platform. **Verified against a live server, not just in tests:** login → create a member (`024 123 4567` stored as `+233241234567`) → list → record cash (`"1,250.50"` → 125050 minor) → summary totalling **GHS 1,625.75 exactly**; a MEMBER role gets 403 on the congregation list and the church books; an unsigned, forged or tampered webhook gets 401, a correctly-signed one 200; and with the gateway on :8080, `auth/me`, `members`, `finance/summary` (Go) plus `events` and `churches` (proxied) **all return 200 from one token**. Dashboard, web, admin and mobile now default to the Go origin; all four typecheck and the dashboard builds. |
 
-Not yet started: WP-17 onward.
+| WP-17 | ✅ done | CI now runs the Go suite against **real MongoDB and Redis service containers** with the race detector, builds a 22.4MB distroless image, and smoke-tests a booted gateway. **Done when** was "a PR runs Go + TS pipelines" — it does, plus three checks the spec did not ask for and this codebase has already needed. |
+
+Not yet started: WP-18 onward.
+
+**The CI job was previously green while testing almost nothing.** Every integration test calls `t.Skipf` when its database is unreachable, and CI had no database — so `make test` passed having executed none of the guarantees that matter (tenant isolation, payment idempotency, consent gating). A skipped test is indistinguishable from a passing one in a green checkmark. `REQUIRE_INFRA=1` now turns an unreachable dependency into a failure, and the workflow additionally greps the log for `--- SKIP` so a test that skips for any other reason still fails the build.
+
+**The smoke job exists because index creation has failed at boot twice** — once on a legacy Mongoose index name, once because it was never called at all. `go build` proves the binary compiles; only booting it proves it starts, creates `uq_idempotency` and `uq_provider_ref`, refuses an unauthenticated request, and rejects an unsigned webhook. CI asserts all four.
+
+**Bug found while smoke-testing the image:** `LEGACY_API_URL=` (explicitly empty) did not disable the strangler proxy. The config helper treated empty as unset and restored the development default, so a production deployment that had deliberately turned the proxy off would have tried to forward live traffic to `localhost:3001` — and CI, which passes it empty, would have proxied to a legacy API that is not running. Empty and absent are now distinguished for that setting.
 
 **The cutover is a strangler-fig proxy, not a switch.** Pointing the apps at Go was only safe because the gateway forwards unported routes to the TypeScript API. Without that, the frontends would have had to know which domains had moved and split traffic across two origins — making every work package a coordinated frontend release, with mistakes surfacing as broken screens rather than failed deploys. Now a domain moves the moment its routes appear above the proxy, and no client changes.
 

@@ -12,3 +12,4 @@ coverage
 /bin/
 *.test
 *.out
+test-output.txt

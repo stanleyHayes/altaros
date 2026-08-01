@@ -9,6 +9,7 @@ import (
 	"github.com/hayfordstanley/altar-os/internal/platform/config"
 	"github.com/hayfordstanley/altar-os/internal/platform/mongodb"
 	"github.com/hayfordstanley/altar-os/internal/platform/tenancy"
+	"github.com/hayfordstanley/altar-os/internal/platform/testsupport"
 )
 
 func newLogger(t *testing.T) (*Logger, context.Context) {
@@ -28,7 +29,7 @@ func newLogger(t *testing.T) (*Logger, context.Context) {
 		ConnectTimeout: 3 * time.Second,
 	})
 	if err != nil {
-		t.Skipf("MongoDB unavailable (run `make infra-up`): %v", err)
+		testsupport.SkipOrFail(t, "MongoDB", err)
 	}
 
 	t.Cleanup(func() {

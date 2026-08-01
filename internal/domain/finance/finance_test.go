@@ -14,6 +14,7 @@ import (
 	"github.com/hayfordstanley/altar-os/internal/platform/mongodb"
 	"github.com/hayfordstanley/altar-os/internal/platform/payments"
 	"github.com/hayfordstanley/altar-os/internal/platform/tenancy"
+	"github.com/hayfordstanley/altar-os/internal/platform/testsupport"
 )
 
 const (
@@ -196,7 +197,7 @@ func newHarness(t *testing.T) *harness {
 		ConnectTimeout: 3 * time.Second,
 	})
 	if err != nil {
-		t.Skipf("MongoDB unavailable (run `make infra-up`): %v", err)
+		testsupport.SkipOrFail(t, "MongoDB", err)
 	}
 	t.Cleanup(func() {
 		c, cancel := context.WithTimeout(context.Background(), 10*time.Second)

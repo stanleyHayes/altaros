@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hayfordstanley/altar-os/internal/platform/testsupport"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -24,7 +25,7 @@ func newIssuer(t *testing.T, mutate func(*Options)) *Issuer {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	if err := rdb.Ping(ctx).Err(); err != nil {
-		t.Skipf("Redis unavailable at %s (run `make infra-up`): %v", addr, err)
+		testsupport.SkipOrFail(t, "Redis at "+addr, err)
 	}
 	if err := rdb.FlushDB(ctx).Err(); err != nil {
 		t.Fatalf("flush test db: %v", err)

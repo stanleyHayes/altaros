@@ -1,0 +1,20 @@
+# Keep the build context to what the Go build actually needs. Without this the
+# whole npm workspace (node_modules, four frontend builds) is uploaded to the
+# daemon on every build, which dominates the build time.
+node_modules
+**/node_modules
+apps
+packages
+tools
+dist
+**/dist
+.git
+.github
+.turbo
+*.md
+!go.mod
+!go.sum
+.env
+.env.*
+test-output.txt
+reference

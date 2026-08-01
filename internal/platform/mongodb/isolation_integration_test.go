@@ -11,6 +11,7 @@ import (
 
 	"github.com/hayfordstanley/altar-os/internal/platform/config"
 	"github.com/hayfordstanley/altar-os/internal/platform/tenancy"
+	"github.com/hayfordstanley/altar-os/internal/platform/testsupport"
 )
 
 // WP-07 acceptance: cross-tenant reads return zero rows across every
@@ -37,7 +38,7 @@ func testDB(t *testing.T) *DB {
 		ConnectTimeout: 3 * time.Second,
 	})
 	if err != nil {
-		t.Skipf("MongoDB unavailable at %s (run `make infra-up`): %v", uri, err)
+		testsupport.SkipOrFail(t, "MongoDB at "+uri, err)
 	}
 
 	t.Cleanup(func() {

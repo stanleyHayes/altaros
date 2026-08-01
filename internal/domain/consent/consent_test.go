@@ -10,6 +10,7 @@ import (
 	"github.com/hayfordstanley/altar-os/internal/platform/config"
 	"github.com/hayfordstanley/altar-os/internal/platform/mongodb"
 	"github.com/hayfordstanley/altar-os/internal/platform/tenancy"
+	"github.com/hayfordstanley/altar-os/internal/platform/testsupport"
 )
 
 const (
@@ -34,7 +35,7 @@ func newService(t *testing.T) (*Service, context.Context) {
 		ConnectTimeout: 3 * time.Second,
 	})
 	if err != nil {
-		t.Skipf("MongoDB unavailable (run `make infra-up`): %v", err)
+		testsupport.SkipOrFail(t, "MongoDB", err)
 	}
 
 	t.Cleanup(func() {

@@ -12,6 +12,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 
 	"github.com/hayfordstanley/altar-os/internal/platform/config"
+	"github.com/hayfordstanley/altar-os/internal/platform/testsupport"
 )
 
 func indexTestDB(t *testing.T) *DB {
@@ -30,7 +31,7 @@ func indexTestDB(t *testing.T) *DB {
 		ConnectTimeout: 3 * time.Second,
 	})
 	if err != nil {
-		t.Skipf("MongoDB unavailable (run `make infra-up`): %v", err)
+		testsupport.SkipOrFail(t, "MongoDB", err)
 	}
 	t.Cleanup(func() {
 		c, cancel := context.WithTimeout(context.Background(), 10*time.Second)

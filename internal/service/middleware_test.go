@@ -16,6 +16,7 @@ import (
 	"github.com/hayfordstanley/altar-os/internal/platform/deps"
 	"github.com/hayfordstanley/altar-os/internal/platform/httpx"
 	"github.com/hayfordstanley/altar-os/internal/platform/tenancy"
+	"github.com/hayfordstanley/altar-os/internal/platform/testsupport"
 	"github.com/hayfordstanley/altar-os/internal/platform/token"
 )
 
@@ -33,7 +34,7 @@ func newTestDeps(t *testing.T) *deps.Deps {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	if err := rdb.Ping(ctx).Err(); err != nil {
-		t.Skipf("Redis unavailable (run `make infra-up`): %v", err)
+		testsupport.SkipOrFail(t, "Redis", err)
 	}
 	t.Cleanup(func() {
 		c, cancel := context.WithTimeout(context.Background(), 5*time.Second)
