@@ -223,7 +223,7 @@ Three data classes need above-baseline handling and must be designed for, not re
 These are **engineering requirements**, tracked as WPs, not a legal to-do list:
 
 1. **Consent is a first-class record** — timestamped, versioned, per-purpose (membership / communications / giving / AI processing), independently revocable, with a full audit trail. (WP-06)
-2. **Data subject rights are API endpoints**, not manual ops: export, rectify, erase. (WP-42)
+2. **Data subject rights are API endpoints**, not manual ops: export, rectify, erase. (WP-49)
 3. **Prayer requests and welfare cases are encrypted at rest with separate key material** and a strict ACL — visible only to the specific pastoral role assigned, never in general admin views, never in analytics aggregates, never in AI training or fine-tuning data. (WP-27, WP-30)
 4. **Per-country data residency is a tenant configuration**, because expansion regimes may diverge. (WP-05)
 5. **Audit log is append-only and covers every access to sensitive data**, not just mutations. Reads matter here. (WP-08)
@@ -1198,17 +1198,23 @@ Service-team scheduling, availability, swap requests, reminders. This is Plannin
 First-timer → new convert → member journey with stages, assigned follow-up owners, and AI-suggested actions from WP-30.
 **Done when:** a first-timer recorded on Sunday generates an assigned follow-up task with an SLA and escalates if untouched.
 
-### Phase 3 — Hardening & launch
+### Phase 4 — Hardening & launch
+>
+> **Renumbered 1 Aug 2026.** This was "Phase 3" and its work packages were
+> WP-40/41/42 — the same numbers the workspace-and-sites phase took. Two
+> different work packages sharing a number makes every reference to one
+> ambiguous, including the commit messages that shipped WP-40 and WP-41. The
+> built work keeps its numbers; these, which are unstarted, moved to 47–49.
 
-**WP-40 · Security review** — Depends on: Phase 2
+**WP-47 · Security review** — Depends on: Phase 2
 PDF §10 in full plus: OWASP ASVS pass, rate limiting, brute-force lockout, tenant-isolation penetration test, secret rotation, dependency scanning. **Explicit re-audit that no ALTAR OS-held-funds path exists** (ADR-002 invariant).
 **Done when:** no critical/high findings open; ADR-002 invariant confirmed by review.
 
-**WP-41 · Performance & scale** (PDF §11) — Depends on: Phase 2
+**WP-48 · Performance & scale** (PDF §11) — Depends on: Phase 2
 Targets: 1M+ users, **p95 < 200ms** API response, 99.9% uptime, horizontal scaling via K8s HPA. Load test with k6; index tuning; N+1 elimination; read replicas.
 **Done when:** load test sustains the target at p95 < 200ms with documented headroom.
 
-**WP-42 · Compliance implementation** — Depends on: WP-06, WP-08
+**WP-49 · Compliance implementation** — Depends on: WP-06, WP-08
 Data-subject-rights endpoints (export / rectify / erase), retention policies, breach-notification runbook, DPIA, per-country residency enforcement, processor agreements with Paystack / Africa's Talking / Cloudinary / Anthropic.
 **Done when:** a full subject-access export completes for one member across every domain; erasure leaves no residual PII outside legally-required financial records.
 
@@ -1455,6 +1461,8 @@ These apply to every surface built from here, and to the retrofit in WP-42.
 
 
 ### Phase 3 — Workspaces, RBAC and church sites (added 1 Aug 2026)
+>
+> Numbered WP-35 to WP-42. The hardening phase that previously shared 40–42 is now Phase 4, WP-47 to WP-49.
 
 These are sequenced so the risk-carrying migration happens once, early, and everything else builds on it. **WP-35 and WP-36 are prerequisites for the rest and should not be parallelised with them.**
 
@@ -1554,7 +1562,7 @@ The PDF is a strong skeleton. These are the gaps that research and the repo audi
 
 **8.8 · Discipleship pipeline (WP-34).** The PDF tracks members as active/inactive. Churches think in journeys: first-timer → new convert → baptised → member → leader. Modelling the journey is what makes "AI member insights" (PDF §7.2) actionable rather than decorative.
 
-**8.9 · Financial controls (WP-14, WP-40).** Church finance is a high-fraud-risk domain and the PDF has no dual-approval, no segregation of duties, no immutable financial audit trail. Given ADR-002 keeps ALTAR OS out of custody, the platform's credibility rests on being a trustworthy *record*, which requires controls.
+**8.9 · Financial controls (WP-14, WP-47).** Church finance is a high-fraud-risk domain and the PDF has no dual-approval, no segregation of duties, no immutable financial audit trail. Given ADR-002 keeps ALTAR OS out of custody, the platform's credibility rests on being a trustworthy *record*, which requires controls.
 
 ---
 
@@ -1564,8 +1572,8 @@ The PDF is a strong skeleton. These are the gaps that research and the repo audi
 |---|---|---|---|
 | R-0 | **Zero commits — entire codebase is one `git reset` from total loss.** 48 files already exist only in the index, nowhere on disk | **Catastrophic / imminent** | WP-00b then WP-00c, immediately, before any other work. This is the single most urgent item in the plan |
 | R-1 | **Breadth-first starves the rewrite of a demoable milestone** (ADR-003) | High | WP-19 is a hard gate; no Phase 2 work starts until the vertical slice runs live |
-| R-2 | Feature creep reintroduces custody of church funds, triggering Act 987 licensing | **Critical** | ADR-002 invariant; WP-40 explicit re-audit; any wallet/float/escrow proposal escalates before implementation |
-| R-3 | Ghana DPC enforcement lands before registration completes | **Critical** | GHS 3M / 5% turnover exposure. Registration is a launch gate (Q-1); WP-42 delivers the technical requirements in parallel |
+| R-2 | Feature creep reintroduces custody of church funds, triggering Act 987 licensing | **Critical** | ADR-002 invariant; WP-47 explicit re-audit; any wallet/float/escrow proposal escalates before implementation |
+| R-3 | Ghana DPC enforcement lands before registration completes | **Critical** | GHS 3M / 5% turnover exposure. Registration is a launch gate (Q-1); WP-49 delivers the technical requirements in parallel |
 | R-4 | Cross-tenant data leak via a missing `church_id` predicate | **Critical** | WP-07: layer-enforced tenancy, CI lint, cross-tenant test suite |
 | R-5 | Stub payment gateway reaches a real environment (`verifyCharge` returns success unconditionally) | **Critical** | WP-05 fail-fast on missing secrets in non-dev; WP-13 deletes the stub outright |
 | R-6 | Go rewrite runs long; frontends stall waiting on APIs | High | `shared-types` contract is stable and frozen; frontends develop against it while Go lands |
