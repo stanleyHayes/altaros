@@ -494,7 +494,9 @@ The PDF names four events. A working system needs a governed catalog with a vers
 
 | WP-10 | ✅ done | Auth service in Go: phone OTP (new — was a 501 stub), password login, refresh with rotation, revocation. Verified over HTTP against **the same MongoDB and bcrypt hashes the TypeScript API wrote**, so no migration is needed at cutover. Replayed refresh tokens revoke the whole family; expired and revoked tokens rejected. |
 
-Not yet started: WP-11 (org/branch hierarchy) onward.
+| WP-11 | ✅ done | Organization → Church(branch) → Department → Group, with sub-branches. `VisibleChurchIDs` is the single place cross-branch reach is decided: Org Admin sees every branch in their denomination, Church Admin/leader/member see exactly one, Super Admin sees all. Reach stops at the organization boundary; circular re-parenting refused. |
+
+Not yet started: WP-12 (member service) onward.
 
 ### Phase 0 — Salvage & foundation
 
