@@ -224,6 +224,66 @@ func (t *TenantCollection) DeleteOne(ctx context.Context, filter any) (*mongo.De
 	return t.coll.DeleteOne(ctx, scoped)
 }
 
+// Aggregate runs a pipeline within the caller's church.
+//
+// The tenant predicate is PREPENDED as its own $match stage rather than merged
+// into the caller's first stage. That placement is the whole guarantee: a
+// pipeline whose first stage is $group, $lookup, $unionWith or $sort would
+// otherwise have already read every church's documents before any filter the
+// caller wrote could apply. Forcing it first means no stage can ever observe
+// another church's data, whatever the caller passes.
+//
+// It also prevents the caller from omitting the tenant filter by accident,
+// which on an aggregation is silent — the pipeline still returns results, just
+// results belonging to everyone.
+func (t *TenantCollection) Aggregate(ctx context.Context, pipeline []bson.M, out any, opts ...options.Lister[options.AggregateOptions]) error {
+	scoped, err := t.scopedPipeline(ctx, pipeline)
+	if err != nil {
+		return err
+	}
+	cur, err := t.coll.Aggregate(ctx, scoped, opts...)
+	if err != nil {
+		return err
+	}
+	return cur.All(ctx, out)
+}
+
+// scopedPipeline prepends the tenant predicate and refuses stages that would
+// escape the wrapper.
+func (t *TenantCollection) scopedPipeline(ctx context.Context, pipeline []bson.M) ([]bson.M, error) {
+	churchID, err := tenancy.MustChurchID(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", t.name, err)
+	}
+
+	for _, stage := range pipeline {
+		for _, forbidden := range forbiddenStages {
+			if _, bad := stage[forbidden]; bad {
+				return nil, fmt.Errorf(
+					"%s: %s is not permitted in a tenant-scoped pipeline", t.name, forbidden)
+			}
+		}
+	}
+
+	scoped := make([]bson.M, 0, len(pipeline)+1)
+	scoped = append(scoped, bson.M{"$match": bson.M{TenantField: churchID}})
+	scoped = append(scoped, pipeline...)
+	return scoped, nil
+}
+
+// forbiddenStages read or write outside the collection the tenant filter
+// applies to, so a leading $match cannot constrain them:
+//
+//   - $out and $merge write results into another collection, leaving the
+//     wrapper behind entirely.
+//   - $unionWith and $lookup read a second collection, whose documents the
+//     leading $match never touched.
+//
+// Nothing here needs them. Allowing them would make the isolation guarantee
+// conditional on someone reviewing every pipeline, which is exactly the
+// property this wrapper exists to remove.
+var forbiddenStages = []string{"$out", "$merge", "$unionWith", "$lookup"}
+
 // Indexes exposes the underlying index view for migrations. Every
 // tenant-scoped compound index must lead with churchId (ADR-005).
 func (t *TenantCollection) Indexes() mongo.IndexView { return t.coll.Indexes() }

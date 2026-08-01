@@ -148,3 +148,103 @@ func TestDifferentChurchesProduceDifferentFilters(t *testing.T) {
 		t.Fatal("filters for different churches must differ")
 	}
 }
+
+// An aggregation with no tenant is the most dangerous query shape in the
+// system: it returns results rather than an error, and the results belong to
+// everyone.
+func TestAggregateWithoutTenantIsRefused(t *testing.T) {
+	_, err := newColl().scopedPipeline(context.Background(), []bson.M{
+		{"$group": bson.M{"_id": nil, "total": bson.M{"$sum": "$amount"}}},
+	})
+	if !errors.Is(err, tenancy.ErrNoTenant) {
+		t.Fatalf("want ErrNoTenant, got %v", err)
+	}
+}
+
+// The tenant stage must come FIRST. A pipeline starting with $group or $sort
+// would otherwise have already read every church's documents before any later
+// filter could apply.
+func TestTenantStageIsPrependedNotAppended(t *testing.T) {
+	got, err := newColl().scopedPipeline(scoped("church_a"), []bson.M{
+		{"$group": bson.M{"_id": "$type", "total": bson.M{"$sum": "$amount"}}},
+		{"$sort": bson.M{"total": -1}},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("want 3 stages, got %d", len(got))
+	}
+
+	match, ok := got[0]["$match"].(bson.M)
+	if !ok {
+		t.Fatalf("the first stage must be $match, got %v", got[0])
+	}
+	if match[TenantField] != "church_a" {
+		t.Errorf("first stage = %v, want %s=church_a", match, TenantField)
+	}
+	// The caller's own stages must survive, in order.
+	if _, ok := got[1]["$group"]; !ok {
+		t.Error("the caller's $group should follow the tenant stage")
+	}
+	if _, ok := got[2]["$sort"]; !ok {
+		t.Error("the caller's $sort should be last")
+	}
+}
+
+// Stages that read or write another collection escape the tenant filter
+// entirely, so a leading $match cannot constrain them.
+func TestPipelineStagesThatEscapeTheTenantAreRefused(t *testing.T) {
+	for _, stage := range []bson.M{
+		{"$out": "exported"},
+		{"$merge": bson.M{"into": "exported"}},
+		{"$unionWith": "transactions"},
+		{"$lookup": bson.M{"from": "members", "as": "member"}},
+	} {
+		if _, err := newColl().scopedPipeline(scoped("church_a"), []bson.M{stage}); err == nil {
+			t.Errorf("%v should be refused in a tenant-scoped pipeline", stage)
+		}
+	}
+}
+
+// A forbidden stage buried later in the pipeline is just as dangerous as one
+// at the front.
+func TestForbiddenStageIsCaughtAnywhereInThePipeline(t *testing.T) {
+	_, err := newColl().scopedPipeline(scoped("church_a"), []bson.M{
+		{"$match": bson.M{"status": "success"}},
+		{"$group": bson.M{"_id": "$type"}},
+		{"$out": "everyones_giving"},
+	})
+	if err == nil {
+		t.Fatal("a $out in the last stage must still be refused")
+	}
+}
+
+// The caller's slice must not be modified under them.
+func TestScopedPipelineDoesNotMutateCallerPipeline(t *testing.T) {
+	original := []bson.M{{"$group": bson.M{"_id": "$type"}}}
+	if _, err := newColl().scopedPipeline(scoped("church_a"), original); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(original) != 1 {
+		t.Fatalf("caller's pipeline grew to %d stages", len(original))
+	}
+	if _, ok := original[0]["$group"]; !ok {
+		t.Error("caller's first stage was replaced")
+	}
+}
+
+// An empty pipeline is still scoped, or "aggregate everything" means every
+// church.
+func TestEmptyPipelineIsStillScoped(t *testing.T) {
+	got, err := newColl().scopedPipeline(scoped("church_a"), nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("want 1 stage, got %d", len(got))
+	}
+	if match := got[0]["$match"].(bson.M); match[TenantField] != "church_a" {
+		t.Errorf("got %v", match)
+	}
+}
