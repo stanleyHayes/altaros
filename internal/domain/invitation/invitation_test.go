@@ -529,6 +529,63 @@ func TestAnAddressCanBeReInvitedAfterARevoke(t *testing.T) {
 	}
 }
 
+// TestTwoEmailOnlyInvitationsCanBothBeAccepted is the sparse-unique-index trap
+// one layer below the one this file already covers.
+//
+// The users collection carries SPARSE unique indexes on email and phone. Sparse
+// skips a document only when the field is ABSENT; an empty string is a value,
+// so writing "phone": "" for an email-only invitee makes the SECOND such
+// account collide with the first. Every other test here accepts at most one
+// phone-less invitation against a fresh database, which is exactly why none of
+// them caught it — it took two real invitations in one database, and the second
+// one failed with "there is already an account using that email address or
+// phone number" naming an address nobody had ever used.
+func TestTwoEmailOnlyInvitationsCanBothBeAccepted(t *testing.T) {
+	h := newHarness(t)
+
+	for _, who := range []struct{ email, name string }{
+		{"first@example.org", "Abena First"},
+		{"second@example.org", "Kwesi Second"},
+	} {
+		_, token := h.invite(t, InviteInput{Email: who.email, Name: who.name})
+		user, err := h.svc.Accept(context.Background(), token, AcceptInput{
+			Password: "a-good-password",
+		})
+		if err != nil {
+			t.Fatalf("accepting %s: %v", who.email, err)
+		}
+		if user.Phone != "" {
+			t.Errorf("%s got phone %q, want empty", who.email, user.Phone)
+		}
+	}
+
+	// And the field is ABSENT rather than empty, which is the actual fix.
+	var raw bson.M
+	err := h.db.Global(auth.Collection).
+		FindOne(context.Background(), bson.M{"email": "second@example.org"}).Decode(&raw)
+	if err != nil {
+		t.Fatalf("read the second account: %v", err)
+	}
+	if _, present := raw["phone"]; present {
+		t.Errorf("phone was written as %#v; it must be omitted, or the sparse "+
+			"unique index treats it as a value only one account may hold", raw["phone"])
+	}
+}
+
+// The same trap for the direct-creation path, which writes its own document.
+func TestTwoDirectlyCreatedUsersWithoutPhonesDoNotCollide(t *testing.T) {
+	h := newHarness(t)
+	role := h.roleID(t, h.ctx, rbac.SystemMember)
+
+	for _, email := range []string{"desk-one@example.org", "desk-two@example.org"} {
+		if _, err := h.svc.Create(h.ctx, CreateInput{
+			Email: email, Name: "Desk Signup", RoleID: role, Password: "set-by-the-admin",
+		}, rbac.All()); err != nil {
+			t.Fatalf("creating %s: %v", email, err)
+		}
+	}
+}
+
 func TestInvitingSomeoneWhoAlreadyHasAnAccountIsRefused(t *testing.T) {
 	h := newHarness(t)
 

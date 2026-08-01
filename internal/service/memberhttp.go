@@ -8,6 +8,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/hayfordstanley/altar-os/internal/domain/member"
+	"github.com/hayfordstanley/altar-os/internal/domain/rbac"
 	"github.com/hayfordstanley/altar-os/internal/platform/deps"
 	"github.com/hayfordstanley/altar-os/internal/platform/httpx"
 	"github.com/hayfordstanley/altar-os/internal/platform/tenancy"
@@ -23,19 +24,38 @@ func memberRoutes(d *deps.Deps) routeSet {
 	return func(r chi.Router) {
 		r.Group(func(r chi.Router) {
 			r.Use(authenticated(d))
+			// Required: without it every requirePermission below reads an empty
+			// set and refuses everyone.
+			r.Use(resolvePermissions(d))
 
 			// Reading the congregation is a leadership action. A member
 			// browsing the full directory is a data-protection problem, not a
 			// feature.
-			r.Group(func(r chi.Router) {
-				r.Use(requireRole(RoleOrgAdmin, RoleChurchAdmin, RoleDeptLeader))
-				r.Get("/members", handleListMembers(svc))
-				r.Post("/members", handleCreateMember(svc))
-				r.Post("/members/import", handleImportMembers(svc))
-				r.Patch("/members/{id}/status", handleSetMemberStatus(svc))
-			})
+			//
+			// Guarded per VERB rather than as one group, because the group
+			// allowlist gave reading and deleting the same weight: anyone who
+			// could open the directory could also change a member's status.
+			r.With(requirePermission(rbac.ResourceMember, rbac.ActionRead)).
+				Get("/members", handleListMembers(svc))
 
-			// A member may read their own record.
+			r.With(requirePermission(rbac.ResourceMember, rbac.ActionCreate)).
+				Post("/members", handleCreateMember(svc))
+
+			// Import is an UPSERT, not a create: a row whose normalised phone
+			// matches an existing member updates that member (WP-12's dedupe is
+			// the whole point of it). Guarding it with create alone lets someone
+			// who may only add people rewrite the record of everyone already
+			// there, by uploading a file. Both permissions, therefore.
+			r.With(
+				requirePermission(rbac.ResourceMember, rbac.ActionCreate),
+				requirePermission(rbac.ResourceMember, rbac.ActionUpdate),
+			).Post("/members/import", handleImportMembers(svc))
+
+			r.With(requirePermission(rbac.ResourceMember, rbac.ActionUpdate)).
+				Patch("/members/{id}/status", handleSetMemberStatus(svc))
+
+			// A member may read their own record — ownership, checked in the
+			// handler, not a permission over the congregation.
 			r.Get("/members/{id}", handleGetMember(svc))
 		})
 	}
@@ -67,7 +87,7 @@ func handleListMembers(svc *member.Service) http.HandlerFunc {
 func handleGetMember(svc *member.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := chi.URLParam(r, "id")
-		if !selfOrLeader(r, id) {
+		if !selfOr(r, id, rbac.ResourceMember, rbac.ActionRead) {
 			httpx.Error(w, http.StatusForbidden, "You do not have permission to do that.")
 			return
 		}

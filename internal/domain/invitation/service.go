@@ -468,8 +468,6 @@ func (s *Service) createUser(
 
 	doc := bson.M{
 		"churchId":      inv.ChurchID,
-		"email":         inv.Email,
-		"phone":         phoneNumber,
 		"name":          name,
 		"passwordHash":  passwordHash,
 		"isActive":      true,
@@ -484,6 +482,17 @@ func (s *Service) createUser(
 		"createdAt":  now,
 		"updatedAt":  now,
 	}
+	// OMITTED when empty, never written as "". The users collection carries
+	// SPARSE unique indexes on email and phone, and sparse skips a document only
+	// when the field is ABSENT — an empty string is a value like any other, so
+	// writing "" makes every phone-less account collide with the first one.
+	//
+	// This is the same trap as the compound-sparse index on invitations, one
+	// layer down, and it was got right there and wrong here. It does not show up
+	// on the first invitation, only the second: a fresh test database never
+	// holds two accounts that both lack a phone number.
+	setIfPresent(doc, "email", inv.Email)
+	setIfPresent(doc, "phone", phoneNumber)
 
 	res, err := s.users.InsertOne(ctx, doc)
 	if err != nil {
@@ -581,10 +590,8 @@ func (s *Service) Create(ctx context.Context, in CreateInput, callerHolds rbac.S
 	}
 
 	now := s.now().UTC()
-	res, err := s.users.InsertOne(ctx, bson.M{
+	doc := bson.M{
 		"churchId":           mongodb.ID(scope.ChurchID),
-		"email":              email,
-		"phone":              phoneNumber,
 		"name":               name,
 		"passwordHash":       passwordHash,
 		"isActive":           true,
@@ -596,7 +603,13 @@ func (s *Service) Create(ctx context.Context, in CreateInput, callerHolds rbac.S
 		"createdBy":          mongodb.ID(scope.UserID),
 		"createdAt":          now,
 		"updatedAt":          now,
-	})
+	}
+	// Omitted when empty — see createUser for why "" is not the same as absent
+	// under a sparse unique index.
+	setIfPresent(doc, "email", email)
+	setIfPresent(doc, "phone", phoneNumber)
+
+	res, err := s.users.InsertOne(ctx, doc)
 	if err != nil {
 		if mongo.IsDuplicateKeyError(err) {
 			return nil, ErrAlreadyMember
@@ -670,6 +683,19 @@ func (s *Service) refuseExistingUser(ctx context.Context, email, phoneNumber str
 		return fmt.Errorf("invitation: check existing account: %w", err)
 	}
 	return nil
+}
+
+// setIfPresent writes a field only when it has a value.
+//
+// The distinction between an absent field and an empty string is invisible in
+// Go and decisive in MongoDB: a SPARSE unique index skips documents where the
+// field is missing, and treats "" as an ordinary value that only one document
+// may hold. Writing "" therefore turns "this column is optional" into "exactly
+// one row may leave it blank".
+func setIfPresent(doc bson.M, field, value string) {
+	if value != "" {
+		doc[field] = value
+	}
 }
 
 // normaliseContact validates and canonicalises the two ways to reach someone.

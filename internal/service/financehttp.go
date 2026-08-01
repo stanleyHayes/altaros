@@ -11,6 +11,7 @@ import (
 
 	"github.com/hayfordstanley/altar-os/internal/domain/church"
 	"github.com/hayfordstanley/altar-os/internal/domain/finance"
+	"github.com/hayfordstanley/altar-os/internal/domain/rbac"
 	"github.com/hayfordstanley/altar-os/internal/platform/deps"
 	"github.com/hayfordstanley/altar-os/internal/platform/httpx"
 	"github.com/hayfordstanley/altar-os/internal/platform/money"
@@ -50,22 +51,67 @@ func financeRoutes(d *deps.Deps) routeSet {
 
 		r.Group(func(r chi.Router) {
 			r.Use(authenticated(d))
+			// Without this every requirePermission below reads an empty set and
+			// refuses everyone. permissionsFrom deliberately returns an empty
+			// set rather than an error, so the failure is a silent 404 on the
+			// church books rather than anything that looks like a wiring bug.
+			r.Use(resolvePermissions(d))
 
-			// Any signed-in member may give.
+			// Any signed-in member may give, and these routes deliberately keep
+			// NO finance permission.
+			//
+			// The Member system role holds none — see the comment on it in
+			// rbac/role.go — because a member's access to their own giving is
+			// ownership, not a permission over the congregation's records.
+			// Guarding these with finance:read would stop the congregation
+			// giving, which is the product, and would leave members with no way
+			// to see their own receipts.
 			r.Post("/finance/give/quote", handleGivingQuote(svc))
 			r.Post("/finance/give", handleStartGiving(svc))
+			// Ownership-checked inside the handler via selfOr, which is
+			// the only guard here and has to stay that way: a member reading
+			// their own receipt holds nothing that would satisfy a permission.
 			r.Get("/finance/transactions/{reference}", handleGetTransaction(svc))
+			// A WRITE performed by ordinary members — the callback half of the
+			// settle race, when the giver returns to the app before Paystack's
+			// webhook lands. Any finance write permission would be wrong twice:
+			// members do not hold one, and requiring one would leave a paid
+			// transaction pending until the webhook arrived.
 			r.Post("/finance/transactions/{reference}/settle", handleSettle(svc))
+			// The query IS the ownership check — it filters on the caller's own
+			// id. This is the route the whole "a member reads their own giving"
+			// guarantee rests on.
 			r.Get("/finance/me/giving", handleMyGiving(svc))
 
-			// The church's books are a leadership view.
-			r.Group(func(r chi.Router) {
-				r.Use(requireRole(RoleOrgAdmin, RoleChurchAdmin))
-				r.Get("/finance/summary", handleSummary(svc))
-				r.Get("/finance/transactions", handleListTransactions(svc))
-				r.Post("/finance/cash", handleRecordCash(svc))
-				r.Get("/finance/members/{memberId}/giving", handleMemberGiving(svc))
-			})
+			// The church's books. Guarded by PERMISSION rather than role name,
+			// which is what lets a church invent a Treasurer role and have it
+			// work — a hard-coded allowlist cannot express a role that did not
+			// exist when the allowlist was written.
+			r.With(requirePermission(rbac.ResourceFinance, rbac.ActionRead)).
+				Get("/finance/summary", handleSummary(svc))
+
+			// Not a list endpoint wearing its own clothes: ?memberId= makes
+			// this a congregation-wide giving reader, and there is no ownership
+			// check on it at all.
+			r.With(requirePermission(rbac.ResourceFinance, rbac.ActionRead)).
+				Get("/finance/transactions", handleListTransactions(svc))
+
+			// CREATE, not read. This mints ledger entries and accepts an
+			// arbitrary memberId in the body, so it must not collapse into the
+			// same permission as the three read routes — otherwise anyone who
+			// can view the books can also record cash against another member's
+			// name. (Write implies read, so finance:create subsumes what it
+			// needs to display the result.)
+			r.With(requirePermission(rbac.ResourceFinance, rbac.ActionCreate)).
+				Post("/finance/cash", handleRecordCash(svc))
+
+			// finance:read OR the member themselves — an OR, not an AND.
+			// The handler's ownership check was previously dead code, since
+			// the enclosing role allowlist admitted only leaders and it could
+			// never deny. Guarding this with requirePermission alone would deny
+			// a member their own giving history; requiring both would do the
+			// same. The handler decides.
+			r.Get("/finance/members/{memberId}/giving", handleMemberGiving(svc))
 		})
 	}
 }
@@ -103,10 +149,9 @@ func handleGivingQuote(svc *finance.Service) http.HandlerFunc {
 			httpx.Error(w, http.StatusUnauthorized, "Sign in to continue.")
 			return
 		}
-		var priorToday int64
-		if !req.Anonymous {
-			priorToday, _ = svc.GivenTodayMinor(r.Context(), scope.UserID, time.Now())
-		}
+		// Anonymous controls what the church sees; it must not reset the
+		// signed-in giver's cumulative transfer allowance.
+		priorToday, _ := svc.GivenTodayMinor(r.Context(), scope.UserID, time.Now())
 		httpx.JSON(w, http.StatusOK, money.QuoteELevy(amount, req.Channel, priorToday))
 	}
 }
@@ -196,18 +241,16 @@ func handleStartGiving(svc *finance.Service) http.HandlerFunc {
 		// Quote the levy against what this giver has already transferred
 		// today: the threshold is cumulative, so charging per transaction
 		// under-quotes exactly the member who gives most often.
-		var priorToday int64
-		if memberID != "" {
-			priorToday, _ = svc.GivenTodayMinor(r.Context(), memberID, time.Now())
-		}
+		priorToday, _ := svc.GivenTodayMinor(r.Context(), scope.UserID, time.Now())
 		quote := money.QuoteELevy(amount, req.Channel, priorToday)
-		if req.AcceptedTotalMinor <= 0 || req.AcceptedTotalMinor != quote.Total.Minor {
+		if !acceptedQuoteTotal(req.AcceptedTotalMinor, quote) {
 			httpx.Error(w, http.StatusConflict, "The total changed. Review the latest quote before continuing.")
 			return
 		}
 
 		result, err := svc.StartGiving(r.Context(), finance.GiveRequest{
 			MemberID:        memberID,
+			InitiatorID:     scope.UserID,
 			Type:            finance.Type(req.Type),
 			Amount:          amount,
 			Channel:         req.Channel,
@@ -223,6 +266,10 @@ func handleStartGiving(svc *finance.Service) http.HandlerFunc {
 		}
 		httpx.JSON(w, http.StatusCreated, result)
 	}
+}
+
+func acceptedQuoteTotal(accepted int64, quote money.LevyQuote) bool {
+	return accepted > 0 && accepted == quote.Total.Minor
 }
 
 // handlePaystackWebhook authenticates and processes a provider callback.
@@ -300,7 +347,17 @@ func handleSettle(svc *finance.Service) http.HandlerFunc {
 		// The callback path: the giver returned to the app before the webhook
 		// arrived. Same settlement code, so whichever wins the race the
 		// transaction settles exactly once.
-		tx, err := svc.Settle(r.Context(), chi.URLParam(r, "reference"))
+		reference := chi.URLParam(r, "reference")
+		stored, err := svc.ByReference(r.Context(), reference)
+		if err != nil {
+			writeFinanceError(w, err)
+			return
+		}
+		if !selfOr(r, transactionOwnerID(stored), rbac.ResourceFinance, rbac.ActionRead) {
+			httpx.Error(w, http.StatusForbidden, "You do not have permission to do that.")
+			return
+		}
+		tx, err := svc.Settle(r.Context(), reference)
 		if err != nil {
 			writeFinanceError(w, err)
 			return
@@ -317,12 +374,19 @@ func handleGetTransaction(svc *finance.Service) http.HandlerFunc {
 			return
 		}
 		// A member may only see their own transaction.
-		if !selfOrLeader(r, tx.MemberID.String()) {
+		if !selfOr(r, transactionOwnerID(tx), rbac.ResourceFinance, rbac.ActionRead) {
 			httpx.Error(w, http.StatusForbidden, "You do not have permission to do that.")
 			return
 		}
 		httpx.JSON(w, http.StatusOK, tx)
 	}
+}
+
+func transactionOwnerID(tx *finance.Transaction) string {
+	if tx.InitiatedBy.String() != "" {
+		return tx.InitiatedBy.String()
+	}
+	return tx.MemberID.String()
 }
 
 func handleListTransactions(svc *finance.Service) http.HandlerFunc {
@@ -424,11 +488,18 @@ func handleMyGiving(svc *finance.Service) http.HandlerFunc {
 			httpx.Error(w, http.StatusUnauthorized, "Sign in to continue.")
 			return
 		}
-		giving, err := svc.GivingFor(r.Context(), scope.UserID,
-			parseTime(r.URL.Query().Get("from")), parseTime(r.URL.Query().Get("to")))
+		giving, err := svc.List(r.Context(), finance.Query{
+			OwnerID: scope.UserID,
+			From:    parseTime(r.URL.Query().Get("from")),
+			To:      parseTime(r.URL.Query().Get("to")),
+			Limit:   500,
+		})
 		if err != nil {
 			writeFinanceError(w, err)
 			return
+		}
+		if giving == nil {
+			giving = []finance.Transaction{}
 		}
 		httpx.JSON(w, http.StatusOK, giving)
 	}
@@ -437,7 +508,7 @@ func handleMyGiving(svc *finance.Service) http.HandlerFunc {
 func handleMemberGiving(svc *finance.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		memberID := chi.URLParam(r, "memberId")
-		if !selfOrLeader(r, memberID) {
+		if !selfOr(r, memberID, rbac.ResourceFinance, rbac.ActionRead) {
 			httpx.Error(w, http.StatusForbidden, "You do not have permission to do that.")
 			return
 		}

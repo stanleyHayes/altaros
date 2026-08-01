@@ -101,6 +101,10 @@ func requirePermission(resource rbac.Resource, action rbac.Action) func(http.Han
 				next.ServeHTTP(w, r)
 				return
 			}
+			if isPlatformAdmin(r) {
+				next.ServeHTTP(w, r)
+				return
+			}
 
 			// A missing READ is a 404, not a 403. Requirement 7 says the route
 			// should not render at all for someone without read — and a 403
@@ -114,6 +118,26 @@ func requirePermission(resource rbac.Resource, action rbac.Action) func(http.Han
 			httpx.Error(w, http.StatusForbidden, "You do not have permission to do that.")
 		})
 	}
+}
+
+// isPlatformAdmin reports whether the caller is ALTAR OS support.
+//
+// requireRole has always added RoleSuperAdmin to every allowlist, for the
+// reason stated there: the one list that forgot would lock support out during a
+// live incident. requirePermission needs the same escape, or converting a route
+// from one guard to the other silently removes it — and it removes MORE than it
+// looks, because a platform admin belongs to no church, so there is no
+// tenant-scoped role to resolve and they would hold nothing at all.
+//
+// Scoped exactly as requireRole scopes it, deliberately. requireRole reads the
+// tenant scope first and answers 401 when there is none, so its SUPER_ADMIN
+// bypass only ever applied to a platform admin whose token DOES carry a church
+// — one who has picked a church to act in. A churchless platform admin is
+// refused by both guards, which is the behaviour today and not something this
+// change should quietly widen.
+func isPlatformAdmin(r *http.Request) bool {
+	scope, err := tenancy.FromContext(r.Context())
+	return err == nil && scope.Role == RoleSuperAdmin
 }
 
 // permissionCacheTTL is how long a resolved permission set is reused.

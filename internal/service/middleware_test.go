@@ -14,6 +14,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/redis/go-redis/v9"
 
+	"github.com/hayfordstanley/altar-os/internal/domain/rbac"
 	"github.com/hayfordstanley/altar-os/internal/platform/config"
 	"github.com/hayfordstanley/altar-os/internal/platform/deps"
 	"github.com/hayfordstanley/altar-os/internal/platform/httpx"
@@ -310,38 +311,93 @@ func TestRoleCheckWithoutAuthMiddlewareFailsClosed(t *testing.T) {
 // Without this, an authenticated member could read anyone's giving by
 // changing an id in the URL — the single most likely way this platform leaks
 // data.
-func TestSelfOrLeader(t *testing.T) {
+//
+// Access to someone ELSE's record is now decided by a permission rather than a
+// role name, which is what makes a church-invented Treasurer role work. The
+// role column below only sets the platform-admin escape; everything else is
+// driven by `holds`.
+func TestSelfOr(t *testing.T) {
 	cases := []struct {
-		role, callerID, targetID string
-		want                     bool
+		name             string
+		role             string
+		holds            []rbac.Permission
+		callerID, target string
+		resource         rbac.Resource
+		action           rbac.Action
+		want             bool
 	}{
-		{RoleMember, "u1", "u1", true},  // own record
-		{RoleMember, "u1", "u2", false}, // someone else's
-		{RoleDeptLeader, "u1", "u2", true},
-		{RoleChurchAdmin, "u1", "u2", true},
-		{RoleOrgAdmin, "u1", "u2", true},
-		{RoleSuperAdmin, "u1", "u2", true},
-		{"", "u1", "u2", false},
+		{
+			name: "own record, holding nothing at all",
+			role: RoleMember, callerID: "u1", target: "u1",
+			resource: rbac.ResourceFinance, action: rbac.ActionRead, want: true,
+		},
+		{
+			name: "someone else's, holding nothing",
+			role: RoleMember, callerID: "u1", target: "u2",
+			resource: rbac.ResourceFinance, action: rbac.ActionRead, want: false,
+		},
+		{
+			name:     "someone else's giving, holding finance:read",
+			role:     RoleChurchAdmin,
+			holds:    []rbac.Permission{rbac.NewPermission(rbac.ResourceFinance, rbac.ActionRead)},
+			callerID: "u1", target: "u2",
+			resource: rbac.ResourceFinance, action: rbac.ActionRead, want: true,
+		},
+		{
+			// The narrowing this change makes, stated as a test rather than
+			// left to be discovered: the Staff role that DEPARTMENT_LEADER maps
+			// to holds member:read and NO finance permission, so a department
+			// leader can read a member's record and not their giving. The old
+			// role list answered yes to both.
+			name:     "member:read does not open the giving history",
+			role:     RoleDeptLeader,
+			holds:    []rbac.Permission{rbac.NewPermission(rbac.ResourceMember, rbac.ActionRead)},
+			callerID: "u1", target: "u2",
+			resource: rbac.ResourceFinance, action: rbac.ActionRead, want: false,
+		},
+		{
+			name:     "and the same person can still read the record itself",
+			role:     RoleDeptLeader,
+			holds:    []rbac.Permission{rbac.NewPermission(rbac.ResourceMember, rbac.ActionRead)},
+			callerID: "u1", target: "u2",
+			resource: rbac.ResourceMember, action: rbac.ActionRead, want: true,
+		},
+		{
+			// Support keeps its way in, matching requireRole's bypass.
+			name: "platform admin, holding nothing",
+			role: RoleSuperAdmin, callerID: "u1", target: "u2",
+			resource: rbac.ResourceFinance, action: rbac.ActionRead, want: true,
+		},
+		{
+			name: "no role at all",
+			role: "", callerID: "u1", target: "u2",
+			resource: rbac.ResourceFinance, action: rbac.ActionRead, want: false,
+		},
 	}
+
 	for _, c := range cases {
-		req := httptest.NewRequest(http.MethodGet, "/", nil)
-		req = req.WithContext(tenancy.WithScope(req.Context(), tenancy.Scope{
-			ChurchID: "c", UserID: c.callerID, Role: c.role,
-		}))
-		if got := selfOrLeader(req, c.targetID); got != c.want {
-			t.Errorf("role %q caller %q target %q: got %v, want %v",
-				c.role, c.callerID, c.targetID, got, c.want)
-		}
+		t.Run(c.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/", nil)
+			ctx := tenancy.WithScope(req.Context(), tenancy.Scope{
+				ChurchID: "c", UserID: c.callerID, Role: c.role,
+			})
+			ctx = withPermissions(ctx, rbac.NewSet(c.holds...))
+			req = req.WithContext(ctx)
+
+			if got := selfOr(req, c.target, c.resource, c.action); got != c.want {
+				t.Errorf("got %v, want %v", got, c.want)
+			}
+		})
 	}
 }
 
 // A request with no scope at all must never be treated as self.
 func TestSelfOrLeaderWithoutScopeIsRefused(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	if selfOrLeader(req, "anyone") {
+	if selfOr(req, "anyone", rbac.ResourceMember, rbac.ActionRead) {
 		t.Fatal("an unscoped request must not pass the ownership check")
 	}
-	if selfOrLeader(req, "") {
+	if selfOr(req, "", rbac.ResourceMember, rbac.ActionRead) {
 		t.Fatal("an unscoped request must not match an empty target id")
 	}
 }

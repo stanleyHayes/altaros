@@ -52,6 +52,21 @@ func churchRoutes(d *deps.Deps) routeSet {
 			// where an id from a URL would otherwise become a cross-branch read.
 			r.Get("/churches/{id}", handleGetChurch(svc))
 
+			// Deliberately still a ROLE check, and the only one left on the
+			// platform after WP-36's sweep.
+			//
+			// Everything else moved to requirePermission so a church can invent
+			// its own roles. This one cannot follow, because it does not ask a
+			// capability question. Listing a denomination's branches is about
+			// organisational REACH — whether the caller acts above a single
+			// church — and `resource:action` has no way to say that. The nearest
+			// permission, church:read, is held by every Administrator of every
+			// branch, so converting it would let a single-branch admin enumerate
+			// their whole denomination. That is a widening, not a migration.
+			//
+			// Scope already has a name here: tenancy.Scope.CrossBranch, set from
+			// the same role, and VisibleChurchIDs is what actually decides which
+			// branches come back. See §10 Q-14.
 			r.Group(func(r chi.Router) {
 				r.Use(requireRole(RoleOrgAdmin))
 				r.Get("/organizations/{id}/branches", handleBranches(svc))

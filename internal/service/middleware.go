@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/hayfordstanley/altar-os/internal/domain/rbac"
 	"github.com/hayfordstanley/altar-os/internal/platform/deps"
 	"github.com/hayfordstanley/altar-os/internal/platform/httpx"
 	"github.com/hayfordstanley/altar-os/internal/platform/tenancy"
@@ -129,13 +130,26 @@ func callerScope(r *http.Request) (tenancy.Scope, error) {
 	return tenancy.FromContext(r.Context())
 }
 
-// selfOrLeader reports whether the caller may act on a given member's data.
+// selfOr reports whether the caller is the member in question, or otherwise
+// holds a permission over that kind of record.
 //
-// A member may always read their own record; anyone else needs a leadership
-// role. Without this an authenticated member could read the whole
-// congregation's giving simply by changing an id in the URL, which is the
-// single most likely way this platform leaks data.
-func selfOrLeader(r *http.Request, memberID string) bool {
+// This is the OR half of the routes that serve both audiences from one path.
+// GET /finance/members/{memberId}/giving cannot carry requirePermission alone —
+// that would deny a member their own giving history, since the Member role
+// deliberately holds no finance permission — and it cannot rely on ownership
+// alone, because leadership legitimately reads other people's.
+//
+// The permission is a PARAMETER rather than a fixed leadership check, and that
+// distinction is load-bearing: the two callers need different ones. Reading a
+// member's giving takes finance:read; reading their contact record takes
+// member:read. The single hard-coded role list this replaces answered both with
+// the same yes, which is how a department leader ended up able to read any
+// member's giving history.
+//
+// Without any of this, an authenticated member could read the whole
+// congregation's giving by changing an id in a URL — the single most likely way
+// this platform leaks data.
+func selfOr(r *http.Request, memberID string, resource rbac.Resource, action rbac.Action) bool {
 	scope, err := callerScope(r)
 	if err != nil {
 		return false
@@ -143,11 +157,11 @@ func selfOrLeader(r *http.Request, memberID string) bool {
 	if scope.UserID == memberID {
 		return true
 	}
-	switch scope.Role {
-	case RoleSuperAdmin, RoleOrgAdmin, RoleChurchAdmin, RoleDeptLeader:
+	// A platform admin, for the same reason requireRole admits one.
+	if scope.Role == RoleSuperAdmin {
 		return true
 	}
-	return false
+	return permissionsFrom(r.Context()).Can(resource, action)
 }
 
 // bearerFrom extracts a bearer token from an Authorization header value.
