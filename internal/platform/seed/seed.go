@@ -17,6 +17,7 @@ import (
 	"github.com/hayfordstanley/altar-os/internal/domain/consent"
 	"github.com/hayfordstanley/altar-os/internal/domain/finance"
 	"github.com/hayfordstanley/altar-os/internal/domain/member"
+	"github.com/hayfordstanley/altar-os/internal/domain/rbac"
 	"github.com/hayfordstanley/altar-os/internal/platform/money"
 	"github.com/hayfordstanley/altar-os/internal/platform/mongodb"
 	"github.com/hayfordstanley/altar-os/internal/platform/tenancy"
@@ -158,6 +159,13 @@ func (s *Seeder) Run(ctx context.Context) (*Result, error) {
 			return nil, err
 		}
 		result.Churches++
+
+		// Every church needs its three system roles before anyone holds one.
+		// Provisioned per church rather than at boot, because roles are
+		// tenant-scoped and a church that does not exist yet cannot have them.
+		if err := rbac.NewService(s.db).EnsureSystemRoles(s.scope(churchID)); err != nil {
+			return nil, fmt.Errorf("seed: system roles: %w", err)
+		}
 
 		logins, err := s.staff(ctx, churchID, b.name, b.slug)
 		if err != nil {
@@ -325,6 +333,7 @@ func (s *Seeder) staff(ctx context.Context, churchID bson.ObjectID, churchName, 
 				"passwordHash": string(hash),
 				"name":         p.first + " " + p.last,
 				"role":         p.role,
+				"roleId":       s.roleIDFor(ctx, churchID, p.role),
 				"churchId":     churchID,
 				"isActive":     true,
 				MarkerField:    Marker,
@@ -712,4 +721,31 @@ func roleLabel(role string) string {
 	default:
 		return "member"
 	}
+}
+
+// roleIDFor resolves the system role matching a legacy role name.
+//
+// Seeded users get a real roleId rather than relying on the legacy-enum
+// fallback, so the seed exercises the path production will use once accounts
+// are created through RBAC rather than through the TypeScript API.
+func (s *Seeder) roleIDFor(ctx context.Context, churchID bson.ObjectID, legacyRole string) string {
+	var slug string
+	switch legacyRole {
+	case "CHURCH_ADMIN", "ORG_ADMIN", "SUPER_ADMIN":
+		slug = rbac.SystemAdmin
+	case "DEPARTMENT_LEADER":
+		slug = rbac.SystemStaff
+	default:
+		slug = rbac.SystemMember
+	}
+
+	role, err := rbac.NewService(s.db).RoleBySlug(s.scope(churchID), slug)
+	if err != nil {
+		// Not fatal: the legacy enum still resolves, so the account works
+		// either way. Losing the seed over it would be disproportionate.
+		s.opt.Log.Warn("could not resolve a system role for a seeded user",
+			slog.String("slug", slug), slog.String("error", err.Error()))
+		return ""
+	}
+	return role.ID.Hex()
 }

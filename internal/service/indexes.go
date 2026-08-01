@@ -10,6 +10,7 @@ import (
 	"github.com/hayfordstanley/altar-os/internal/domain/consent"
 	"github.com/hayfordstanley/altar-os/internal/domain/finance"
 	"github.com/hayfordstanley/altar-os/internal/domain/member"
+	"github.com/hayfordstanley/altar-os/internal/domain/rbac"
 	"github.com/hayfordstanley/altar-os/internal/platform/deps"
 )
 
@@ -38,6 +39,7 @@ func EnsureIndexes(ctx context.Context, d *deps.Deps) error {
 		{"member", member.NewService(d.Mongo, d.Events, d.Config.DataRegion).EnsureIndexes},
 		{"finance", finance.NewService(d.Mongo, nil, nil, nil).EnsureIndexes},
 		{"notification", newNotificationService(d).EnsureIndexes},
+		{"rbac", rbac.NewService(d.Mongo).EnsureIndexes},
 	}
 
 	for _, step := range steps {

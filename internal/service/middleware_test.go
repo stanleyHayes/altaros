@@ -379,7 +379,7 @@ func TestImplementedListMatchesTheRouteSets(t *testing.T) {
 	if !claimed["gateway"] {
 		t.Error("the gateway must appear in Implemented()")
 	}
-	for _, name := range []string{"auth", "church", "member", "finance"} {
+	for _, name := range []string{"auth", "church", "member", "finance", "rbac"} {
 		if !claimed[name] {
 			t.Errorf("%s serves real routes but is missing from Implemented()", name)
 		}
