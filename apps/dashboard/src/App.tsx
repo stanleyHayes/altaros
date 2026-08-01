@@ -19,7 +19,11 @@ import DepartmentsPage from "@/pages/DepartmentsPage";
 import FamiliesPage from "@/pages/FamiliesPage";
 import AiPage from "@/pages/AiPage";
 import InterChurchPage from "@/pages/InterChurchPage";
+import PeoplePage from "@/pages/PeoplePage";
 import NotFoundPage from "@/pages/NotFoundPage";
+import RouteScrollTop from "@/components/layout/RouteScrollTop";
+import PermissionsGate from "@/components/auth/PermissionsGate";
+import Guarded from "@/components/auth/Guarded";
 
 export default function App() {
   const [showSplash, setShowSplash] = useState(true);
@@ -42,32 +46,129 @@ export default function App() {
         autoHideDuration={4000}
       >
         <AuthProvider>
-          <BrowserRouter>
-            <Routes>
-              <Route path="/login" element={<LoginPage />} />
-              <Route path="/register" element={<RegisterPage />} />
+          {/* Inside AuthProvider so it knows whether there is a session to
+              resolve permissions for, and outside the router so one resolution
+              serves every route rather than one per navigation. */}
+          <PermissionsGate>
+            <BrowserRouter>
+              <RouteScrollTop />
+              <Routes>
+                <Route path="/login" element={<LoginPage />} />
+                <Route path="/register" element={<RegisterPage />} />
 
-              <Route path="/" element={<MainLayout />}>
-                <Route index element={<Navigate to="/dashboard" replace />} />
-                <Route path="dashboard" element={<DashboardPage />} />
-                <Route path="members" element={<MembersPage />} />
-                <Route path="finance" element={<FinancePage />} />
-                <Route path="events" element={<EventsPage />} />
-                <Route
-                  path="communications"
-                  element={<CommunicationsPage />}
-                />
-                <Route path="analytics" element={<AnalyticsPage />} />
-                <Route path="departments" element={<DepartmentsPage />} />
-                <Route path="families" element={<FamiliesPage />} />
-                <Route path="ai" element={<AiPage />} />
-                <Route path="inter-church" element={<InterChurchPage />} />
-                <Route path="settings" element={<SettingsPage />} />
-              </Route>
+                <Route path="/" element={<MainLayout />}>
+                  <Route index element={<Navigate to="/dashboard" replace />} />
 
-              <Route path="*" element={<NotFoundPage />} />
-            </Routes>
-          </BrowserRouter>
+                  {/* Every route below is wrapped in the permission its path
+                      declares in navigation.tsx. Guarded reads the requirement
+                      from that one list, so a hidden nav item and a blocked
+                      route are the same statement rather than two that have to
+                      be kept in agreement by hand.
+
+                      The server enforces the same permission independently —
+                      this is what someone SEES, never what they may DO. */}
+                  <Route
+                    path="dashboard"
+                    element={
+                      <Guarded path="/dashboard">
+                        <DashboardPage />
+                      </Guarded>
+                    }
+                  />
+                  <Route
+                    path="members"
+                    element={
+                      <Guarded path="/members">
+                        <MembersPage />
+                      </Guarded>
+                    }
+                  />
+                  <Route
+                    path="finance"
+                    element={
+                      <Guarded path="/finance">
+                        <FinancePage />
+                      </Guarded>
+                    }
+                  />
+                  <Route
+                    path="events"
+                    element={
+                      <Guarded path="/events">
+                        <EventsPage />
+                      </Guarded>
+                    }
+                  />
+                  <Route
+                    path="communications"
+                    element={
+                      <Guarded path="/communications">
+                        <CommunicationsPage />
+                      </Guarded>
+                    }
+                  />
+                  <Route
+                    path="analytics"
+                    element={
+                      <Guarded path="/analytics">
+                        <AnalyticsPage />
+                      </Guarded>
+                    }
+                  />
+                  <Route
+                    path="departments"
+                    element={
+                      <Guarded path="/departments">
+                        <DepartmentsPage />
+                      </Guarded>
+                    }
+                  />
+                  <Route
+                    path="families"
+                    element={
+                      <Guarded path="/families">
+                        <FamiliesPage />
+                      </Guarded>
+                    }
+                  />
+                  <Route
+                    path="ai"
+                    element={
+                      <Guarded path="/ai">
+                        <AiPage />
+                      </Guarded>
+                    }
+                  />
+                  <Route
+                    path="inter-church"
+                    element={
+                      <Guarded path="/inter-church">
+                        <InterChurchPage />
+                      </Guarded>
+                    }
+                  />
+                  <Route
+                    path="people"
+                    element={
+                      <Guarded path="/people">
+                        <PeoplePage />
+                      </Guarded>
+                    }
+                  />
+                  <Route
+                    path="settings"
+                    element={
+                      <Guarded path="/settings">
+                        <SettingsPage />
+                      </Guarded>
+                    }
+                  />
+                </Route>
+
+                <Route path="*" element={<NotFoundPage />} />
+              </Routes>
+            </BrowserRouter>
+          </PermissionsGate>
         </AuthProvider>
       </SnackbarProvider>
     </ThemeProvider>
