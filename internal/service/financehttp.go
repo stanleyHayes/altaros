@@ -52,6 +52,7 @@ func financeRoutes(d *deps.Deps) routeSet {
 			r.Use(authenticated(d))
 
 			// Any signed-in member may give.
+			r.Post("/finance/give/quote", handleGivingQuote(svc))
 			r.Post("/finance/give", handleStartGiving(svc))
 			r.Get("/finance/transactions/{reference}", handleGetTransaction(svc))
 			r.Post("/finance/transactions/{reference}/settle", handleSettle(svc))
@@ -66,6 +67,47 @@ func financeRoutes(d *deps.Deps) routeSet {
 				r.Get("/finance/members/{memberId}/giving", handleMemberGiving(svc))
 			})
 		})
+	}
+}
+
+// handleGivingQuote is the non-mutating first half of checkout. The mobile
+// client must be able to show the exact debit before it creates a pending
+// transaction or sends the member to Paystack.
+func handleGivingQuote(svc *finance.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Amount    string `json:"amount"`
+			Currency  string `json:"currency"`
+			Channel   string `json:"channel"`
+			Anonymous bool   `json:"anonymous"`
+		}
+		if err := decode(r, &req); err != nil {
+			httpx.Error(w, http.StatusBadRequest, "Malformed request body")
+			return
+		}
+		currency := req.Currency
+		if currency == "" {
+			currency = "GHS"
+		}
+		amount, err := money.Parse(req.Amount, currency)
+		if err != nil || amount.Minor <= 0 {
+			httpx.Error(w, http.StatusBadRequest, "That amount is not valid.")
+			return
+		}
+		if !money.ValidChannel(req.Channel) || req.Channel == money.ChannelCash {
+			httpx.Error(w, http.StatusBadRequest, "That payment channel is not valid.")
+			return
+		}
+		scope, err := callerScope(r)
+		if err != nil {
+			httpx.Error(w, http.StatusUnauthorized, "Sign in to continue.")
+			return
+		}
+		var priorToday int64
+		if !req.Anonymous {
+			priorToday, _ = svc.GivenTodayMinor(r.Context(), scope.UserID, time.Now())
+		}
+		httpx.JSON(w, http.StatusOK, money.QuoteELevy(amount, req.Channel, priorToday))
 	}
 }
 
@@ -100,15 +142,16 @@ func handleStartGiving(svc *finance.Service) http.HandlerFunc {
 			// AmountMinor is the gift in minor units. A decimal string is
 			// accepted too, for clients that would otherwise send a float —
 			// see the note on Amount below.
-			AmountMinor int64  `json:"amountMinor"`
-			Amount      string `json:"amount"`
-			Currency    string `json:"currency"`
-			Channel     string `json:"channel"`
-			Email       string `json:"email"`
-			CampaignID  string `json:"campaignId"`
-			Note        string `json:"note"`
-			Anonymous   bool   `json:"anonymous"`
-			CallbackURL string `json:"callbackUrl"`
+			AmountMinor        int64  `json:"amountMinor"`
+			Amount             string `json:"amount"`
+			Currency           string `json:"currency"`
+			Channel            string `json:"channel"`
+			Email              string `json:"email"`
+			CampaignID         string `json:"campaignId"`
+			Note               string `json:"note"`
+			Anonymous          bool   `json:"anonymous"`
+			CallbackURL        string `json:"callbackUrl"`
+			AcceptedTotalMinor int64  `json:"acceptedTotalMinor"`
 		}
 		if err := decode(r, &req); err != nil {
 			httpx.Error(w, http.StatusBadRequest, "Malformed request body")
@@ -156,6 +199,11 @@ func handleStartGiving(svc *finance.Service) http.HandlerFunc {
 		var priorToday int64
 		if memberID != "" {
 			priorToday, _ = svc.GivenTodayMinor(r.Context(), memberID, time.Now())
+		}
+		quote := money.QuoteELevy(amount, req.Channel, priorToday)
+		if req.AcceptedTotalMinor <= 0 || req.AcceptedTotalMinor != quote.Total.Minor {
+			httpx.Error(w, http.StatusConflict, "The total changed. Review the latest quote before continuing.")
+			return
 		}
 
 		result, err := svc.StartGiving(r.Context(), finance.GiveRequest{

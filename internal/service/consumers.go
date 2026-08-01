@@ -42,6 +42,13 @@ func StartConsumers(ctx context.Context, d *deps.Deps) error {
 	if err := d.Events.Consume(ctx, handlers); err != nil {
 		return fmt.Errorf("service: start consumers: %w", err)
 	}
+
+	// The relay delivers anything Kafka refused at publish time. Without it an
+	// outbox row is written and never sent, which is the same lost event with
+	// an extra step.
+	if d.Outbox != nil {
+		go events.NewRelay(d.Outbox, d.Events, d.Log).Run(ctx)
+	}
 	return nil
 }
 

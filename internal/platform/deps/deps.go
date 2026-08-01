@@ -37,6 +37,8 @@ type Deps struct {
 	// Events is the Kafka bus. It satisfies the Publisher interface every
 	// domain declares, so it drops into the arguments that used to be nil.
 	Events *events.Bus
+	// Outbox holds events Kafka refused, for the relay to deliver later.
+	Outbox *events.Outbox
 }
 
 // Build connects everything, verifying each dependency before returning.
@@ -90,6 +92,18 @@ func Build(ctx context.Context, cfg *config.Config, log *slog.Logger) (*Deps, er
 		return nil, fmt.Errorf("deps: kafka at %v: %w", cfg.Kafka.Brokers, err)
 	}
 
+	// The outbox is what makes a Kafka outage recoverable rather than silent:
+	// a publish the broker refuses is queued in the same database the domain
+	// state lives in, and the relay drains it when Kafka returns.
+	outbox := events.NewOutbox(db.Database(), log)
+	if err := outbox.EnsureIndexes(ctx); err != nil {
+		_ = db.Close(ctx)
+		_ = rdb.Close()
+		bus.Close()
+		return nil, err
+	}
+	bus.WithOutbox(outbox)
+
 	log.Info("dependencies ready",
 		slog.String("mongo", cfg.Mongo.Database),
 		slog.String("redis", cfg.Redis.Addr),
@@ -104,6 +118,7 @@ func Build(ctx context.Context, cfg *config.Config, log *slog.Logger) (*Deps, er
 		Tokens: issuer,
 		Audit:  audit.NewLogger(db),
 		Events: bus,
+		Outbox: outbox,
 	}, nil
 }
 

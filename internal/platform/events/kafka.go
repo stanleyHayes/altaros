@@ -45,6 +45,11 @@ type Bus struct {
 	// a logged no-op rather than an error — see the note on NewBus.
 	enabled bool
 
+	// outbox catches events that could not be published. Optional: without it
+	// a broker outage loses the event, which is what this whole type exists to
+	// stop, so production always sets it.
+	outbox *Outbox
+
 	consumeOnce sync.Once
 	cancel      context.CancelFunc
 	wg          sync.WaitGroup
@@ -123,6 +128,15 @@ func NewBus(ctx context.Context, cfg Config) (*Bus, error) {
 // Enabled reports whether events actually reach Kafka.
 func (b *Bus) Enabled() bool { return b != nil && b.enabled }
 
+// WithOutbox attaches an outbox, so a publish that Kafka refuses is queued for
+// the relay rather than lost.
+func (b *Bus) WithOutbox(o *Outbox) *Bus {
+	if b != nil {
+		b.outbox = o
+	}
+	return b
+}
+
 // Publish emits a domain event.
 //
 // The key is the church id, per §6: Kafka orders within a partition, so this
@@ -177,6 +191,27 @@ func (b *Bus) Publish(ctx context.Context, topic, key string, payload any) error
 	// round trip is cheaper than an event that silently never existed.
 	if err := b.client.ProduceSync(ctx, record).FirstErr(); err != nil {
 		span.RecordError(err)
+
+		// Kafka refused. The domain state is already committed, so returning
+		// an error here would leave the caller with a settled transaction and
+		// a lost event — the dual-write failure this outbox exists for. Queue
+		// it and let the relay deliver when the broker recovers.
+		if b.outbox != nil {
+			if saveErr := b.outbox.Save(ctx, envelope); saveErr == nil {
+				b.log.Warn("kafka unavailable; event queued for the outbox relay",
+					slog.String("topic", topic),
+					slog.String("event_id", envelope.ID),
+					slog.String("error", err.Error()))
+				return nil
+			} else {
+				b.log.Error("kafka unavailable AND the event could not be queued; "+
+					"it is lost",
+					slog.String("topic", topic),
+					slog.String("event_id", envelope.ID),
+					slog.String("publish_error", err.Error()),
+					slog.String("outbox_error", saveErr.Error()))
+			}
+		}
 		return fmt.Errorf("events: publish %s: %w", topic, err)
 	}
 
@@ -489,4 +524,23 @@ func truncate(b []byte) string {
 		return string(b[:limit]) + "…"
 	}
 	return string(b)
+}
+
+// publishRaw sends an already-encoded envelope. Used by the outbox relay,
+// which must send exactly the bytes that were recorded rather than a
+// re-encoding of a payload whose meaning may have moved on since.
+func (b *Bus) publishRaw(ctx context.Context, topic, key string, body []byte) error {
+	if b == nil || !b.enabled {
+		return errors.New("events: bus is not enabled")
+	}
+	record := &kgo.Record{
+		Topic:   topic,
+		Key:     []byte(key),
+		Value:   body,
+		Headers: traceHeaders(ctx),
+	}
+	if err := b.client.ProduceSync(ctx, record).FirstErr(); err != nil {
+		return fmt.Errorf("events: relay publish %s: %w", topic, err)
+	}
+	return nil
 }
