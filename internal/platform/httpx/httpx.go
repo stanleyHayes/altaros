@@ -12,6 +12,8 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/hayfordstanley/altar-os/internal/platform/config"
 	"github.com/hayfordstanley/altar-os/internal/platform/logging"
@@ -49,6 +51,10 @@ func NewRouter(cfg *config.Config, log *slog.Logger) *chi.Mux {
 	r.Use(middleware.RequestID)
 	r.Use(middleware.RealIP)
 	r.Use(middleware.Recoverer)
+	// Tracing wraps the request before logging so the request-scoped logger
+	// can carry the trace id — which is what turns "find the logs for this
+	// slow trace" from a timestamp hunt into a single query.
+	r.Use(tracingMiddleware(cfg.ServiceName))
 	r.Use(requestLogger(log))
 	r.Use(middleware.Timeout(30 * time.Second))
 
@@ -132,6 +138,36 @@ func MountReadiness(r chi.Router, cfg *config.Config, checkers ...Checker) {
 	})
 }
 
+// tracingMiddleware starts a server span for each request and extracts any
+// incoming trace context, so a request that arrives from another service
+// continues that trace rather than starting a new one.
+//
+// Probe endpoints are excluded: they are hit every few seconds by Kubernetes
+// and would otherwise be the overwhelming majority of every trace sample,
+// pushing out the requests anyone actually wants to look at.
+func tracingMiddleware(serviceName string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		handler := otelhttp.NewHandler(next, serviceName,
+			otelhttp.WithSpanNameFormatter(func(_ string, r *http.Request) string {
+				// Route pattern, not the raw path: /members/{id} rather than
+				// /members/6a6d... Otherwise every member id becomes its own
+				// span name and the trace backend cannot aggregate anything.
+				if rc := chi.RouteContext(r.Context()); rc != nil && rc.RoutePattern() != "" {
+					return r.Method + " " + rc.RoutePattern()
+				}
+				return r.Method + " " + r.URL.Path
+			}),
+		)
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/health" || r.URL.Path == "/ready" {
+				next.ServeHTTP(w, r)
+				return
+			}
+			handler.ServeHTTP(w, r)
+		})
+	}
+}
+
 // requestLogger attaches a request-scoped logger and records the outcome.
 func requestLogger(base *slog.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
@@ -140,6 +176,14 @@ func requestLogger(base *slog.Logger) func(http.Handler) http.Handler {
 			reqID := middleware.GetReqID(r.Context())
 
 			l := base.With(slog.String("request_id", reqID))
+			// Correlate logs with traces. Without this, finding the logs for a
+			// slow trace means guessing from timestamps across several pods.
+			if sc := trace.SpanContextFromContext(r.Context()); sc.IsValid() {
+				l = l.With(
+					slog.String("trace_id", sc.TraceID().String()),
+					slog.String("span_id", sc.SpanID().String()),
+				)
+			}
 			ctx := logging.WithLogger(r.Context(), l)
 
 			ww := middleware.NewWrapResponseWriter(w, r.ProtoMajor)

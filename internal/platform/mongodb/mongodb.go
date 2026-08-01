@@ -27,9 +27,13 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/hayfordstanley/altar-os/internal/platform/config"
 	"github.com/hayfordstanley/altar-os/internal/platform/tenancy"
+	"github.com/hayfordstanley/altar-os/internal/platform/tracing"
 )
 
 // TenantField is the document field every tenant-scoped collection carries.
@@ -137,6 +141,40 @@ func (d *DB) Tenant(name string) *TenantCollection {
 	return &TenantCollection{coll: d.db.Collection(name), name: name}
 }
 
+// span starts a database span carrying the collection, the operation, and the
+// church — but never the filter.
+//
+// A filter contains phone numbers, emails and member ids, and a trace backend
+// is a second copy of production data with weaker access controls than the
+// database. The collection and operation are enough to answer the questions
+// traces are for: which query is slow, and for which church.
+func (t *TenantCollection) span(ctx context.Context, op string) (context.Context, trace.Span) {
+	ctx, span := tracing.Start(ctx, "mongodb."+t.name+"."+op,
+		trace.WithSpanKind(trace.SpanKindClient))
+	span.SetAttributes(
+		attribute.String(tracing.AttrCollection, t.name),
+		attribute.String("db.operation", op),
+		attribute.String("db.system", "mongodb"),
+	)
+	if scope, err := tenancy.FromContext(ctx); err == nil {
+		span.SetAttributes(tracing.TenantAttributes(scope.ChurchID, scope.Role)...)
+	}
+	return ctx, span
+}
+
+// recordErr marks a span failed and returns the error unchanged.
+//
+// ErrNoDocuments is deliberately not an error here: "this member has no
+// giving history" is a normal answer, and marking it failed would fill the
+// trace backend with red spans that mean nothing.
+func recordErr(span trace.Span, err error) error {
+	if err != nil && !errors.Is(err, mongo.ErrNoDocuments) {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+	}
+	return err
+}
+
 // TenantCollection is a collection that can only be queried within a church.
 type TenantCollection struct {
 	coll *mongo.Collection
@@ -212,24 +250,30 @@ func (t *TenantCollection) stampTenant(ctx context.Context, doc bson.M) (bson.M,
 
 // FindOne returns a single document within the caller's church.
 func (t *TenantCollection) FindOne(ctx context.Context, filter any, out any) error {
+	ctx, span := t.span(ctx, "findOne")
+	defer span.End()
+
 	scoped, err := t.scopedFilter(ctx, filter)
 	if err != nil {
-		return err
+		return recordErr(span, err)
 	}
-	return t.coll.FindOne(ctx, scoped).Decode(out)
+	return recordErr(span, t.coll.FindOne(ctx, scoped).Decode(out))
 }
 
 // Find returns matching documents within the caller's church.
 func (t *TenantCollection) Find(ctx context.Context, filter any, out any, opts ...options.Lister[options.FindOptions]) error {
+	ctx, span := t.span(ctx, "find")
+	defer span.End()
+
 	scoped, err := t.scopedFilter(ctx, filter)
 	if err != nil {
-		return err
+		return recordErr(span, err)
 	}
 	cur, err := t.coll.Find(ctx, scoped, opts...)
 	if err != nil {
-		return err
+		return recordErr(span, err)
 	}
-	return cur.All(ctx, out)
+	return recordErr(span, cur.All(ctx, out))
 }
 
 // CountDocuments counts within the caller's church.
@@ -243,11 +287,15 @@ func (t *TenantCollection) CountDocuments(ctx context.Context, filter any) (int6
 
 // InsertOne writes a document stamped with the caller's church.
 func (t *TenantCollection) InsertOne(ctx context.Context, doc bson.M) (*mongo.InsertOneResult, error) {
+	ctx, span := t.span(ctx, "insertOne")
+	defer span.End()
+
 	stamped, err := t.stampTenant(ctx, doc)
 	if err != nil {
-		return nil, err
+		return nil, recordErr(span, err)
 	}
-	return t.coll.InsertOne(ctx, stamped)
+	res, err := t.coll.InsertOne(ctx, stamped)
+	return res, recordErr(span, err)
 }
 
 // UpdateOne updates a document within the caller's church.

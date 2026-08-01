@@ -9,6 +9,9 @@ import (
 	"github.com/hayfordstanley/altar-os/internal/platform/httpx"
 	"github.com/hayfordstanley/altar-os/internal/platform/tenancy"
 	"github.com/hayfordstanley/altar-os/internal/platform/token"
+	"github.com/hayfordstanley/altar-os/internal/platform/tracing"
+
+	"go.opentelemetry.io/otel/trace"
 )
 
 // Roles, matching the shared-types contract the frontends already use.
@@ -67,6 +70,15 @@ func authenticated(d *deps.Deps) func(http.Handler) http.Handler {
 				Role:           claims.Role,
 				CrossBranch:    crossBranch(claims.Role),
 			}
+
+			// Tag the request span with the church, so a trace can answer "is
+			// this slow for everyone or for one church" — the first question
+			// in any incident. Deliberately not the user id, phone or email:
+			// a trace backend is a second copy of production data with weaker
+			// access controls than the database.
+			trace.SpanFromContext(r.Context()).SetAttributes(
+				tracing.TenantAttributes(scope.ChurchID, scope.Role)...)
+
 			next.ServeHTTP(w, r.WithContext(tenancy.WithScope(r.Context(), scope)))
 		})
 	}

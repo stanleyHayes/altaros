@@ -44,6 +44,9 @@ type Config struct {
 	// Ghana (Act 843), Nigeria (NDPA) and Kenya (DPA) alike, so residency is
 	// configuration rather than convention.
 	DataRegion string
+	// Tracing configures OpenTelemetry (WP-08). Disabled when the endpoint is
+	// empty, which is the normal state in development.
+	Tracing TracingConfig
 	// LegacyAPIURL is the TypeScript API the gateway forwards not-yet-ported
 	// routes to (the strangler-fig proxy). Empty means unported paths 404,
 	// which is what should happen once the legacy API retires at WP-20.
@@ -94,6 +97,17 @@ type JWTConfig struct {
 	AccessTTL  time.Duration
 	RefreshTTL time.Duration
 	Issuer     string
+}
+
+// TracingConfig configures OpenTelemetry export.
+type TracingConfig struct {
+	// Endpoint is the OTLP gRPC collector. Empty disables tracing.
+	Endpoint string
+	// SampleRatio is the fraction of traces recorded. Well below 1 in
+	// production: at full sampling the collector becomes a second production
+	// dependency sized like the first.
+	SampleRatio float64
+	Insecure    bool
 }
 
 type PaystackConfig struct {
@@ -176,6 +190,14 @@ func Load(serviceName string) (*Config, error) {
 		}),
 		DataRegion:   getenv("DATA_REGION", "gh"),
 		LegacyAPIURL: getenvOptional("LEGACY_API_URL", "http://localhost:3001"),
+		Tracing: TracingConfig{
+			Endpoint:    os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"),
+			SampleRatio: getenvFloat("OTEL_TRACES_SAMPLER_ARG", 0.1),
+			// In-cluster collectors are reached over the pod network and do
+			// not normally present a certificate. Anything outside the cluster
+			// must set this false.
+			Insecure: getenvBool("OTEL_EXPORTER_OTLP_INSECURE", true),
+		},
 
 		Mongo: MongoConfig{
 			URI:            getenv("MONGODB_URI", "mongodb://localhost:27017"),
@@ -328,6 +350,30 @@ func getenvOptional(key, fallback string) string {
 		return strings.TrimSpace(v)
 	}
 	return fallback
+}
+
+func getenvFloat(key string, fallback float64) float64 {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return fallback
+	}
+	parsed, err := strconv.ParseFloat(v, 64)
+	if err != nil {
+		return fallback
+	}
+	return parsed
+}
+
+func getenvBool(key string, fallback bool) bool {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return fallback
+	}
+	parsed, err := strconv.ParseBool(v)
+	if err != nil {
+		return fallback
+	}
+	return parsed
 }
 
 func getenvInt(key string, fallback int) int {

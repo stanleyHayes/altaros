@@ -26,6 +26,7 @@ import (
 	"github.com/hayfordstanley/altar-os/internal/platform/deps"
 	"github.com/hayfordstanley/altar-os/internal/platform/httpx"
 	"github.com/hayfordstanley/altar-os/internal/platform/logging"
+	"github.com/hayfordstanley/altar-os/internal/platform/tracing"
 	"github.com/hayfordstanley/altar-os/internal/service"
 )
 
@@ -61,6 +62,39 @@ func run() error {
 	}
 
 	log := logging.New(cfg.ServiceName, string(cfg.Env), *logLevel)
+
+	// Tracing is optional and fails soft. A service that will not start
+	// because its telemetry collector is unreachable is worse than one with no
+	// telemetry, because the failure arrives during exactly the incident the
+	// traces were for.
+	traceCtx, cancelTrace := context.WithTimeout(context.Background(), 10*time.Second)
+	tracer, err := tracing.Init(traceCtx, tracing.Config{
+		Endpoint:    cfg.Tracing.Endpoint,
+		ServiceName: cfg.ServiceName,
+		Environment: string(cfg.Env),
+		SampleRatio: cfg.Tracing.SampleRatio,
+		Insecure:    cfg.Tracing.Insecure,
+	})
+	cancelTrace()
+	if err != nil {
+		log.Warn("tracing disabled; the service will run without it",
+			slog.String("error", err.Error()))
+		tracer = nil
+	} else if tracer.Enabled() {
+		log.Info("tracing enabled",
+			slog.String("collector", cfg.Tracing.Endpoint),
+			slog.Float64("sample_ratio", cfg.Tracing.SampleRatio))
+	}
+	defer func() {
+		// Bounded: an unreachable collector must not delay the shutdown of a
+		// service that has already stopped serving.
+		flushCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := tracer.Shutdown(flushCtx); err != nil {
+			log.Warn("could not flush traces on shutdown",
+				slog.String("error", err.Error()))
+		}
+	}()
 
 	// Connect everything up front: a process that starts is a process that can
 	// serve. Discovering mid-request that Redis is unreachable would mean
