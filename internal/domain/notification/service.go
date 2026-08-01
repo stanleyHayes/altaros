@@ -61,7 +61,7 @@ func (s *Service) WithLocation(loc *time.Location) *Service {
 
 // EnsureIndexes creates the indexes the service depends on.
 func (s *Service) EnsureIndexes(ctx context.Context) error {
-	if _, err := s.coll.Indexes().CreateMany(ctx, []mongo.IndexModel{
+	if err := s.coll.EnsureIndexes(ctx, []mongo.IndexModel{
 		{
 			// The dedupe key is what makes a redelivered domain event produce
 			// one message. Unique across the collection, and partial so the
@@ -92,7 +92,7 @@ func (s *Service) EnsureIndexes(ctx context.Context) error {
 		return fmt.Errorf("notification: create indexes: %w", err)
 	}
 
-	if _, err := s.prefs.Indexes().CreateMany(ctx, []mongo.IndexModel{
+	if err := s.prefs.EnsureIndexes(ctx, []mongo.IndexModel{
 		{
 			Keys: bson.D{
 				{Key: mongodb.TenantField, Value: 1},

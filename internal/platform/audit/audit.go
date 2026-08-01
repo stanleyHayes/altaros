@@ -96,7 +96,7 @@ func NewLogger(db *mongodb.DB) *Logger {
 // EnsureIndexes creates the indexes the audit queries need.
 // Per ADR-005 every tenant-scoped compound index leads with churchId.
 func (l *Logger) EnsureIndexes(ctx context.Context) error {
-	_, err := l.coll.Indexes().CreateMany(ctx, []mongo.IndexModel{
+	err := l.coll.EnsureIndexes(ctx, []mongo.IndexModel{
 		{
 			// "Who touched this record?" — the post-incident question.
 			Keys: bson.D{

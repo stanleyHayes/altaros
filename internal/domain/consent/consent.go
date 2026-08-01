@@ -145,7 +145,7 @@ func NewService(db *mongodb.DB, pub Publisher) *Service {
 // EnsureIndexes creates the indexes consent queries depend on.
 // Per ADR-005 every tenant-scoped compound index leads with churchId.
 func (s *Service) EnsureIndexes(ctx context.Context) error {
-	_, err := s.coll.Indexes().CreateMany(ctx, []mongo.IndexModel{
+	err := s.coll.EnsureIndexes(ctx, []mongo.IndexModel{
 		{
 			// The hot path: current consent for one member and purpose.
 			Keys: bson.D{

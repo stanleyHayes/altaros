@@ -81,7 +81,7 @@ func NewService(db *mongodb.DB, gw payments.Gateway, dir ChurchDirectory, pub Pu
 // payment safe: without them, two concurrent deliveries of the same webhook
 // both see no existing row and both insert one.
 func (s *Service) EnsureIndexes(ctx context.Context) error {
-	_, err := s.coll.Indexes().CreateMany(ctx, []mongo.IndexModel{
+	err := s.coll.EnsureIndexes(ctx, []mongo.IndexModel{
 		{
 			// §5.2 uq_idempotency. Deliberately NOT scoped by church: an
 			// idempotency key is globally unique, and scoping it per church
@@ -230,9 +230,16 @@ func (s *Service) StartGiving(ctx context.Context, req GiveRequest) (*GiveResult
 		"status":         string(StatusPending),
 		"provider":       s.gateway.Name(),
 		"idempotencyKey": key,
-		"occurredAt":     now,
-		"createdAt":      now,
-		"updatedAt":      now,
+		// reference mirrors idempotencyKey because the legacy Mongoose schema
+		// declares `reference` unique and required on this same collection
+		// (ADR-005: both writers share one database during the migration). A
+		// Go document that omitted it would be indexed as null, and the second
+		// such insert would collide with the first — every transaction after
+		// the first failing as a duplicate.
+		"reference":  key,
+		"occurredAt": now,
+		"createdAt":  now,
+		"updatedAt":  now,
 	}
 	if req.MemberID != "" {
 		doc["memberId"] = req.MemberID
@@ -548,6 +555,7 @@ func (s *Service) RecordCash(ctx context.Context, req CashRequest) (*Transaction
 		"currency":         req.Amount.Currency,
 		"status":           string(StatusSuccess),
 		"idempotencyKey":   key,
+		"reference":        key, // see the note in StartGiving
 		"recordedBy":       scope.UserID,
 		"occurredAt":       occurred.UTC(),
 		"settledAt":        now,

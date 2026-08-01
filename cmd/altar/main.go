@@ -77,6 +77,19 @@ func run() error {
 		d.Close(closeCtx)
 	}()
 
+	// Indexes before routes. Several are correctness constraints rather than
+	// optimisations — the payment idempotency keys and the notification dedupe
+	// key are enforced by the database because concurrent requests can race
+	// past any check the application performs. Serving traffic before they
+	// exist means the window where a retried webhook can record a tithe twice
+	// is exactly the window when the service is newest.
+	indexCtx, cancelIndexes := context.WithTimeout(context.Background(), 60*time.Second)
+	err = service.EnsureIndexes(indexCtx, d)
+	cancelIndexes()
+	if err != nil {
+		return err
+	}
+
 	root := httpx.NewRouter(cfg, log)
 	root.Mount("/api/v1", build(d))
 

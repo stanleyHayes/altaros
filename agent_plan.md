@@ -504,7 +504,17 @@ The PDF names four events. A working system needs a governed catalog with a vers
 
 | WP-15 | ✅ done | Consent-gated messaging with real SMS (Africa's Talking), email (Resend) and push (FCM v1) adapters. **Acceptance met:** `giving.completed` produces exactly one SMS receipt, and a member whose communications consent is revoked receives nothing — the transport is never reached. Per-channel preference, per-member quiet hours, delivery-status tracking and exponential backoff with a ceiling are all covered. |
 
-Not yet started: WP-16 (gateway wiring) onward.
+| WP-16 | 🟡 backend done, frontend cutover pending | Gateway serves auth + member + finance under one origin, with JWT→tenant middleware, role allowlists and per-record ownership checks. **Verified against a live server, not just in tests:** login → create a member (`024 123 4567` stored as `+233241234567`) → list → record cash (`"1,250.50"` → 125050 minor) → summary totalling **GHS 1,625.75 exactly**; a MEMBER role gets 403 on the congregation list and the church books; an unsigned, forged or tampered webhook gets 401; a correctly-signed one gets 200. **Outstanding:** pointing `dashboard` and `mobile` at the Go origin, which is a config change plus a re-test of each screen. |
+
+Not yet started: frontend cutover, then WP-17 onward.
+
+**Three bugs that only end-to-end testing could find**, all from the same root — ADR-005 has the Go services and the legacy Mongoose API sharing one live database, and unit tests run against empty collections where the legacy schema does not exist:
+
+1. **`EnsureIndexes` was never called at startup.** `uq_idempotency` and `uq_provider_ref` — described in this document as "what stops a retried payment webhook from recording a tithe twice" — did not exist in the live database at all. Every test passed because each test creates them itself. Now run at boot, before the listener starts.
+2. **Mongoose's `reference_1` unique index broke every Go transaction after the first.** Mongoose declares `reference` required and unique on `transactions`; Go never wrote the field, so every Go document was indexed as `null` and the second collided with the first. Surfaced as a nonsensical "That transaction has already been recorded." on an unrelated gift. Go now writes `reference` = the idempotency key, which is what it is.
+3. **Index creation failed the whole boot on an existing legacy index.** Mongoose had already created `slug_1`; Go asked for `org_slug_unique` on the same key and MongoDB answered `IndexOptionsConflict`, so the service refused to start. `mongodb.EnsureIndexes` now accepts an equivalent index under any name — but **refuses one with weaker guarantees**, because silently accepting a non-unique index where uniqueness was required would remove the constraint that makes payments idempotent while the service booted looking healthy.
+
+**And a fourth, found while cleaning up the test data:** Go was writing `churchId` as a **string** while Mongoose writes an **ObjectId**. Reads already tolerated both (`mongodb.ID`), but writes did not — so a member created through the Go API was invisible to every Mongoose query, and would simply not have appeared in the existing dashboard. ADR-005's entire justification is that both writers share one database; that only holds if each can see the other's work. Writes now use the ObjectId form and filters match either, with tests proving both directions and confirming isolation is not weakened by the wider match.
 
 **Consent is checked at the point of send, not by callers.** If the check lived in each caller, one caller forgetting it is a regulatory incident under Act 843 and the NDPA rather than a bug. Two distinctions turned out to matter and are structural:
 

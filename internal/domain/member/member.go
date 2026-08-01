@@ -142,7 +142,7 @@ func NewService(db *mongodb.DB, pub Publisher, defaultCountry string) *Service {
 // congregation has no phone on file initially, so that would break the common
 // case rather than an edge case.
 func (s *Service) EnsureIndexes(ctx context.Context) error {
-	_, err := s.coll.Indexes().CreateMany(ctx, []mongo.IndexModel{
+	err := s.coll.EnsureIndexes(ctx, []mongo.IndexModel{
 		{
 			Keys: bson.D{
 				{Key: mongodb.TenantField, Value: 1},

@@ -101,7 +101,7 @@ func NewService(db *mongodb.DB, issuer *token.Issuer, rdb *redis.Client, sms SMS
 
 // EnsureIndexes creates the uniqueness the auth flows depend on.
 func (s *Service) EnsureIndexes(ctx context.Context) error {
-	_, err := s.users.Indexes().CreateMany(ctx, []mongo.IndexModel{
+	err := mongodb.EnsureIndexes(ctx, s.users, []mongo.IndexModel{
 		{
 			Keys:    bson.D{{Key: "email", Value: 1}},
 			Options: options.Index().SetName("email_unique").SetUnique(true).SetSparse(true),

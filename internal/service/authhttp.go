@@ -19,18 +19,21 @@ import (
 // Paths match what the existing TypeScript frontends already call, so the
 // dashboard, web and admin apps can be pointed at the Go gateway without
 // changing their service layers.
-func buildAuth(d *deps.Deps) http.Handler {
+func buildAuth(d *deps.Deps) http.Handler { return standalone(authRoutes(d)) }
+
+// authRoutes registers the auth endpoints onto a router.
+func authRoutes(d *deps.Deps) routeSet {
 	svc := auth.NewService(d.Mongo, d.Tokens, d.Redis, smsSenderFor(d))
 
-	r := chi.NewRouter()
-	r.Post("/auth/login", handleLogin(svc))
-	r.Post("/auth/request-otp", handleRequestOTP(svc))
-	r.Post("/auth/verify-otp", handleVerifyOTP(svc))
-	r.Post("/auth/refresh-token", handleRefresh(svc))
-	r.Post("/auth/logout", handleLogout(svc))
-	r.Post("/auth/logout-all", handleLogoutEverywhere(svc))
-	r.Get("/auth/me", handleMe(svc))
-	return r
+	return func(r chi.Router) {
+		r.Post("/auth/login", handleLogin(svc))
+		r.Post("/auth/request-otp", handleRequestOTP(svc))
+		r.Post("/auth/verify-otp", handleVerifyOTP(svc))
+		r.Post("/auth/refresh-token", handleRefresh(svc))
+		r.Post("/auth/logout", handleLogout(svc))
+		r.Post("/auth/logout-all", handleLogoutEverywhere(svc))
+		r.Get("/auth/me", handleMe(svc))
+	}
 }
 
 type loginRequest struct {

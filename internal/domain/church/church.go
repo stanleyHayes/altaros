@@ -141,14 +141,14 @@ func NewService(db *mongodb.DB) *Service {
 
 // EnsureIndexes creates the indexes the hierarchy walk depends on.
 func (s *Service) EnsureIndexes(ctx context.Context) error {
-	if _, err := s.orgs.Indexes().CreateOne(ctx, mongo.IndexModel{
+	if err := mongodb.EnsureIndexes(ctx, s.orgs, []mongo.IndexModel{{
 		Keys:    bson.D{{Key: "slug", Value: 1}},
 		Options: options.Index().SetName("org_slug_unique").SetUnique(true),
-	}); err != nil {
+	}}); err != nil {
 		return fmt.Errorf("church: org indexes: %w", err)
 	}
 
-	_, err := s.churches.Indexes().CreateMany(ctx, []mongo.IndexModel{
+	err := mongodb.EnsureIndexes(ctx, s.churches, []mongo.IndexModel{
 		{
 			// Listing every branch under an organization is the core
 			// org-admin query.

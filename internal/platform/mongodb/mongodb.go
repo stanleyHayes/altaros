@@ -41,6 +41,50 @@ const TenantField = "churchId"
 // in context. This is a rejected security violation, not a not-found.
 var ErrCrossTenant = errors.New("mongodb: filter targets a different church than the request scope")
 
+// tenantValue renders a church id in the form the database stores it.
+//
+// Mongoose declares churchId as Schema.Types.ObjectId, so the legacy
+// TypeScript API both writes and queries it as a BSON ObjectId. ADR-005 has
+// the two writers sharing one database, so Go must write the same type — a
+// document stamped with the string "6a6d…" is simply invisible to every
+// Mongoose query, and a member created through the Go API would not appear in
+// the existing dashboard at all.
+//
+// Ids that are not valid ObjectIds stay strings: test fixtures use readable
+// scope names, and forcing them through ObjectID would make the wrapper
+// untestable without a real database.
+func tenantValue(churchID string) any {
+	if oid, err := bson.ObjectIDFromHex(churchID); err == nil {
+		return oid
+	}
+	return churchID
+}
+
+// tenantMatch builds a filter predicate that matches either storage form.
+//
+// Both forms have to match during the migration: documents Mongoose wrote
+// carry an ObjectId, and any documents Go wrote before this fix carry a
+// string. Matching only one silently halves a church's data.
+func tenantMatch(churchID string) any {
+	if oid, err := bson.ObjectIDFromHex(churchID); err == nil {
+		return bson.M{"$in": bson.A{oid, churchID}}
+	}
+	return churchID
+}
+
+// sameChurch reports whether a caller-supplied churchId refers to the church
+// in context, in either storage form.
+func sameChurch(supplied any, churchID string) bool {
+	switch v := supplied.(type) {
+	case string:
+		return v == churchID
+	case bson.ObjectID:
+		return v.Hex() == churchID
+	default:
+		return false
+	}
+}
+
 // DB wraps a Mongo database with tenant-aware accessors.
 type DB struct {
 	client *mongo.Client
@@ -121,12 +165,12 @@ func (t *TenantCollection) scopedFilter(ctx context.Context, filter any) (bson.M
 	}
 
 	if existing, ok := out[TenantField]; ok {
-		if s, isString := existing.(string); !isString || s != churchID {
+		if !sameChurch(existing, churchID) {
 			return nil, fmt.Errorf("%s: %w", t.name, ErrCrossTenant)
 		}
 	}
 
-	out[TenantField] = churchID
+	out[TenantField] = tenantMatch(churchID)
 	return out, nil
 }
 
@@ -144,12 +188,12 @@ func (t *TenantCollection) stampTenant(ctx context.Context, doc bson.M) (bson.M,
 	}
 
 	if existing, ok := out[TenantField]; ok {
-		if s, isString := existing.(string); !isString || s != churchID {
+		if !sameChurch(existing, churchID) {
 			return nil, fmt.Errorf("%s: %w", t.name, ErrCrossTenant)
 		}
 	}
 
-	out[TenantField] = churchID
+	out[TenantField] = tenantValue(churchID)
 	now := time.Now().UTC()
 	if _, ok := out["createdAt"]; !ok {
 		out["createdAt"] = now
@@ -260,11 +304,11 @@ func (t *TenantCollection) UpsertOne(ctx context.Context, filter any, update bso
 		}
 	}
 	if claimed, ok := onInsert[TenantField]; ok {
-		if s, isString := claimed.(string); !isString || s != churchID {
+		if !sameChurch(claimed, churchID) {
 			return nil, fmt.Errorf("%s: %w", t.name, ErrCrossTenant)
 		}
 	}
-	onInsert[TenantField] = churchID
+	onInsert[TenantField] = tenantValue(churchID)
 	if _, ok := onInsert["createdAt"]; !ok {
 		onInsert["createdAt"] = time.Now().UTC()
 	}
@@ -324,7 +368,7 @@ func (t *TenantCollection) scopedPipeline(ctx context.Context, pipeline []bson.M
 	}
 
 	scoped := make([]bson.M, 0, len(pipeline)+1)
-	scoped = append(scoped, bson.M{"$match": bson.M{TenantField: churchID}})
+	scoped = append(scoped, bson.M{"$match": bson.M{TenantField: tenantMatch(churchID)}})
 	scoped = append(scoped, pipeline...)
 	return scoped, nil
 }
@@ -345,3 +389,11 @@ var forbiddenStages = []string{"$out", "$merge", "$unionWith", "$lookup"}
 // Indexes exposes the underlying index view for migrations. Every
 // tenant-scoped compound index must lead with churchId (ADR-005).
 func (t *TenantCollection) Indexes() mongo.IndexView { return t.coll.Indexes() }
+
+// EnsureIndexes creates this collection's indexes, tolerating equivalent ones
+// the legacy Mongoose API already created under different names. See the
+// package-level EnsureIndexes for why that tolerance is necessary and where it
+// stops.
+func (t *TenantCollection) EnsureIndexes(ctx context.Context, models []mongo.IndexModel) error {
+	return EnsureIndexes(ctx, t.coll, models)
+}
