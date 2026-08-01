@@ -1,0 +1,45 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: altar-dev
+
+resources:
+  - ../../base
+  - namespace.yaml
+  - infra.yaml
+
+patches:
+  - path: dev-patch.yaml
+
+configMapGenerator:
+  - name: altar-config
+    behavior: merge
+    literals:
+      - APP_ENV=development
+      - MONGODB_URI=mongodb://mongodb:27017
+      - REDIS_ADDR=redis:6379
+      - MONGODB_DATABASE=altar-os
+      - CORS_ORIGIN=http://localhost:4173,http://localhost:5173
+
+# Development secrets are generated here in plain text on purpose: they are
+# throwaway values for a local cluster and having them visible is better than
+# implying they are protected. Staging and production use sealed-secrets, which
+# is why neither overlay has a generator like this.
+secretGenerator:
+  - name: altar-secrets
+    literals:
+      - JWT_SECRET=dev-only-cluster-secret-not-for-any-real-environment
+      - PAYSTACK_SECRET_KEY=
+      - PAYSTACK_PUBLIC_KEY=
+      - PAYSTACK_WEBHOOK_SECRET=
+
+# The generators would otherwise append a content hash to the names, which is
+# useful (it forces a rollout when config changes) but breaks the fixed
+# envFrom references in the base. The base names them explicitly, so hashing
+# is disabled and a config change is rolled out with `kubectl rollout restart`.
+generatorOptions:
+  disableNameSuffixHash: true
+
+images:
+  - name: altar-os
+    newTag: dev

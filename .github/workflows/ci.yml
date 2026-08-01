@@ -270,3 +270,85 @@ jobs:
           # -help exits without needing a database, which makes this a genuine
           # check of the image rather than of the infrastructure around it.
           docker run --rm altar-os:ci -help 2>&1 | tee /dev/stderr | grep -q gateway
+
+  # WP-18's acceptance criterion, run for real: `kubectl apply -k
+  # deploy/overlays/dev` must bring the stack healthy on a cluster. Rendering
+  # the manifests only proves they parse; a probe misconfigured against a path
+  # the service does not serve renders perfectly and never becomes ready.
+  k8s:
+    name: Kubernetes manifests
+    runs-on: ubuntu-latest
+    needs: [image]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate manifests against the Kubernetes schemas
+        run: |
+          set -euo pipefail
+          curl -sSfL https://github.com/yannh/kubeconform/releases/latest/download/kubeconform-linux-amd64.tar.gz \
+            | tar -xz kubeconform
+          for overlay in dev staging prod; do
+            echo "--- $overlay ---"
+            # -ignore-missing-schemas so the SealedSecret CRD, which is not in
+            # the upstream schema set, does not fail the run.
+            kubectl kustomize "deploy/overlays/$overlay" \
+              | ./kubeconform -strict -summary -ignore-missing-schemas -
+          done
+
+      - name: Create a kind cluster
+        uses: helm/kind-action@v1
+        with:
+          cluster_name: altar-ci
+
+      - name: Build and load the image
+        run: |
+          set -euo pipefail
+          docker build -t altar-os:dev .
+          kind load docker-image altar-os:dev --name altar-ci
+
+      - name: Apply the dev overlay and wait for health
+        run: |
+          set -euo pipefail
+          kubectl apply -k deploy/overlays/dev
+
+          echo "--- waiting for MongoDB and Redis ---"
+          kubectl -n altar-dev rollout status deployment/mongodb --timeout=180s
+          kubectl -n altar-dev rollout status deployment/redis --timeout=120s
+
+          echo "--- waiting for the gateway ---"
+          # This is the real assertion. The rollout only completes when a pod
+          # passes its readiness probe, which checks MongoDB and Redis — so
+          # success here means the service booted, created its indexes, and can
+          # actually reach its dependencies.
+          if ! kubectl -n altar-dev rollout status deployment/gateway --timeout=240s; then
+            echo "::error::The gateway never became ready"
+            kubectl -n altar-dev get pods -o wide
+            kubectl -n altar-dev describe deployment/gateway
+            kubectl -n altar-dev logs -l app.kubernetes.io/component=gateway --tail=100 || true
+            exit 1
+          fi
+
+      - name: Check the service answers through the cluster
+        run: |
+          set -euo pipefail
+          kubectl -n altar-dev port-forward service/gateway 8080:80 &
+          sleep 5
+
+          echo "--- liveness ---"
+          curl -sf http://localhost:8080/health | grep -q '"status":"ok"'
+
+          echo "--- readiness reports each dependency ---"
+          curl -sf http://localhost:8080/ready | tee /dev/stderr | grep -q '"mongodb":"ok"'
+
+          echo "--- tenant-scoped route refuses an unauthenticated caller ---"
+          code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/api/v1/members)
+          [ "$code" = "401" ] || { echo "::error::/members returned $code, expected 401"; exit 1; }
+
+          echo "The dev overlay brings the stack up healthy."
+
+      - name: Dump diagnostics on failure
+        if: failure()
+        run: |
+          kubectl -n altar-dev get all
+          kubectl -n altar-dev describe pods
+          kubectl -n altar-dev logs -l app.kubernetes.io/component=gateway --tail=200 || true

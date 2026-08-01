@@ -1,0 +1,137 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gateway
+  labels:
+    app.kubernetes.io/name: altar-os
+    app.kubernetes.io/component: gateway
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: altar-os
+      app.kubernetes.io/component: gateway
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      # Never fewer than the current replica count during a rollout, and only
+      # one extra pod at a time. Giving is time-concentrated — a Sunday service
+      # puts a congregation through the payment flow within minutes — so a
+      # deploy must not reduce capacity even briefly.
+      maxUnavailable: 0
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: altar-os
+        app.kubernetes.io/component: gateway
+    spec:
+      # Spread replicas across nodes so a single node failure cannot take the
+      # whole service down. ScheduleAnyway rather than DoNotSchedule: on a
+      # one-node dev cluster, a hard constraint would leave the second replica
+      # permanently pending.
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: altar-os
+              app.kubernetes.io/component: gateway
+
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532 # distroless `nonroot`
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+
+      containers:
+        - name: altar
+          image: altar-os:latest
+          args: ["-service=gateway"]
+
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+
+          ports:
+            - name: http
+              containerPort: 8080
+
+          envFrom:
+            - configMapRef:
+                name: altar-config
+            - secretRef:
+                name: altar-secrets
+
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+
+          # Startup probe first: index creation runs before the listener opens,
+          # and on a cold database that takes longer than a liveness probe
+          # should tolerate. Without this, a slow first boot is killed and
+          # retried forever. 30 x 2s gives it a minute; liveness only begins
+          # once this has succeeded.
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 2
+            failureThreshold: 30
+
+          # Liveness is dependency-free on purpose. It answers "is this process
+          # wedged", and the only correct response to yes is a restart.
+          # Checking Redis here would turn a thirty-second dependency blip into
+          # a cluster-wide restart storm, because every pod fails at once.
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+
+          # Readiness does check dependencies. Failing it removes this pod from
+          # the Service's endpoints without restarting it, which is exactly
+          # right for "alive but cannot serve".
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 2
+            successThreshold: 1
+
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              # No CPU limit deliberately: CFS throttling at the limit adds
+              # tail latency even when the node has spare capacity, and the
+              # request already guarantees a share. Memory IS limited, because
+              # a leak with no ceiling takes the node's other pods with it.
+              memory: 512Mi
+
+          volumeMounts:
+            # readOnlyRootFilesystem is on, so anything needing to write gets
+            # an explicit emptyDir. There is nothing else — the binary is
+            # static and the service keeps no local state.
+            - name: tmp
+              mountPath: /tmp
+
+      volumes:
+        - name: tmp
+          emptyDir: {}
+
+      # Longer than the server's own shutdown grace so in-flight requests
+      # finish before SIGKILL. The service handles SIGTERM already.
+      terminationGracePeriodSeconds: 45

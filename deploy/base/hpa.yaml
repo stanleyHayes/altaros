@@ -1,0 +1,41 @@
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: gateway
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: gateway
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          # 70 rather than the usual 80: giving traffic is not gradual. A
+          # Sunday service puts a whole congregation through the payment flow
+          # within minutes, and scaling up takes longer than that spike does to
+          # arrive, so there has to be headroom already in place.
+          averageUtilization: 70
+  behavior:
+    scaleUp:
+      # React fast and generously. Under-provisioning during a service means
+      # failed gifts, and a member who sees an error mid-tithe does not
+      # usually try again.
+      stabilizationWindowSeconds: 30
+      policies:
+        - type: Percent
+          value: 100
+          periodSeconds: 30
+    scaleDown:
+      # Come down slowly. Attendance is bursty and periodic; scaling down
+      # between two services only to scale back up is churn that costs more
+      # than the idle capacity.
+      stabilizationWindowSeconds: 300
+      policies:
+        - type: Percent
+          value: 25
+          periodSeconds: 60

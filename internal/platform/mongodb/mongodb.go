@@ -116,6 +116,14 @@ func (d *DB) Close(ctx context.Context) error {
 	return d.client.Disconnect(ctx)
 }
 
+// Ping verifies the database is reachable, for the readiness probe.
+func (d *DB) Ping(ctx context.Context) error {
+	if d == nil || d.client == nil {
+		return errors.New("mongodb: not connected")
+	}
+	return d.client.Ping(ctx, nil)
+}
+
 // Database exposes the raw database. Reserved for migrations and index
 // management; request-path code should use Tenant or Global.
 func (d *DB) Database() *mongo.Database { return d.db }

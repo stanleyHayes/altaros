@@ -1,0 +1,32 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: altar-staging
+
+resources:
+  - ../../base
+  - namespace.yaml
+  # Sealed secrets are committed encrypted; only the controller in the cluster
+  # can decrypt them. This is why there is no secretGenerator here — a plain
+  # literal in a kustomization is a secret in git history forever.
+  - sealed-secrets.yaml
+
+patches:
+  - path: staging-patch.yaml
+
+configMapGenerator:
+  - name: altar-config
+    behavior: merge
+    literals:
+      - APP_ENV=staging
+      - MONGODB_DATABASE=altar-os-staging
+      # Staging still fronts the legacy TypeScript API, because that is what
+      # the migration looks like until WP-20. Production sets it empty.
+      - LEGACY_API_URL=http://legacy-api.altar-staging.svc.cluster.local:3001
+
+generatorOptions:
+  disableNameSuffixHash: true
+
+images:
+  - name: altar-os
+    newTag: staging

@@ -1,0 +1,30 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: altar-prod
+
+resources:
+  - ../../base
+  - namespace.yaml
+  - sealed-secrets.yaml
+
+patches:
+  - path: prod-patch.yaml
+
+configMapGenerator:
+  - name: altar-config
+    behavior: merge
+    literals:
+      - APP_ENV=production
+      - MONGODB_DATABASE=altar-os
+      # Empty, not absent: an absent value falls back to the development
+      # default of localhost:3001, which in production would mean the gateway
+      # forwarding live traffic to nothing.
+      - LEGACY_API_URL=
+
+generatorOptions:
+  disableNameSuffixHash: true
+
+images:
+  - name: altar-os
+    newTag: v0.1.0 # pinned; never `latest` in production

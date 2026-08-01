@@ -1,0 +1,20 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gateway
+spec:
+  replicas: 3
+  template:
+    spec:
+      containers:
+        - name: altar
+          # Pinned by digest at deploy time. A mutable tag means two pods in
+          # the same ReplicaSet can be running different code after a node
+          # replacement, which is the hardest kind of incident to reason about.
+          imagePullPolicy: IfNotPresent
+          resources:
+            requests:
+              cpu: 250m
+              memory: 256Mi
+            limits:
+              memory: 1Gi

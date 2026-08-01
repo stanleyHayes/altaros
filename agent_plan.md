@@ -508,7 +508,17 @@ The PDF names four events. A working system needs a governed catalog with a vers
 
 | WP-17 | ✅ done | CI now runs the Go suite against **real MongoDB and Redis service containers** with the race detector, builds a 22.4MB distroless image, and smoke-tests a booted gateway. **Done when** was "a PR runs Go + TS pipelines" — it does, plus three checks the spec did not ask for and this codebase has already needed. |
 
-Not yet started: WP-18 onward.
+| WP-18 | 🟡 manifests done, cluster run gated on CI | kustomize base + dev/staging/prod overlays, HPA, PDB, sealed-secret placeholders, and the **readiness endpoint the base was documented as probing but which did not exist**. **Verified locally:** all three overlays render, and all 25 resources validate against the real Kubernetes schemas via kubeconform (the 1 skipped is the SealedSecret CRD). **Outstanding:** `kubectl apply -k deploy/overlays/dev` on an actual cluster — no cluster is available in this environment, so a CI job now creates a kind cluster, loads the image, applies the dev overlay and waits for `rollout status`, which only completes once a pod passes readiness. That is the acceptance criterion, run on every PR. |
+
+Not yet started: WP-19 (Phase 1 gate) onward.
+
+**`/health` and `/ready` are deliberately different things**, and conflating them is the failure mode this split exists to prevent. Liveness is dependency-free: it answers "is this process wedged", and the only correct response is a restart. Checking Redis there would turn a thirty-second dependency blip into a cluster-wide restart storm, because every pod fails at once. Readiness does check dependencies and returns **503**, which removes that pod from the Service's endpoints without restarting it — "alive but cannot serve". Redis in particular is not optional: it backs token revocation, and revocation checks fail closed, so an instance that cannot reach it rejects every authenticated request.
+
+**A startup probe was needed, not just liveness.** Index creation runs before the listener opens, and on a cold database that takes longer than a liveness probe should tolerate — without the startup probe, a slow first boot is killed and retried forever.
+
+**No CPU limit, but a memory limit.** CFS throttling at a CPU limit adds tail latency even when the node has spare capacity, and the request already guarantees a share. Memory is capped because a leak with no ceiling takes the node's other pods down with it.
+
+**The HPA scales up fast and down slowly** (70% target, 100%/30s up, 25%/60s down after a 5-minute window). Giving traffic is not gradual: a Sunday service puts a whole congregation through the payment flow within minutes, and scaling up takes longer than that spike takes to arrive. A member who sees an error mid-tithe does not usually try again.
 
 **The CI job was previously green while testing almost nothing.** Every integration test calls `t.Skipf` when its database is unreachable, and CI had no database — so `make test` passed having executed none of the guarantees that matter (tenant isolation, payment idempotency, consent gating). A skipped test is indistinguishable from a passing one in a green checkmark. `REQUIRE_INFRA=1` now turns an unreachable dependency into a failure, and the workflow additionally greps the log for `--- SKIP` so a test that skips for any other reason still fails the build.
 

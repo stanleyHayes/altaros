@@ -16,6 +16,7 @@ import (
 
 	"github.com/hayfordstanley/altar-os/internal/platform/audit"
 	"github.com/hayfordstanley/altar-os/internal/platform/config"
+	"github.com/hayfordstanley/altar-os/internal/platform/httpx"
 	"github.com/hayfordstanley/altar-os/internal/platform/mongodb"
 	"github.com/hayfordstanley/altar-os/internal/platform/token"
 )
@@ -90,5 +91,48 @@ func (d *Deps) Close(ctx context.Context) {
 	}
 	if d.Mongo != nil {
 		_ = d.Mongo.Close(ctx)
+	}
+}
+
+// MongoChecker reports MongoDB reachability for the readiness probe.
+type MongoChecker struct{ DB *mongodb.DB }
+
+// Name identifies the dependency.
+func (c MongoChecker) Name() string { return "mongodb" }
+
+// Check pings the database.
+func (c MongoChecker) Check(ctx context.Context) error {
+	if c.DB == nil {
+		return fmt.Errorf("mongodb: not configured")
+	}
+	return c.DB.Ping(ctx)
+}
+
+// RedisChecker reports Redis reachability for the readiness probe.
+type RedisChecker struct{ Client *redis.Client }
+
+// Name identifies the dependency.
+func (c RedisChecker) Name() string { return "redis" }
+
+// Check pings Redis.
+//
+// Redis backs token revocation, and revocation checks fail closed — so an
+// instance that cannot reach Redis rejects every authenticated request. It is
+// genuinely not ready, not merely degraded.
+func (c RedisChecker) Check(ctx context.Context) error {
+	if c.Client == nil {
+		return fmt.Errorf("redis: not configured")
+	}
+	return c.Client.Ping(ctx).Err()
+}
+
+// Checkers returns the readiness checks for these dependencies.
+func (d *Deps) Checkers() []httpx.Checker {
+	if d == nil {
+		return nil
+	}
+	return []httpx.Checker{
+		MongoChecker{DB: d.Mongo},
+		RedisChecker{Client: d.Redis},
 	}
 }

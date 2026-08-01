@@ -1,0 +1,113 @@
+# MongoDB and Redis for a local cluster only.
+#
+# Single replicas with emptyDir storage: this exists so `kubectl apply -k
+# deploy/overlays/dev` brings up a working stack on a laptop, not to model
+# production. Staging and production point at managed instances, which is why
+# neither overlay includes this file.
+#
+# Note the consequence of emptyDir: data does not survive a pod restart. That
+# is deliberate for a dev cluster — a database that silently persists stale
+# fixtures across restarts is harder to reason about than one that starts
+# clean. Use docker-compose for a persistent local database.
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mongodb
+  labels:
+    app.kubernetes.io/component: mongodb
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: mongodb
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/component: mongodb
+    spec:
+      containers:
+        - name: mongodb
+          image: mongo:7
+          ports:
+            - name: mongo
+              containerPort: 27017
+          readinessProbe:
+            exec:
+              command:
+                - mongosh
+                - --quiet
+                - --eval
+                - "db.runCommand({ping:1}).ok"
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              memory: 1Gi
+          volumeMounts:
+            - name: data
+              mountPath: /data/db
+      volumes:
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mongodb
+spec:
+  selector:
+    app.kubernetes.io/component: mongodb
+  ports:
+    - name: mongo
+      port: 27017
+      targetPort: mongo
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+  labels:
+    app.kubernetes.io/component: redis
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: redis
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/component: redis
+    spec:
+      containers:
+        - name: redis
+          image: redis:7-alpine
+          ports:
+            - name: redis
+              containerPort: 6379
+          readinessProbe:
+            exec:
+              command: ["redis-cli", "ping"]
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 256Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+spec:
+  selector:
+    app.kubernetes.io/component: redis
+  ports:
+    - name: redis
+      port: 6379
+      targetPort: redis

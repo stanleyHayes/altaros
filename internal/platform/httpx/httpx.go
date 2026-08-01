@@ -3,6 +3,7 @@
 package httpx
 
 import (
+	"context"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -62,7 +63,7 @@ func NewRouter(cfg *config.Config, log *slog.Logger) *chi.Mux {
 
 	// Liveness. Deliberately dependency-free: this answers "is the process
 	// up", which is what a K8s liveness probe should restart on. Dependency
-	// health belongs on a separate readiness endpoint so a blip in Redis
+	// health belongs on the readiness endpoint below, so a blip in Redis
 	// doesn't cause a restart loop.
 	r.Get("/health", func(w http.ResponseWriter, req *http.Request) {
 		JSON(w, http.StatusOK, map[string]any{
@@ -74,6 +75,61 @@ func NewRouter(cfg *config.Config, log *slog.Logger) *chi.Mux {
 	})
 
 	return r
+}
+
+// Checker reports whether a dependency is currently usable.
+type Checker interface {
+	// Name identifies the dependency in the readiness response.
+	Name() string
+	// Check returns nil when the dependency is reachable.
+	Check(ctx context.Context) error
+}
+
+// MountReadiness adds /ready, which reports whether this instance can serve.
+//
+// The split from /health is what makes rolling deploys safe. Liveness failing
+// means "restart me"; readiness failing means "stop sending me traffic, I am
+// still alive". Answering the same thing to both turns a thirty-second Redis
+// blip into a cluster-wide restart storm, because every pod fails its liveness
+// probe at once and Kubernetes kills them all.
+//
+// Readiness is checked live rather than cached: a cached answer tells the load
+// balancer what was true a minute ago, which is exactly when it matters least.
+func MountReadiness(r chi.Router, cfg *config.Config, checkers ...Checker) {
+	r.Get("/ready", func(w http.ResponseWriter, req *http.Request) {
+		// Bounded well under the probe's own timeout, so a hanging dependency
+		// produces a "not ready" answer rather than a probe timeout — the
+		// former says which dependency, the latter says nothing.
+		ctx, cancel := context.WithTimeout(req.Context(), 2*time.Second)
+		defer cancel()
+
+		results := make(map[string]string, len(checkers))
+		ready := true
+		for _, c := range checkers {
+			if c == nil {
+				continue
+			}
+			if err := c.Check(ctx); err != nil {
+				results[c.Name()] = "unavailable: " + err.Error()
+				ready = false
+				continue
+			}
+			results[c.Name()] = "ok"
+		}
+
+		status := http.StatusOK
+		if !ready {
+			status = http.StatusServiceUnavailable
+		}
+		write(w, status, Envelope{
+			Success: ready,
+			Data: map[string]any{
+				"ready":        ready,
+				"service":      cfg.ServiceName,
+				"dependencies": results,
+			},
+		})
+	})
 }
 
 // requestLogger attaches a request-scoped logger and records the outcome.
@@ -89,9 +145,10 @@ func requestLogger(base *slog.Logger) func(http.Handler) http.Handler {
 			ww := middleware.NewWrapResponseWriter(w, r.ProtoMajor)
 			next.ServeHTTP(ww, r.WithContext(ctx))
 
-			// /health is polled continuously by probes; logging every hit
-			// buries real traffic.
-			if r.URL.Path == "/health" {
+			// Probes hit /health and /ready continuously; logging every one
+			// buries real traffic. A failing readiness check still surfaces —
+			// it is the dependency's own error path that logs, not this.
+			if r.URL.Path == "/health" || r.URL.Path == "/ready" {
 				return
 			}
 

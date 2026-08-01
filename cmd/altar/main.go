@@ -91,6 +91,11 @@ func run() error {
 	}
 
 	root := httpx.NewRouter(cfg, log)
+	// Readiness reports whether this instance can actually serve, which is
+	// what the load balancer routes on. Liveness (/health) stays
+	// dependency-free so a Redis blip removes pods from rotation instead of
+	// restarting all of them at once.
+	httpx.MountReadiness(root, cfg, d.Checkers()...)
 	root.Mount("/api/v1", build(d))
 
 	srv := &http.Server{

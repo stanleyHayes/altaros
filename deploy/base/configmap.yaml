@@ -1,0 +1,20 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: altar-config
+data:
+  # Non-secret configuration only. Anything that must not appear in `kubectl
+  # get configmap -o yaml` belongs in the Secret, which the overlays supply.
+  APP_ENV: "production"
+  PORT: "8080"
+  DATA_REGION: "gh"
+  MONGODB_DATABASE: "altar-os"
+  JWT_ISSUER: "altar-os"
+  JWT_ACCESS_TTL: "15m"
+  JWT_REFRESH_TTL: "720h"
+  ANTHROPIC_MODEL: "claude-opus-5"
+  # Empty means unported routes 404 rather than proxying anywhere. The
+  # migration overlays set this to the legacy API; production after WP-20
+  # leaves it empty. It is set explicitly here because an ABSENT value would
+  # fall back to the development default of localhost:3001.
+  LEGACY_API_URL: ""

@@ -1,0 +1,21 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gateway
+spec:
+  # One replica locally: a dev cluster is usually one node, and two replicas
+  # only makes the rollout slower without proving anything.
+  replicas: 1
+  template:
+    spec:
+      containers:
+        - name: altar
+          # Never pull for a locally built image, or the node goes looking for
+          # a registry that does not have it.
+          imagePullPolicy: IfNotPresent
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 256Mi

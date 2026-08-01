@@ -1,0 +1,13 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: gateway
+spec:
+  # At least one pod stays up through voluntary disruption (node drain,
+  # cluster upgrade). minAvailable rather than maxUnavailable so the guarantee
+  # holds however many replicas the HPA has settled on.
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: altar-os
+      app.kubernetes.io/component: gateway
