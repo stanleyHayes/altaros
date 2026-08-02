@@ -86,10 +86,18 @@ type Member struct {
 	DateOfBirth *time.Time `bson:"dateOfBirth,omitempty" json:"dateOfBirth,omitempty"`
 	// HouseholdID links family members, which the spec calls family linking.
 	HouseholdID mongodb.ID `bson:"householdId,omitempty" json:"householdId,omitempty"`
-	Status      Status     `bson:"status"        json:"status"`
-	JoinedAt    *time.Time `bson:"joinedAt,omitempty" json:"joinedAt,omitempty"`
-	CreatedAt   time.Time  `bson:"createdAt"     json:"createdAt"`
-	UpdatedAt   time.Time  `bson:"updatedAt"     json:"updatedAt"`
+	// DepartmentIDs and GroupIDs are the ministries and cells a person belongs
+	// to. Arrays on the member rather than a join collection, because the
+	// question asked of them is always "who is in the youth department" and a
+	// multikey index answers that in one query — a join collection would need
+	// two, and the membership carries no attributes of its own (the department
+	// already holds its leader).
+	DepartmentIDs []mongodb.ID `bson:"departmentIds,omitempty" json:"departmentIds,omitempty"`
+	GroupIDs      []mongodb.ID `bson:"groupIds,omitempty"      json:"groupIds,omitempty"`
+	Status        Status       `bson:"status"        json:"status"`
+	JoinedAt      *time.Time   `bson:"joinedAt,omitempty" json:"joinedAt,omitempty"`
+	CreatedAt     time.Time    `bson:"createdAt"     json:"createdAt"`
+	UpdatedAt     time.Time    `bson:"updatedAt"     json:"updatedAt"`
 }
 
 // FullName is the display name.
@@ -172,6 +180,31 @@ func (s *Service) EnsureIndexes(ctx context.Context) error {
 				SetName("church_household").
 				SetPartialFilterExpression(bson.M{
 					"householdId": bson.M{"$exists": true},
+				}),
+		},
+		{
+			// Ministry membership, which is what targeted communication filters
+			// on. MULTIKEY: MongoDB indexes each array element, so this answers
+			// "everyone in the youth department" without a scan.
+			Keys: bson.D{
+				{Key: mongodb.TenantField, Value: 1},
+				{Key: "departmentIds", Value: 1},
+			},
+			Options: options.Index().
+				SetName("church_department_members").
+				SetPartialFilterExpression(bson.M{
+					"departmentIds": bson.M{"$exists": true},
+				}),
+		},
+		{
+			Keys: bson.D{
+				{Key: mongodb.TenantField, Value: 1},
+				{Key: "groupIds", Value: 1},
+			},
+			Options: options.Index().
+				SetName("church_group_members").
+				SetPartialFilterExpression(bson.M{
+					"groupIds": bson.M{"$exists": true},
 				}),
 		},
 		{
@@ -304,6 +337,78 @@ func (s *Service) ByID(ctx context.Context, id string) (*Member, error) {
 		return nil, fmt.Errorf("member: lookup: %w", err)
 	}
 	return &m, nil
+}
+
+// SetMinistries replaces a member's departments and groups.
+//
+// REPLACES rather than appends, and that is the honest shape for what the UI
+// does: a church edits somebody's ministries as a set of checkboxes, and an
+// append-only endpoint would make unchecking one impossible without a second
+// call that could fail on its own.
+func (s *Service) SetMinistries(ctx context.Context, id string, departmentIDs, groupIDs []string) (*Member, error) {
+	oid, err := bson.ObjectIDFromHex(id)
+	if err != nil {
+		return nil, ErrNotFound
+	}
+
+	departments, err := ministryIDs(departmentIDs)
+	if err != nil {
+		return nil, err
+	}
+	groups, err := ministryIDs(groupIDs)
+	if err != nil {
+		return nil, err
+	}
+
+	set, unset := bson.M{}, bson.M{}
+	// Absent rather than an empty array when somebody belongs to nothing. The
+	// partial index on these fields is conditioned on $exists, and an empty
+	// array exists — so writing [] would index every member who belongs to no
+	// ministry, which is most of a congregation.
+	if len(departments) > 0 {
+		set["departmentIds"] = departments
+	} else {
+		unset["departmentIds"] = ""
+	}
+	if len(groups) > 0 {
+		set["groupIds"] = groups
+	} else {
+		unset["groupIds"] = ""
+	}
+
+	update := bson.M{}
+	if len(set) > 0 {
+		update["$set"] = set
+	}
+	if len(unset) > 0 {
+		update["$unset"] = unset
+	}
+
+	res, err := s.coll.UpdateOne(ctx, bson.M{"_id": oid}, update)
+	if err != nil {
+		return nil, fmt.Errorf("member: set ministries: %w", err)
+	}
+	if res.MatchedCount == 0 {
+		return nil, ErrNotFound
+	}
+	return s.ByID(ctx, id)
+}
+
+func ministryIDs(raw []string) ([]bson.ObjectID, error) {
+	out := make([]bson.ObjectID, 0, len(raw))
+	seen := map[bson.ObjectID]bool{}
+	for _, id := range raw {
+		oid, err := bson.ObjectIDFromHex(strings.TrimSpace(id))
+		if err != nil {
+			return nil, fmt.Errorf("%w: %q is not a valid id", ErrNotFound, id)
+		}
+		if seen[oid] {
+			continue
+		}
+		seen[oid] = true
+		out = append(out, oid)
+	}
+	return out, nil
 }
 
 // ByUserID finds the member record belonging to a login account.

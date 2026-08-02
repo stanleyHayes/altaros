@@ -109,12 +109,23 @@ const (
 // Record is one consent decision. Records are append-only; the current state
 // for a (member, purpose) is the most recent record.
 type Record struct {
-	ID       bson.ObjectID `bson:"_id,omitempty"       json:"id"`
-	ChurchID string        `bson:"churchId"            json:"churchId"`
-	MemberID string        `bson:"memberId"            json:"memberId"`
-	Purpose  Purpose       `bson:"purpose"             json:"purpose"`
-	Granted  bool          `bson:"granted"             json:"granted"`
-	Source   Source        `bson:"source"              json:"source"`
+	ID bson.ObjectID `bson:"_id,omitempty"       json:"id"`
+	// mongodb.ID, not string. TenantCollection stamps churchId as a BSON
+	// ObjectId so that documents stay readable by the legacy Mongoose schema
+	// (ADR-005), and a plain string field cannot decode one — the driver
+	// refuses with "decoding an object ID into a string is not supported".
+	//
+	// That failure was invisible for months because the only caller that reads
+	// a Record is the consent check, and the only messages that reach it are
+	// announcements and pastoral notes. Transactional messages — receipts, OTPs
+	// — skip the consent check by design, so every path anybody had exercised
+	// worked, and the first broadcast would have failed for the whole
+	// congregation with an error about BSON decoding.
+	ChurchID mongodb.ID `bson:"churchId"            json:"churchId"`
+	MemberID string     `bson:"memberId"            json:"memberId"`
+	Purpose  Purpose    `bson:"purpose"             json:"purpose"`
+	Granted  bool       `bson:"granted"             json:"granted"`
+	Source   Source     `bson:"source"              json:"source"`
 	// PolicyVersion ties the decision to the wording the member actually saw.
 	// Without it, "they consented" is unprovable once the policy changes.
 	PolicyVersion string    `bson:"policyVersion"       json:"policyVersion"`

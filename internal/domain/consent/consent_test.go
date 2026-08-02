@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"go.mongodb.org/mongo-driver/v2/bson"
+
 	"github.com/hayfordstanley/altar-os/internal/platform/config"
 	"github.com/hayfordstanley/altar-os/internal/platform/mongodb"
 	"github.com/hayfordstanley/altar-os/internal/platform/tenancy"
@@ -251,5 +253,86 @@ func TestEmptyAudienceIsHandled(t *testing.T) {
 	}
 	if len(allowed) != 0 {
 		t.Errorf("empty audience should yield no recipients, got %v", allowed)
+	}
+}
+
+// The bug this test exists for was invisible for months, and the reason it was
+// invisible is the interesting part.
+//
+// TenantCollection stamps churchId as a BSON ObjectId whenever the church id is
+// valid hex, so that documents stay readable by the legacy Mongoose schema
+// (ADR-005). Record.ChurchID was declared as a plain `string`, and the driver
+// refuses to decode an ObjectId into one. Every read of a consent record in
+// production would therefore fail with a BSON error.
+//
+// It never fired here because every fixture above uses "church_consent_a",
+// which is NOT valid hex — so the wrapper stored it as a string and the string
+// field decoded it happily. The tests passed for a reason that does not hold in
+// production.
+//
+// It never fired in the product either, because the only caller is the consent
+// check, and the only messages that reach it are announcements and pastoral
+// notes. Receipts and OTPs are transactional and skip the check by design. The
+// first church broadcast would have failed for the entire congregation.
+func TestConsentReadsBackWhenTheChurchIDIsARealObjectID(t *testing.T) {
+	svc, _ := newService(t)
+
+	// A REAL ObjectID, as every production church has.
+	churchID := bson.NewObjectID().Hex()
+	ctx := tenancy.WithScope(context.Background(), tenancy.Scope{ChurchID: churchID})
+
+	const memberID = "member_objectid_church"
+	if err := svc.Grant(ctx, memberID, PurposeCommunications,
+		SourceSignup, "v1", "system"); err != nil {
+		t.Fatalf("Grant: %v", err)
+	}
+
+	granted, err := svc.IsGranted(ctx, memberID, PurposeCommunications)
+	if err != nil {
+		t.Fatalf("IsGranted against an ObjectId church: %v", err)
+	}
+	if !granted {
+		t.Fatal("consent was granted but does not read back")
+	}
+
+	// And the id survives the round trip in a usable form.
+	history, err := svc.History(ctx, memberID)
+	if err != nil {
+		t.Fatalf("History: %v", err)
+	}
+	if len(history) == 0 {
+		t.Fatal("no history for a granted consent")
+	}
+	if history[0].ChurchID.String() != churchID {
+		t.Errorf("ChurchID = %q, want %q", history[0].ChurchID, churchID)
+	}
+}
+
+// FilterAllowed is what a broadcast actually calls, so it gets the same test.
+func TestFilterAllowedWorksAgainstAnObjectIDChurch(t *testing.T) {
+	svc, _ := newService(t)
+
+	churchID := bson.NewObjectID().Hex()
+	ctx := tenancy.WithScope(context.Background(), tenancy.Scope{ChurchID: churchID})
+
+	consenting := "member_yes"
+	declining := "member_no"
+	if err := svc.Grant(ctx, consenting, PurposeCommunications,
+		SourceSignup, "v1", "system"); err != nil {
+		t.Fatalf("Grant: %v", err)
+	}
+	if err := svc.Revoke(ctx, declining, PurposeCommunications,
+		SourceWithdrawal, "system"); err != nil {
+		t.Fatalf("Revoke: %v", err)
+	}
+
+	allowed, err := svc.FilterAllowed(ctx,
+		[]string{consenting, declining, "member_unknown"}, PurposeCommunications)
+	if err != nil {
+		t.Fatalf("FilterAllowed: %v", err)
+	}
+	if len(allowed) != 1 || allowed[0] != consenting {
+		t.Fatalf("allowed = %v, want exactly [%s] — unrecorded consent fails closed",
+			allowed, consenting)
 	}
 }

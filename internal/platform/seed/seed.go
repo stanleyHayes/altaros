@@ -159,7 +159,7 @@ func (s *Seeder) Reset(ctx context.Context) error {
 		// Events, attendance and RSVPs are written through the tenant wrapper,
 		// which stamps churchId and not the marker — so the events seeder
 		// stamps them afterwards specifically so this list can find them.
-		"events", "attendance", "rsvps",
+		"events", "attendance", "rsvps", "departments", "groups",
 	}
 	for _, name := range collections {
 		res, err := s.raw.Collection(name).DeleteMany(ctx, bson.M{MarkerField: Marker})
@@ -281,6 +281,10 @@ func (s *Seeder) Run(ctx context.Context) (*Result, error) {
 
 		// Before anything that reads "the member behind this login".
 		if err := s.linkLogins(ctx, churchID, created); err != nil {
+			return nil, err
+		}
+
+		if _, err := s.ministries(ctx, churchID, created); err != nil {
 			return nil, err
 		}
 
@@ -713,6 +717,70 @@ func (s *Seeder) giving(ctx context.Context, churchID bson.ObjectID, members []m
 		return count, fmt.Errorf("seed: mark transactions: %w", err)
 	}
 	return count, nil
+}
+
+// ministries seeds the departments and cells a church runs, and puts people in
+// them.
+//
+// Needed for WP-22 rather than decorative: the acceptance criterion is a
+// broadcast to "inactive members in the youth department", and without a
+// department nobody is in, that filter resolves to nobody and the feature looks
+// like it works.
+func (s *Seeder) ministries(ctx context.Context, churchID bson.ObjectID, members []member.Member) (int, error) {
+	names := []string{"Youth", "Choir", "Ushers", "Media", "Children", "Prayer"}
+	cells := []string{"East Legon Cell", "Adenta Cell", "Spintex Cell"}
+
+	now := time.Now().UTC()
+	departmentIDs := make([]bson.ObjectID, 0, len(names))
+	for _, name := range names {
+		id := bson.NewObjectID()
+		if _, err := s.raw.Collection("departments").InsertOne(ctx, bson.M{
+			"_id": id, "churchId": churchID, "name": name,
+			MarkerField: Marker, "createdAt": now, "updatedAt": now,
+		}); err != nil {
+			return 0, fmt.Errorf("seed: department %s: %w", name, err)
+		}
+		departmentIDs = append(departmentIDs, id)
+	}
+
+	groupIDs := make([]bson.ObjectID, 0, len(cells))
+	for _, name := range cells {
+		id := bson.NewObjectID()
+		if _, err := s.raw.Collection("groups").InsertOne(ctx, bson.M{
+			"_id": id, "churchId": churchID, "name": name,
+			MarkerField: Marker, "createdAt": now, "updatedAt": now,
+		}); err != nil {
+			return 0, fmt.Errorf("seed: group %s: %w", name, err)
+		}
+		groupIDs = append(groupIDs, id)
+	}
+
+	// Roughly half a congregation serves in something, and a few serve in two.
+	// A uniform assignment would make every department the same size, and the
+	// targeting feature is only interesting when they are not.
+	assigned := 0
+	for i := range members {
+		if s.rng.Intn(100) < 45 {
+			continue
+		}
+		departments := []bson.ObjectID{departmentIDs[s.rng.Intn(len(departmentIDs))]}
+		if s.rng.Intn(100) < 20 {
+			second := departmentIDs[s.rng.Intn(len(departmentIDs))]
+			if second != departments[0] {
+				departments = append(departments, second)
+			}
+		}
+		update := bson.M{"departmentIds": departments}
+		if s.rng.Intn(100) < 60 {
+			update["groupIds"] = []bson.ObjectID{groupIDs[s.rng.Intn(len(groupIDs))]}
+		}
+		if _, err := s.raw.Collection("members").UpdateOne(ctx,
+			bson.M{"_id": members[i].ID}, bson.M{"$set": update}); err != nil {
+			return assigned, fmt.Errorf("seed: assign ministries: %w", err)
+		}
+		assigned++
+	}
+	return assigned, nil
 }
 
 // linkLogins attaches a member record to each seeded login.

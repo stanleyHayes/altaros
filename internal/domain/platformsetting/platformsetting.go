@@ -87,6 +87,14 @@ type Settings struct {
 	// a number shown to a member before they confirm a payment.
 	ProviderFees map[string]money.FeeSchedule `bson:"providerFees" json:"providerFees"`
 
+	// MessagingRates is what one billed unit costs on each channel — per SMS
+	// SEGMENT, not per message, because that is how providers bill and it is
+	// the number a cost preview has to multiply.
+	//
+	// Stored in minor units with a currency, so a rate can be entered in the
+	// currency the platform is actually invoiced in.
+	MessagingRates map[string]money.Amount `bson:"messagingRates" json:"messagingRates"`
+
 	UpdatedBy mongodb.ID `bson:"updatedBy,omitempty" json:"updatedBy,omitempty"`
 	UpdatedAt time.Time  `bson:"updatedAt" json:"updatedAt"`
 }
@@ -123,7 +131,24 @@ func Defaults() *Settings {
 		CommissionBasisPoints: DefaultCommissionBasisPoints,
 		DefaultFeeBearer:      money.BearerGiver,
 		ProviderFees:          map[string]money.FeeSchedule{},
+		MessagingRates:        map[string]money.Amount{},
 	}
+}
+
+// MessagingRate returns the price per billed unit on a channel.
+//
+// The second return says whether a rate EXISTS. Zero and unconfigured must not
+// be conflated: a church shown "GHS 0.00" for a broadcast to four hundred
+// people will believe it, and the correction arrives as an invoice.
+func (s *Settings) MessagingRate(channel string) (money.Amount, bool) {
+	if s == nil {
+		return money.Amount{}, false
+	}
+	rate, ok := s.MessagingRates[strings.ToLower(strings.TrimSpace(channel))]
+	if !ok || rate.Minor <= 0 {
+		return money.Amount{}, false
+	}
+	return rate, true
 }
 
 // Service reads and writes the platform's settings.
@@ -161,6 +186,9 @@ func (s *Service) Current(ctx context.Context) (*Settings, error) {
 	if found.ProviderFees == nil {
 		found.ProviderFees = map[string]money.FeeSchedule{}
 	}
+	if found.MessagingRates == nil {
+		found.MessagingRates = map[string]money.Amount{}
+	}
 	return &found, nil
 }
 
@@ -169,6 +197,7 @@ type Update struct {
 	CommissionBasisPoints *int64
 	DefaultFeeBearer      *string
 	ProviderFees          map[string]money.FeeSchedule
+	MessagingRates        map[string]money.Amount
 	ActorID               string
 }
 
@@ -214,6 +243,24 @@ func (s *Service) Save(ctx context.Context, in Update) (*Settings, error) {
 			cleaned[key] = schedule
 		}
 		set["providerFees"] = cleaned
+	}
+
+	if in.MessagingRates != nil {
+		cleaned := make(map[string]money.Amount, len(in.MessagingRates))
+		for channel, rate := range in.MessagingRates {
+			key := strings.ToLower(strings.TrimSpace(channel))
+			if key == "" {
+				return nil, fmt.Errorf("%w: a messaging rate with no channel", ErrInvalidFee)
+			}
+			if rate.Minor < 0 {
+				return nil, fmt.Errorf("%w: %s has a negative rate", ErrInvalidFee, key)
+			}
+			if rate.Currency == "" {
+				return nil, fmt.Errorf("%w: %s has no currency", ErrInvalidFee, key)
+			}
+			cleaned[key] = rate
+		}
+		set["messagingRates"] = cleaned
 	}
 
 	if in.ActorID != "" {

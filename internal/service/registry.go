@@ -48,18 +48,19 @@ func standalone(rs routeSet) http.Handler {
 // invisible until a client 404s, and that has already happened once here.
 func routeBuilders() map[string]func(*deps.Deps) routeSet {
 	return map[string]func(*deps.Deps) routeSet{
-		"auth":         authRoutes,
-		"church":       churchRoutes,
-		"rbac":         rbacRoutes,
-		"invitation":   invitationRoutes,
-		"member":       memberRoutes,
-		"finance":      financeRoutes,
-		"notification": notificationRoutes,
-		"site":         siteRoutes,
-		"domain":       domainRoutes,
-		"event":        eventRoutes,
-		"platform":     platformRoutes,
-		"spiritual":    spiritualRoutes,
+		"auth":          authRoutes,
+		"church":        churchRoutes,
+		"rbac":          rbacRoutes,
+		"invitation":    invitationRoutes,
+		"member":        memberRoutes,
+		"finance":       financeRoutes,
+		"notification":  notificationRoutes,
+		"site":          siteRoutes,
+		"domain":        domainRoutes,
+		"event":         eventRoutes,
+		"platform":      platformRoutes,
+		"communication": communicationRoutes,
+		"spiritual":     spiritualRoutes,
 	}
 }
 
@@ -93,7 +94,7 @@ func init() {
 		"platform":      buildPlatform,
 		"event":         buildEvent,
 		"spiritual":     buildSpiritual,
-		"communication": placeholder("communication", "broadcast + targeted messaging"),
+		"communication": buildCommunication,
 		"ai":            placeholder("ai", "sermon assistant, member insights, prayer chat"),
 		"notification":  buildNotification,
 	}

@@ -46,6 +46,7 @@ func EnsureIndexes(ctx context.Context, d *deps.Deps) error {
 		{"rbac", rbac.NewService(d.Mongo).EnsureIndexes},
 		{"invitation", invitation.NewService(d.Mongo).EnsureIndexes},
 		{"event", newEventService(d).EnsureIndexes},
+		{"communication", newCommunicationService(d).EnsureIndexes},
 		{"spiritual", spiritual.NewService(d.Mongo).EnsureIndexes},
 		{"site", site.NewService(d.Mongo).EnsureIndexes},
 		{"customdomain", customdomain.NewService(d.Mongo).EnsureIndexes},
