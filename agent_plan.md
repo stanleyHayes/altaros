@@ -1218,9 +1218,20 @@ Four things the obvious implementation would get wrong:
 WhatsApp Cloud API: template messages, opt-in management, delivery receipts. In much of West Africa WhatsApp is *the* messaging layer; SMS-only communication will under-perform badly.
 **Done when:** an announcement delivers via WhatsApp to opted-in members, with SMS fallback on failure.
 
-**WP-24 · Social system** ⬜ (PDF §5.5) — Depends on: WP-12
+**WP-24 · Social system** 🟡 (PDF §5.5) — Depends on: WP-12
 Feed (posts, testimonies), comments, likes, group chats. Moderation queue and reporting — a church-branded feed without moderation is a liability.
 **Done when:** post → comment → like → report → moderator action, all tenant-scoped.
+**Status — 2 Aug 2026.** `internal/domain/social`, mounted at `/social`. The criterion is met and verified over HTTP end to end: a member posts a testimony (author name resolved from the account, never from the request body), the pastoral worker comments, a leader likes it twice and the count stays at 1, a report is filed and the post STAYS on the feed, staff open the queue and hide it, the post reads 404 to members and 200 to staff, the queue clears, and restoring puts it back. A second church sees `total = 0` throughout and gets 404 by id. **🟡 rather than ✅ because group chats are not built** — the feed half is done, the messaging half is not.
+
+**Built against the clients' contract rather than a new one.** `/social/feed`, the `{data,total}` envelope, `isLikedByMe`, `authorAvatarUrl` and the three post types were already fixed by `packages/shared-types` and the mobile normaliser, which THROWS on a page carrying more rows than it asked for. A server that invented its own shape would produce responses the app refuses to render, so the service's page clamp is a contract requirement rather than a nicety.
+
+**Auto-hiding at N reports is deliberately absent.** It is the obvious feature and it is a weapon: any five people who dislike a post can remove it, and in a church the five people who dislike a post are often a faction. A report raises a post to a human and never removes it. `TestManyReportsDoNotRemoveAPost` fixes that, and a mutant that adds a threshold dies.
+
+**Counters are STORED here, contradicting the finance rule on purpose.** Campaign totals, attendance and pledge fulfilment are all derived because a wrong number about money costs something real; a like count off by one is cosmetic, and a feed running one aggregation per post per scroll is a feed nobody scrolls. The drift is bounded rather than hoped away — a like is its own document under a unique index on (churchId, postId, memberId), so a double tap fails at the insert before the increment runs. On Ghanaian mobile data a retried request is the normal case, not the edge one.
+
+**Ten mutants, all caught** — including the auto-hide threshold, a dismiss that silently restores a hidden post, an unlike that decrements below zero, and `isLikedByMe` ignoring who is asking.
+
+**The RBAC gap this exposed is the more important half.** Adding `social` to the Staff role reached NO church: `EnsureSystemRoles` leaves an existing role alone — correctly, so that a church which widened Staff is not reset by a deploy — which means a resource introduced later never arrives. Nothing failed; the moderation queue simply returned 404 to the people whose job it is. `cmd/backfill-roles` closes it, dry-run by default, on a rule narrower than "add what is missing": **a permission is added only when the stored role holds nothing at all on that resource.** A church that removed `member:create` from Staff still holds other `member` permissions, so their decision stands; a church that has never heard of `social` gets the default, because there was no decision to overrule. Reconciling permission by permission cannot tell those two apart and would silently reverse administrators. Run against the dev database: 12 system roles examined, 6 changed (admin and staff in three churches), member and pastoral untouched, second run a no-op.
 
 **WP-25 · Analytics dashboard** ✅ (PDF §6.2) — Depends on: WP-14, WP-21
 Attendance trends, giving trends, engagement score. Materialised rollups on Kafka consumers (never live aggregate queries on transactional tables). Branch-level and org-level consolidation (§4.6).
