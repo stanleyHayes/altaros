@@ -185,13 +185,73 @@ type Post struct {
 	UpdatedAt time.Time `bson:"updatedAt" json:"updatedAt"`
 }
 
-// PostView is a post as the clients expect it.
+// PostView is a post as a MEMBER may see it.
 //
-// It exists because `isLikedByMe` is per-VIEWER and therefore cannot live on
+// It exists because `isLikedByMe` is per-viewer and therefore cannot live on
 // the document. The field name is fixed by the mobile normaliser.
+//
+// # Why the fields are listed out instead of embedding Post
+//
+// It used to embed *Post, which meant Go serialised every field on the record
+// into the congregation's feed — including `reportCount`, `moderatedBy`,
+// `moderatedAt` and `moderationNote`. So a post somebody had reported told the
+// whole church how many people had reported it, and a post that was hidden and
+// later restored published the moderator's identity and their private note
+// ("Checking with the author before it stays up") to everyone who scrolled
+// past.
+//
+// That is the opposite of what this package says it does. Report says the
+// reporter learns nothing about what happens next, precisely so that reporting
+// is not a public act — and then the post itself announced it. A report count
+// on a post is also a pile-on signal, which is the thing the no-auto-hide rule
+// exists to avoid.
+//
+// Listing the fields means a new field on Post is invisible to members until
+// somebody deliberately adds it here, which is the right default for a record
+// that carries moderation state. Moderators read the full Post through the
+// queue, the reports endpoint and the moderate response.
 type PostView struct {
-	*Post
+	// Post is the underlying record for callers INSIDE this package. Never
+	// serialised: that is the whole point of this type.
+	Post *Post `json:"-"`
+
+	ID       bson.ObjectID `json:"id"`
+	ChurchID mongodb.ID    `json:"churchId"`
+
+	AuthorID        mongodb.ID `json:"authorId"`
+	AuthorName      string     `json:"authorName"`
+	AuthorAvatarURL string     `json:"authorAvatarUrl,omitempty"`
+
+	Content  string `json:"content"`
+	Type     Type   `json:"type"`
+	ImageURL string `json:"imageUrl,omitempty"`
+
+	LikesCount    int `json:"likesCount"`
+	CommentsCount int `json:"commentsCount"`
+
+	// Status is safe to show: a member only ever receives visible posts, and
+	// the client uses it to reason about its own cache.
+	Status Status `json:"status"`
+
+	CreatedAt time.Time `json:"createdAt"`
+	UpdatedAt time.Time `json:"updatedAt"`
+
 	IsLikedByMe bool `json:"isLikedByMe"`
+}
+
+// viewOf reduces a record to what a member may see.
+func viewOf(p *Post, liked bool) PostView {
+	return PostView{
+		Post: p,
+		ID:   p.ID, ChurchID: p.ChurchID,
+		AuthorID: p.AuthorID, AuthorName: p.AuthorName,
+		AuthorAvatarURL: p.AuthorAvatarURL,
+		Content:         p.Content, Type: p.Type, ImageURL: p.ImageURL,
+		LikesCount: p.LikesCount, CommentsCount: p.CommentsCount,
+		Status:    p.Status,
+		CreatedAt: p.CreatedAt, UpdatedAt: p.UpdatedAt,
+		IsLikedByMe: liked,
+	}
 }
 
 // Comment is a reply to a post.

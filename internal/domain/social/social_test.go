@@ -335,8 +335,8 @@ func TestReportingTwiceIsRefused(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PostByID: %v", err)
 	}
-	if post.ReportCount != 1 {
-		t.Fatalf("reportCount = %d after a duplicate report", post.ReportCount)
+	if post.Post.ReportCount != 1 {
+		t.Fatalf("reportCount = %d after a duplicate report", post.Post.ReportCount)
 	}
 }
 
@@ -498,8 +498,8 @@ func TestAModeratorRemovesAnybodysPost(t *testing.T) {
 	if post.Status != StatusRemoved {
 		t.Errorf("removed post is %s", post.Status)
 	}
-	if post.ModeratedBy.String() != pastor {
-		t.Errorf("removal is attributed to %q", post.ModeratedBy)
+	if post.Post.ModeratedBy.String() != pastor {
+		t.Errorf("removal is attributed to %q", post.Post.ModeratedBy)
 	}
 }
 

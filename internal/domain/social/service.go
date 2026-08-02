@@ -224,7 +224,7 @@ func (s *Service) Feed(ctx context.Context, viewerID string, page, limit int) ([
 func (s *Service) withViewerLikes(ctx context.Context, posts []Post, viewerID string) ([]PostView, error) {
 	views := make([]PostView, len(posts))
 	for i := range posts {
-		views[i] = PostView{Post: &posts[i]}
+		views[i] = viewOf(&posts[i], false)
 	}
 	if len(posts) == 0 || strings.TrimSpace(viewerID) == "" {
 		return views, nil
@@ -249,7 +249,7 @@ func (s *Service) withViewerLikes(ctx context.Context, posts []Post, viewerID st
 		byPost[liked[i].PostID.String()] = true
 	}
 	for i := range views {
-		views[i].IsLikedByMe = byPost[views[i].Post.ID.Hex()]
+		views[i].IsLikedByMe = byPost[views[i].ID.Hex()]
 	}
 	return views, nil
 }
