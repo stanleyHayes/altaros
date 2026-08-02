@@ -12,14 +12,14 @@ import (
 
 const (
 	DevotionalCollection = "devotionals"
-	SermonCollection      = "sermons"
-	PrayerCollection      = "prayer_requests"
+	SermonCollection     = "sermons"
+	PrayerCollection     = "prayer_requests"
 )
 
 var (
-	ErrNotFound        = errors.New("spiritual: not found")
-	ErrInvalidInput    = errors.New("spiritual: invalid input")
-	ErrMemberRequired  = errors.New("spiritual: member required")
+	ErrNotFound       = errors.New("spiritual: not found")
+	ErrInvalidInput   = errors.New("spiritual: invalid input")
+	ErrMemberRequired = errors.New("spiritual: member required")
 )
 
 type Devotional struct {
@@ -63,6 +63,6 @@ type PrayerRequest struct {
 type PrayerInput struct {
 	Title, Description string
 	IsAnonymous        bool
-	MemberID            string
-	AuthorName          string
+	MemberID           string
+	AuthorName         string
 }

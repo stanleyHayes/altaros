@@ -64,6 +64,10 @@ func platformRoutes(d *deps.Deps) routeSet {
 				Get("/admin/users", handleAdminUsers(settings, d))
 			r.With(requirePlatformAdmin()).
 				Get("/admin/health", handleAdminHealth(settings, d))
+			r.With(requirePlatformAdmin()).
+				Get("/admin/operations", handleAdminOperations(settings, d))
+			r.With(requirePlatformAdmin()).
+				Get("/admin/audit", handleAdminAudit(settings, d))
 
 			r.With(requirePlatformAdmin()).
 				Get("/platform/settings", handleGetPlatformSettings(settings))
@@ -213,6 +217,29 @@ func handleAdminUsers(svc *platformsetting.Service, d *deps.Deps) http.HandlerFu
 func handleAdminHealth(svc *platformsetting.Service, d *deps.Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		httpx.JSON(w, http.StatusOK, svc.HealthOf(r.Context(), d.Mongo, startedAt))
+	}
+}
+
+func handleAdminOperations(svc *platformsetting.Service, d *deps.Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		out, err := svc.Operations(r.Context(), d.Mongo)
+		if err != nil {
+			writePlatformError(w, err)
+			return
+		}
+		httpx.JSON(w, http.StatusOK, out)
+	}
+}
+
+func handleAdminAudit(svc *platformsetting.Service, d *deps.Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		page, limit := adminPageParams(r)
+		out, err := svc.Audit(r.Context(), d.Mongo, page, limit)
+		if err != nil {
+			writePlatformError(w, err)
+			return
+		}
+		httpx.JSON(w, http.StatusOK, out)
 	}
 }
 

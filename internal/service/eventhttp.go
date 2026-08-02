@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -45,6 +46,12 @@ func eventRoutes(d *deps.Deps) routeSet {
 			// all. Every write below needs more.
 			r.With(requirePermission(rbac.ResourceEvent, rbac.ActionRead)).
 				Get("/events", handleListEvents(svc))
+			// Mobile compatibility URLs. Go owns these explicitly so they no
+			// longer fall through to the legacy Express query middleware.
+			r.With(requirePermission(rbac.ResourceEvent, rbac.ActionRead)).
+				Get("/events/church/{churchId}", handleMobileEvents(svc))
+			r.Get("/events/rsvps/me", handleMyRSVPs(svc, members))
+			r.Post("/events/rsvp", handleMobileRSVP(svc, members))
 			// Static segments are registered before the {id} pattern so chi
 			// matches them first; "upcoming" must never be read as an id.
 			r.With(requirePermission(rbac.ResourceEvent, rbac.ActionRead)).
@@ -84,6 +91,62 @@ func eventRoutes(d *deps.Deps) routeSet {
 					Get("/attendance", handleListAttendance(svc))
 			})
 		})
+	}
+}
+
+func handleMobileEvents(svc *event.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		scope, err := callerScope(r)
+		if err != nil || chi.URLParam(r, "churchId") != scope.ChurchID {
+			httpx.Error(w, http.StatusForbidden, "You cannot view another church's events.")
+			return
+		}
+		handleListEvents(svc)(w, r)
+	}
+}
+
+func handleMyRSVPs(svc *event.Service, members *member.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		self, err := members.ByUserID(r.Context(), callerUserID(r))
+		if err != nil {
+			httpx.Error(w, http.StatusConflict, "Your account is not linked to a member record yet.")
+			return
+		}
+		raw := strings.TrimSpace(r.URL.Query().Get("eventIds"))
+		ids := []string{}
+		if raw != "" {
+			ids = strings.Split(raw, ",")
+		}
+		items, err := svc.MemberRSVPs(r.Context(), self.ID.Hex(), ids)
+		if err != nil {
+			writeEventError(w, err)
+			return
+		}
+		httpx.JSON(w, http.StatusOK, items)
+	}
+}
+
+func handleMobileRSVP(svc *event.Service, members *member.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			EventID string `json:"eventId"`
+			Status  string `json:"status"`
+		}
+		if err := decode(r, &body); err != nil {
+			httpx.Error(w, http.StatusBadRequest, "Malformed request body")
+			return
+		}
+		self, err := members.ByUserID(r.Context(), callerUserID(r))
+		if err != nil {
+			httpx.Error(w, http.StatusConflict, "Your account is not linked to a member record yet.")
+			return
+		}
+		item, err := svc.Respond(r.Context(), body.EventID, self.ID.Hex(), event.RSVPStatus(body.Status))
+		if err != nil {
+			writeEventError(w, err)
+			return
+		}
+		httpx.JSON(w, http.StatusOK, item)
 	}
 }
 

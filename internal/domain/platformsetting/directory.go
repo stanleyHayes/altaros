@@ -10,7 +10,9 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 
+	churchdomain "github.com/hayfordstanley/altar-os/internal/domain/church"
 	"github.com/hayfordstanley/altar-os/internal/domain/finance"
+	"github.com/hayfordstanley/altar-os/internal/platform/audit"
 	"github.com/hayfordstanley/altar-os/internal/platform/mongodb"
 )
 
@@ -81,6 +83,61 @@ type ChurchRow struct {
 	CreatedAt    time.Time `json:"createdAt"`
 }
 
+type OperationsSnapshot struct {
+	NotificationsTotal      int64 `json:"notificationsTotal"`
+	NotificationsFailed     int64 `json:"notificationsFailed"`
+	NotificationsQueued     int64 `json:"notificationsQueued"`
+	AuditEvents             int64 `json:"auditEvents"`
+	InactiveChurches        int64 `json:"inactiveChurches"`
+	ChurchesMissingLocation int64 `json:"churchesMissingLocation"`
+}
+
+type AuditRow struct {
+	ID         bson.ObjectID `bson:"_id" json:"id"`
+	ChurchID   string        `bson:"churchId" json:"churchId"`
+	ActorID    string        `bson:"actorId" json:"actorId"`
+	ActorRole  string        `bson:"actorRole" json:"actorRole"`
+	Action     string        `bson:"action" json:"action"`
+	Resource   string        `bson:"resource" json:"resource"`
+	ResourceID string        `bson:"resourceId" json:"resourceId"`
+	Reason     string        `bson:"reason" json:"reason"`
+	CreatedAt  time.Time     `bson:"createdAt" json:"createdAt"`
+}
+
+func (s *Service) Operations(ctx context.Context, db *mongodb.DB) (*OperationsSnapshot, error) {
+	notifications := db.Global("notifications")
+	churches := db.Global("churches")
+	audits := db.Global(audit.Collection)
+	total, err := notifications.CountDocuments(ctx, bson.M{})
+	if err != nil {
+		return nil, fmt.Errorf("platformsetting: count notifications: %w", err)
+	}
+	failed, _ := notifications.CountDocuments(ctx, bson.M{"status": "failed"})
+	queued, _ := notifications.CountDocuments(ctx, bson.M{"status": "queued"})
+	auditCount, _ := audits.CountDocuments(ctx, bson.M{})
+	inactive, _ := churches.CountDocuments(ctx, bson.M{"isActive": false})
+	missingLocation, _ := churches.CountDocuments(ctx, bson.M{"$or": bson.A{bson.M{"city": ""}, bson.M{"city": bson.M{"$exists": false}}}})
+	return &OperationsSnapshot{NotificationsTotal: total, NotificationsFailed: failed, NotificationsQueued: queued, AuditEvents: auditCount, InactiveChurches: inactive, ChurchesMissingLocation: missingLocation}, nil
+}
+
+func (s *Service) Audit(ctx context.Context, db *mongodb.DB, page, limit int) (*Page[AuditRow], error) {
+	collection := db.Global(audit.Collection)
+	total, err := collection.CountDocuments(ctx, bson.M{})
+	if err != nil {
+		return nil, fmt.Errorf("platformsetting: count audit: %w", err)
+	}
+	pagination, skip := paginate(page, limit, total)
+	cursor, err := collection.Find(ctx, bson.M{}, options.Find().SetSort(bson.D{{Key: "createdAt", Value: -1}}).SetSkip(skip).SetLimit(int64(pagination.Limit)))
+	if err != nil {
+		return nil, fmt.Errorf("platformsetting: list audit: %w", err)
+	}
+	var rows []AuditRow
+	if err := cursor.All(ctx, &rows); err != nil {
+		return nil, fmt.Errorf("platformsetting: read audit: %w", err)
+	}
+	return &Page[AuditRow]{Items: rows, Pagination: pagination}, nil
+}
+
 // Churches lists every church on the platform.
 func (s *Service) Churches(ctx context.Context, db *mongodb.DB, page, limit int) (*Page[ChurchRow], error) {
 	churches := db.Global("churches")
@@ -117,7 +174,7 @@ func (s *Service) Churches(ctx context.Context, db *mongodb.DB, page, limit int)
 	for _, r := range rows {
 		row := ChurchRow{
 			ID: r.ID.Hex(), Name: r.Name, Slug: r.Slug, City: r.City,
-			Country: r.Country, Plan: r.Plan, IsActive: r.IsActive,
+			Country: r.Country, Plan: string(churchdomain.NormalisePlan(r.Plan)), IsActive: r.IsActive,
 			CreatedAt: r.CreatedAt,
 		}
 
