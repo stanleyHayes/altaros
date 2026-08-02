@@ -308,9 +308,21 @@ func (s *Service) Tasks(ctx context.Context, f TaskFilter) ([]Task, error) {
 // This is what stops the escalation. It is separate from closing on purpose: a
 // volunteer who rang on Tuesday and got no answer has TOUCHED the task, and
 // escalating it over their head would teach them the system is noise.
-func (s *Service) Touch(ctx context.Context, taskID, actorID string) (*Task, error) {
+//
+// # Why the ownership check is HERE and not only in the HTTP layer
+//
+// Touching a task suppresses its escalation, so an unauthorised touch is the
+// quietest destructive action in this package: nothing visibly changes, and the
+// safety net that WP-34 exists to provide simply stops firing. The visitor is
+// never called and the mechanism that would have caught that has been switched
+// off by the same request. A rule that only lives in a route decorator is one a
+// future caller forgets; this one is enforced where the write happens.
+func (s *Service) Touch(ctx context.Context, taskID, actorID string, canManage bool) (*Task, error) {
 	oid, task, err := s.readTask(ctx, taskID)
 	if err != nil {
+		return nil, err
+	}
+	if err := mayWork(task, actorID, canManage); err != nil {
 		return nil, err
 	}
 	if !task.Status.Open() {
@@ -327,7 +339,6 @@ func (s *Service) Touch(ctx context.Context, taskID, actorID string) (*Task, err
 	}}); err != nil {
 		return nil, fmt.Errorf("discipleship: touch task: %w", err)
 	}
-	_ = actorID
 	return s.taskByOID(ctx, oid)
 }
 
@@ -337,6 +348,11 @@ type CloseInput struct {
 	Status  TaskStatus
 	Outcome string
 	ActorID string
+	// CanManage is true when the caller holds member:update — a leader working
+	// the team's list rather than their own. Passed in rather than read from
+	// the context because this package has no business knowing how the HTTP
+	// layer models permissions.
+	CanManage bool
 }
 
 // Close finishes a follow-up, with what happened.
@@ -357,6 +373,9 @@ func (s *Service) Close(ctx context.Context, in CloseInput) (*Task, error) {
 
 	oid, task, err := s.readTask(ctx, in.TaskID)
 	if err != nil {
+		return nil, err
+	}
+	if err := mayWork(task, in.ActorID, in.CanManage); err != nil {
 		return nil, err
 	}
 	if !task.Status.Open() {
@@ -398,6 +417,24 @@ func (s *Service) Reassign(ctx context.Context, taskID, assigneeID string) (*Tas
 		return nil, fmt.Errorf("discipleship: reassign task: %w", err)
 	}
 	return s.taskByOID(ctx, oid)
+}
+
+// mayWork reports whether somebody may act on a follow-up.
+//
+// The assignee, or somebody holding member:update — a team leader working the
+// list on behalf of a volunteer who is away is legitimate and common.
+//
+// Refused with ErrTaskNotFound rather than a distinct "forbidden", the same
+// rule welfare and the social feed use: a separate error confirms that a named
+// task exists, and the id is in the URL of anybody who wants to probe.
+func mayWork(task *Task, actorID string, canManage bool) error {
+	if canManage {
+		return nil
+	}
+	if actorID != "" && task.AssigneeID.String() == actorID {
+		return nil
+	}
+	return ErrTaskNotFound
 }
 
 func (s *Service) readTask(ctx context.Context, taskID string) (bson.ObjectID, *Task, error) {

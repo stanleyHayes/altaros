@@ -45,6 +45,13 @@ func discipleshipRoutes(d *deps.Deps) routeSet {
 			// own list without holding member:read over the congregation.
 			r.Get("/discipleship/tasks", handleListTasks(svc))
 
+			// Touch and close are ownership-checked INSIDE the handler and
+			// again inside the service: a volunteer works their own follow-up
+			// without holding member:update over the congregation, and
+			// somebody who owns neither gets nothing. A route decorator alone
+			// would either lock volunteers out of their own list or, as the
+			// first cut of this file did, let any member of the church close
+			// anybody's follow-up and silence its escalation.
 			r.Post("/discipleship/tasks/{id}/touch", handleTouchTask(svc))
 			r.Post("/discipleship/tasks/{id}/close", handleCloseTask(svc))
 			r.With(requirePermission(rbac.ResourceMember, rbac.ActionUpdate)).
@@ -147,7 +154,10 @@ func handleTouchTask(svc *discipleship.Service) http.HandlerFunc {
 			writeDiscipleshipError(w, err)
 			return
 		}
-		task, err := svc.Touch(r.Context(), chi.URLParam(r, "id"), scope.UserID)
+		// The assignee works their own task; member:update lets a leader work
+		// the team's. Enforced again inside the service — see mayWork.
+		task, err := svc.Touch(r.Context(), chi.URLParam(r, "id"), scope.UserID,
+			Can(r, rbac.ResourceMember, rbac.ActionUpdate))
 		if err != nil {
 			writeDiscipleshipError(w, err)
 			return
@@ -172,10 +182,11 @@ func handleCloseTask(svc *discipleship.Service) http.HandlerFunc {
 			return
 		}
 		task, err := svc.Close(r.Context(), discipleship.CloseInput{
-			TaskID:  chi.URLParam(r, "id"),
-			Status:  discipleship.TaskStatus(body.Status),
-			Outcome: body.Outcome,
-			ActorID: scope.UserID,
+			TaskID:    chi.URLParam(r, "id"),
+			Status:    discipleship.TaskStatus(body.Status),
+			Outcome:   body.Outcome,
+			ActorID:   scope.UserID,
+			CanManage: Can(r, rbac.ResourceMember, rbac.ActionUpdate),
 		})
 		if err != nil {
 			writeDiscipleshipError(w, err)

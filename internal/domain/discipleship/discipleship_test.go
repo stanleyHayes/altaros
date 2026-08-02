@@ -5,6 +5,8 @@ import (
 	"testing"
 	"time"
 
+	"go.mongodb.org/mongo-driver/v2/bson"
+
 	"github.com/hayfordstanley/altar-os/internal/platform/config"
 	"github.com/hayfordstanley/altar-os/internal/platform/mongodb"
 	"github.com/hayfordstanley/altar-os/internal/platform/tenancy"
@@ -163,7 +165,7 @@ func TestATouchedTaskDoesNotEscalate(t *testing.T) {
 	}
 
 	h.clock = h.clock.Add(2 * time.Hour)
-	if _, err := h.svc.Touch(h.ctx, out.Task.ID.Hex(), usher); err != nil {
+	if _, err := h.svc.Touch(h.ctx, out.Task.ID.Hex(), usher, false); err != nil {
 		t.Fatalf("Touch: %v", err)
 	}
 
@@ -245,6 +247,7 @@ func TestClosingRequiresAnOutcome(t *testing.T) {
 	}
 	if _, err := h.svc.Close(h.ctx, CloseInput{
 		TaskID: out.Task.ID.Hex(), Status: TaskDone, Outcome: "  ",
+		ActorID: usher,
 	}); err == nil {
 		t.Fatal("a task was closed with no outcome")
 	}
@@ -262,7 +265,7 @@ func TestUnreachableIsAClosingOutcome(t *testing.T) {
 	}
 	closed, err := h.svc.Close(h.ctx, CloseInput{
 		TaskID: out.Task.ID.Hex(), Status: TaskUnreachable,
-		Outcome: "Number does not connect.",
+		Outcome: "Number does not connect.", ActorID: usher,
 	})
 	if err != nil {
 		t.Fatalf("Close: %v", err)
@@ -445,7 +448,7 @@ func TestNothingCrossesChurches(t *testing.T) {
 	if len(tasks) != 0 {
 		t.Errorf("church B sees %d of church A's tasks", len(tasks))
 	}
-	if _, err := h.svc.Touch(h.other, out.Task.ID.Hex(), usher); err == nil {
+	if _, err := h.svc.Touch(h.other, out.Task.ID.Hex(), usher, false); err == nil {
 		t.Error("church B touched church A's task")
 	}
 
@@ -564,5 +567,113 @@ func TestAlreadyEscalatedTasksDoNotConsumeTheSweepBudget(t *testing.T) {
 	if second.Examined != 0 {
 		t.Fatalf("the second sweep examined %d already-escalated tasks — "+
 			"they will crowd out new work as they accumulate", second.Examined)
+	}
+}
+
+// A follow-up belongs to the person it is assigned to.
+//
+// Enforced in the service rather than only at the route, because touching a
+// task SUPPRESSES its escalation: an unauthorised touch is silent, and what it
+// silences is the safety net this whole package exists to be. The visitor is
+// never called and the mechanism that would have caught that is switched off by
+// the same request.
+func TestOnlyTheAssigneeOrALeaderMayWorkAFollowUp(t *testing.T) {
+	h := newHarness(t)
+	out, err := h.svc.Record(h.ctx, RecordInput{
+		MemberID: visitor, Stage: StageFirstTimer, AssigneeID: usher, ActorID: usher,
+	})
+	if err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+	id := out.Task.ID.Hex()
+
+	// A stranger holding nothing gets nowhere, on either verb.
+	if _, err := h.svc.Touch(h.ctx, id, otherUsher, false); err == nil {
+		t.Error("a stranger touched somebody else's follow-up")
+	}
+	if _, err := h.svc.Close(h.ctx, CloseInput{
+		TaskID: id, Status: TaskDone, Outcome: "Nothing to do.", ActorID: otherUsher,
+	}); err == nil {
+		t.Error("a stranger closed somebody else's follow-up")
+	}
+
+	// And crucially the escalation still fires — the point of the attack.
+	h.clock = h.clock.Add(72 * time.Hour)
+	res, err := h.svc.EscalateOverdue(h.ctx, fixedEscalator{to: pastor})
+	if err != nil {
+		t.Fatalf("EscalateOverdue: %v", err)
+	}
+	if res.Escalated != 1 {
+		t.Fatalf("a stranger's touch suppressed the escalation (escalated %d)",
+			res.Escalated)
+	}
+
+	// A leader working the team's list is legitimate.
+	if _, err := h.svc.Close(h.ctx, CloseInput{
+		TaskID: id, Status: TaskDone, Outcome: "Called on her behalf.",
+		ActorID: otherUsher, CanManage: true,
+	}); err != nil {
+		t.Fatalf("a leader with member:update could not close a task: %v", err)
+	}
+}
+
+// The assignee works their own without holding anything over the congregation.
+func TestTheAssigneeNeedsNoPermissionToWorkTheirOwn(t *testing.T) {
+	h := newHarness(t)
+	out, err := h.svc.Record(h.ctx, RecordInput{
+		MemberID: visitor, Stage: StageFirstTimer, AssigneeID: usher, ActorID: usher,
+	})
+	if err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+	if _, err := h.svc.Touch(h.ctx, out.Task.ID.Hex(), usher, false); err != nil {
+		t.Fatalf("the assignee could not touch their own task: %v", err)
+	}
+	if _, err := h.svc.Close(h.ctx, CloseInput{
+		TaskID: out.Task.ID.Hex(), Status: TaskDone,
+		Outcome: "Spoke to her.", ActorID: usher,
+	}); err != nil {
+		t.Fatalf("the assignee could not close their own task: %v", err)
+	}
+}
+
+// A task with no assignee must not be workable by a caller with no identity.
+//
+// The service refuses to CREATE one (ErrNoOwner), but a row written by an
+// import, a migration, or the legacy API (ADR-005) can carry no assigneeId at
+// all — and then "the empty assignee equals the empty actor" would make it
+// everybody's task. Empty is not a match.
+func TestAnOwnerlessTaskIsNotEverybodysTask(t *testing.T) {
+	h := newHarness(t)
+
+	// Written directly, the way an import would.
+	now := h.clock
+	res, err := h.svc.tasks.InsertOne(h.ctx, bson.M{
+		"memberId": mongodb.ID(visitor),
+		"kind":     string(KindWelcomeCall), "title": "Imported follow-up",
+		"dueAt": now.Add(48 * time.Hour), "status": string(TaskOpen),
+		"createdAt": now, "updatedAt": now,
+	})
+	if err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	id, _ := res.InsertedID.(bson.ObjectID)
+
+	if _, err := h.svc.Touch(h.ctx, id.Hex(), "", false); err == nil {
+		t.Error("a caller with no identity touched an ownerless task")
+	}
+	if _, err := h.svc.Close(h.ctx, CloseInput{
+		TaskID: id.Hex(), Status: TaskDone, Outcome: "Closing it.", ActorID: "",
+	}); err == nil {
+		t.Error("a caller with no identity closed an ownerless task")
+	}
+
+	// A leader can still clear it up, which is how the row gets dealt with.
+	if _, err := h.svc.Close(h.ctx, CloseInput{
+		TaskID: id.Hex(), Status: TaskCancelled,
+		Outcome: "Imported without an owner; cancelled.", ActorID: pastor,
+		CanManage: true,
+	}); err != nil {
+		t.Fatalf("a leader could not clear an ownerless task: %v", err)
 	}
 }
