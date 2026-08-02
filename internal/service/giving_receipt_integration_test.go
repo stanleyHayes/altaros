@@ -77,6 +77,10 @@ type settledGateway struct {
 
 func (g *settledGateway) Name() string { return "paystack" }
 
+func (g *settledGateway) UpdateSubaccountCommission(context.Context, string, int64) error {
+	return nil
+}
+
 func (g *settledGateway) CreateSubaccount(context.Context, payments.SubaccountRequest) (*payments.Subaccount, error) {
 	return &payments.Subaccount{Code: "ACCT_test"}, nil
 }

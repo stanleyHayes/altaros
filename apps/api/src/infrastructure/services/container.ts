@@ -1,7 +1,7 @@
 import { env } from "../config/env.js";
 import {
   type IPaymentGateway,
-  StubPaymentGateway,
+  UnavailablePaymentGateway,
 } from "./payment.service.js";
 import { type ISmsService, StubSmsService } from "./sms.service.js";
 import { type IEmailService, StubEmailService } from "./email.service.js";
@@ -20,24 +20,25 @@ export interface ServiceContainer {
 }
 
 /**
- * Build the service container. When API keys are configured in env,
- * swap the stub implementations for real ones here.
+ * Build the service container for the legacy TypeScript API.
  *
- * Example — once you set PAYSTACK_SECRET_KEY:
- *   1. Uncomment PaystackGateway in payment.service.ts
- *   2. Import it here
- *   3. Replace StubPaymentGateway with `new PaystackGateway()`
+ * The instructions that used to live here told the reader to enable a Paystack
+ * gateway in payment.service.ts. That gateway sent no `subaccount`, so
+ * following them would have settled every gift to ALTAR OS rather than to the
+ * church — the money-custody position ADR-002 exists to avoid, and the one that
+ * would put the platform inside Act 987 licensing. They have been removed along
+ * with the gateway.
+ *
+ * Payments are served by the Go finance service. This API does not take money,
+ * and its gateway refuses rather than pretending.
  */
 export function createServiceContainer(): ServiceContainer {
   // --- Payment ---
-  let payment: IPaymentGateway;
-  if (env.PAYSTACK_SECRET_KEY) {
-    // TODO: import { PaystackGateway } from "./payment.service.js";
-    // payment = new PaystackGateway();
-    payment = new StubPaymentGateway(); // swap when ready
-  } else {
-    payment = new StubPaymentGateway();
-  }
+  //
+  // Not conditional on PAYSTACK_SECRET_KEY. A key being present is not a reason
+  // for THIS service to start taking payments, and branching on it is what made
+  // the previous version look like it would do something useful once configured.
+  const payment: IPaymentGateway = new UnavailablePaymentGateway();
 
   // --- SMS ---
   let sms: ISmsService;

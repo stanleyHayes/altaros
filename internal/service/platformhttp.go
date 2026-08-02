@@ -12,6 +12,7 @@ import (
 	"github.com/hayfordstanley/altar-os/internal/platform/deps"
 	"github.com/hayfordstanley/altar-os/internal/platform/httpx"
 	"github.com/hayfordstanley/altar-os/internal/platform/money"
+	"github.com/hayfordstanley/altar-os/internal/platform/payments/paystack"
 	"github.com/hayfordstanley/altar-os/internal/platform/tenancy"
 )
 
@@ -59,6 +60,15 @@ func platformRoutes(d *deps.Deps) routeSet {
 			r.With(requirePlatformAdmin()).
 				Put("/platform/settings", handleSetPlatformSettings(settings))
 
+			// The backfill is a SEPARATE call from saving the rate, not a side
+			// effect of it. Saving is one database write; this is one external
+			// API call per church, and folding it into the save would make a
+			// settings form time out on a platform with any real number of
+			// churches — and leave the operator unable to tell whether the rate
+			// saved, the backfill ran, or neither.
+			r.With(requirePlatformAdmin()).
+				Post("/platform/settings/backfill-commission", handleBackfillCommission(settings, d))
+
 			// --- the church admin portal ---
 			r.With(requirePermission(rbac.ResourceSettings, rbac.ActionRead)).
 				Get("/church/giving-settings", handleGetGivingSettings(churches, settings))
@@ -104,6 +114,35 @@ func handlePlatformStats(svc *platformsetting.Service, d *deps.Deps) http.Handle
 	}
 }
 
+// handleBackfillCommission writes the current commission onto every church's
+// provider subaccount.
+//
+// Defaults to a DRY RUN. This writes a money-splitting parameter across every
+// church on the platform, and an operator should be able to read the list
+// before it happens — `?apply=true` is the deliberate second step.
+func handleBackfillCommission(svc *platformsetting.Service, d *deps.Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		gateway := paystack.New(paystack.Config{
+			SecretKey:                    d.Config.Paystack.SecretKey,
+			WebhookSecret:                d.Config.Paystack.WebhookSecret,
+			DefaultCommissionBasisPoints: platformsetting.DefaultCommissionBasisPoints,
+		})
+
+		apply := r.URL.Query().Get("apply") == "true"
+		report, err := svc.BackfillCommission(r.Context(), d.Mongo, gateway, !apply)
+		if err != nil {
+			writePlatformError(w, err)
+			return
+		}
+
+		// 200 even when some churches failed. The operation partially succeeded
+		// and the report says exactly which — an error status would throw away
+		// the record of the ones that worked, and the whole point of the report
+		// is being able to finish the job.
+		httpx.JSON(w, http.StatusOK, report)
+	}
+}
+
 func handleGetPlatformSettings(svc *platformsetting.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		current, err := svc.Current(r.Context())
@@ -115,9 +154,15 @@ func handleGetPlatformSettings(svc *platformsetting.Service) http.HandlerFunc {
 			"settings": current,
 			// Said in the response rather than left for the UI to remember,
 			// because getting it wrong is a settlement dispute months later.
-			"note": "Changing the commission rate applies to churches onboarded " +
-				"from now on. Churches already set up keep the rate stored on " +
-				"their payout account until it is changed for them individually.",
+			// Corrected 2 Aug 2026 after measuring it. This said the opposite,
+			// which is the intuitive reading and is wrong — see the note on
+			// platformsetting's package comment.
+			"note": "Changing this applies to every church immediately: the rate " +
+				"is sent with each transaction, so the next gift taken anywhere " +
+				"on the platform uses it. The figure stored with the payment " +
+				"provider is separate and only governs payment links or " +
+				"recurring plans created in the provider's own dashboard — use " +
+				"the commission backfill to bring those into line.",
 			"maxCommissionBasisPoints": platformsetting.MaxCommissionBasisPoints,
 		})
 	}

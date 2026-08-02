@@ -27,74 +27,53 @@ export interface IPaymentGateway {
 }
 
 /**
- * Stub implementation — records transactions locally without calling a payment provider.
- * Replace with PaystackGateway or FlutterwaveGateway once API keys are configured.
+ * A gateway that REFUSES, because payments are served by the Go finance
+ * service and nothing here should ever take money.
+ *
+ * This previously returned `{ status: "success", amount: 0 }` from
+ * `verifyCharge` for any reference at all. Nothing calls it today, which is the
+ * only reason that was not an incident: verification is what grants value, so a
+ * gateway that says "success" unconditionally credits a church for money that
+ * never moved, for every reference anybody submits.
+ *
+ * It now throws. A payment path that is not implemented has to fail loudly —
+ * the same rule the Go notification transports follow, and for the same reason:
+ * an unsent message is indistinguishable from an ignored one, and an unverified
+ * payment is indistinguishable from a real one.
  */
-export class StubPaymentGateway implements IPaymentGateway {
-  async initiateCharge(params: InitiateChargeParams): Promise<ChargeResult> {
-    return {
-      reference: params.reference,
-      status: "pending",
-    };
+export class UnavailablePaymentGateway implements IPaymentGateway {
+  async initiateCharge(_params: InitiateChargeParams): Promise<ChargeResult> {
+    throw new Error(
+      "payments: this API does not take payments. Giving is served by the Go " +
+        "finance service, which settles to the church's own subaccount (ADR-002).",
+    );
   }
 
-  async verifyCharge(reference: string): Promise<VerifyResult> {
-    return {
-      reference,
-      status: "success",
-      amount: 0,
-      paidAt: new Date(),
-    };
+  async verifyCharge(_reference: string): Promise<VerifyResult> {
+    throw new Error(
+      "payments: this API cannot verify a charge. Verification is what grants " +
+        "value, and answering it here would credit a church for money that " +
+        "never moved.",
+    );
   }
 }
 
-// --- Ready-to-use Paystack implementation (uncomment when key is set) ---
+/** @deprecated Use UnavailablePaymentGateway. Kept so existing imports fail
+ *  loudly at runtime rather than silently succeeding. */
+export const StubPaymentGateway = UnavailablePaymentGateway;
 
-// import { env } from "../config/env.js";
+// There is deliberately no Paystack implementation here, and the one that used
+// to sit in this file as a commented-out template has been removed rather than
+// left for somebody to enable.
 //
-// export class PaystackGateway implements IPaymentGateway {
-//   private readonly baseUrl = "https://api.paystack.co";
-//   private readonly secretKey = env.PAYSTACK_SECRET_KEY;
+// It omitted `subaccount`, which is not a missing feature — it is the whole
+// compliance boundary. Under ADR-002 every church is its own merchant and funds
+// settle directly to it; a charge with no subaccount settles to ALTAR OS, which
+// is the money-custody position that would put the platform inside Ghana's Act
+// 987 payment-aggregation licensing. It also omitted `transaction_charge` (so
+// no commission would be taken) and multiplied a floating-point amount by 100
+// (so GHS 0.10 loses a pesewa).
 //
-//   async initiateCharge(params: InitiateChargeParams): Promise<ChargeResult> {
-//     const res = await fetch(`${this.baseUrl}/transaction/initialize`, {
-//       method: "POST",
-//       headers: {
-//         Authorization: `Bearer ${this.secretKey}`,
-//         "Content-Type": "application/json",
-//       },
-//       body: JSON.stringify({
-//         amount: params.amount * 100, // Paystack uses kobo/pesewas
-//         email: params.email,
-//         reference: params.reference,
-//         currency: params.currency,
-//         callback_url: params.callbackUrl,
-//         metadata: params.metadata,
-//       }),
-//     });
-//     const data = await res.json();
-//
-//     return {
-//       authorizationUrl: data.data?.authorization_url,
-//       reference: data.data?.reference ?? params.reference,
-//       status: "pending",
-//     };
-//   }
-//
-//   async verifyCharge(reference: string): Promise<VerifyResult> {
-//     const res = await fetch(
-//       `${this.baseUrl}/transaction/verify/${encodeURIComponent(reference)}`,
-//       {
-//         headers: { Authorization: `Bearer ${this.secretKey}` },
-//       },
-//     );
-//     const data = await res.json();
-//
-//     return {
-//       reference,
-//       status: data.data?.status === "success" ? "success" : "failed",
-//       amount: (data.data?.amount ?? 0) / 100,
-//       paidAt: data.data?.paid_at ? new Date(data.data.paid_at) : undefined,
-//     };
-//   }
-// }
+// The real implementation is internal/platform/payments/paystack in the Go
+// service, which sends both fields and refuses outright to initialise a charge
+// that names no subaccount.

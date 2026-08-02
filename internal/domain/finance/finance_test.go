@@ -45,6 +45,10 @@ func newFakeGateway() *fakeGateway {
 	}
 }
 
+func (g *fakeGateway) UpdateSubaccountCommission(context.Context, string, int64) error {
+	return nil
+}
+
 func (f *fakeGateway) Name() string { return "paystack" }
 
 func (f *fakeGateway) CreateSubaccount(context.Context, payments.SubaccountRequest) (*payments.Subaccount, error) {

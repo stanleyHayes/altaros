@@ -30,6 +30,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -186,6 +187,46 @@ func (g *Gateway) CreateSubaccount(ctx context.Context, req payments.SubaccountR
 		CommissionBasisPoints: percentToBPS(out.Data.PercentageCharge),
 		Active:                out.Data.Active,
 	}, nil
+}
+
+// UpdateSubaccountCommission rewrites the split stored on an existing
+// subaccount.
+//
+// Idempotent by construction: it sets an absolute value rather than applying a
+// delta, so a request that times out after the provider already applied it can
+// simply be sent again. That property is what makes a backfill over hundreds of
+// churches safe to re-run, and it is the reason this takes a rate rather than a
+// change.
+func (g *Gateway) UpdateSubaccountCommission(ctx context.Context, code string, bps int64) error {
+	if g.configuredErr != nil {
+		return g.configuredErr
+	}
+	if strings.TrimSpace(code) == "" {
+		return fmt.Errorf("%w: no subaccount code", payments.ErrProvider)
+	}
+	if bps < 0 || bps > 10000 {
+		return fmt.Errorf("%w: commission of %d bps is out of range", payments.ErrProvider, bps)
+	}
+
+	var out struct {
+		Data struct {
+			SubaccountCode   string  `json:"subaccount_code"`
+			PercentageCharge float64 `json:"percentage_charge"`
+		} `json:"data"`
+	}
+	body := map[string]any{"percentage_charge": bpsToPercent(bps)}
+	if err := g.do(ctx, http.MethodPut, "/subaccount/"+url.PathEscape(code), body, &out); err != nil {
+		return err
+	}
+
+	// The provider echoes what it stored. Checking it rather than trusting a
+	// 200 is the difference between "we asked" and "it is set" — and the whole
+	// point of a backfill is being able to say the second.
+	if got := percentToBPS(out.Data.PercentageCharge); got != bps {
+		return fmt.Errorf("%w: asked for %d bps, provider stored %d",
+			payments.ErrProvider, bps, got)
+	}
+	return nil
 }
 
 // Initialize starts a charge that settles to the church's subaccount.

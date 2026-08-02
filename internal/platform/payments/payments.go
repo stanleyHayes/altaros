@@ -192,6 +192,24 @@ type Gateway interface {
 	Name() string
 	// CreateSubaccount registers a church as its own merchant (ADR-002).
 	CreateSubaccount(ctx context.Context, req SubaccountRequest) (*Subaccount, error)
+	// UpdateSubaccountCommission rewrites the split stored ON the provider for
+	// an existing church.
+	//
+	// Worth being precise about what this does and does not do, because it is
+	// easy to believe it is the thing that makes a rate change take effect.
+	// It is not. Every charge ALTAR OS initialises carries an explicit
+	// per-transaction charge computed from the LIVE rate, and that overrides
+	// whatever is stored here — measured against Paystack's test API on
+	// 2 Aug 2026: two identical GHS 100 charges against one subaccount stored
+	// at 2.5%%, one with an explicit charge of 150 and one without, split
+	// 150/9655 and 250/9555 respectively.
+	//
+	// What the stored value governs is every charge ALTAR OS did NOT
+	// originate: a payment link created in the provider's own dashboard, a
+	// recurring plan set up there, and any future code path that forgets to
+	// send the explicit charge. It is also what the church sees when it logs
+	// into the provider, so leaving it stale is a number they can dispute.
+	UpdateSubaccountCommission(ctx context.Context, code string, commissionBasisPoints int64) error
 	// Initialize starts a charge that settles to the church's subaccount.
 	Initialize(ctx context.Context, req ChargeRequest) (*Charge, error)
 	// Verify asks the provider what actually happened. The only source of

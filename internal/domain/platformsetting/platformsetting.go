@@ -6,13 +6,25 @@
 // from that which are easy to get wrong, and both are handled here rather than
 // left to the caller:
 //
-//   - **A rate change does not reach churches already onboarded.** Paystack
-//     stores the split on the subaccount, so changing the platform default
-//     changes what NEW churches get and nothing else. That is a legitimate
-//     policy — but it has to be stated, because a dashboard that looks like it
-//     changed everybody's rate while changing nobody's is a discrepancy that
-//     surfaces months later in a settlement dispute. Every read reports which
-//     churches are on a different rate; see church.CommissionBasisPoints.
+//   - **A rate change DOES take effect immediately, on every church.** This was
+//     documented here as the opposite for a day, and the mistake is worth
+//     recording because it is the intuitive reading and it is wrong. Paystack
+//     does store a split on each subaccount, so it looks as though changing the
+//     platform default could only affect new churches. But every charge ALTAR
+//     OS initialises sends an explicit per-transaction `transaction_charge`
+//     computed from the LIVE rate, and that OVERRIDES the stored split.
+//
+//     Measured against Paystack's test API on 2 Aug 2026 rather than reasoned
+//     about: two identical GHS 100 charges against one subaccount stored at
+//     2.5%%, one sending transaction_charge=150 and one not. They split
+//     150/9655 and 250/9555. The explicit charge won.
+//
+//     What the stored split still governs is every charge ALTAR OS did not
+//     originate — a payment link or recurring plan created in Paystack's own
+//     dashboard — and the figure a church sees when it logs in there. That is
+//     what BackfillCommission is for, and it is a consistency operation rather
+//     than the thing that makes a rate live.
+//
 //   - **The provider's own fee schedule is not a constant either.** Q-4 makes
 //     the giver bear it by default, which means the fee is added to what the
 //     giver is charged — so an out-of-date rate card is not an accounting
