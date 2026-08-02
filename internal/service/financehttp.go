@@ -92,6 +92,18 @@ func financeRoutes(d *deps.Deps) routeSet {
 			// that no longer exists.
 			r.With(requirePermission(rbac.ResourceFinance, rbac.ActionUpdate)).
 				Post("/finance/campaigns/{id}/close", handleCloseGivingCampaign(svc))
+
+			// Pledges (WP-26). The two reads are guarded INSIDE the handler,
+			// not here: a member reading their own pledge holds nothing that
+			// would satisfy finance:read, and requiring it would hide people's
+			// own promises from them.
+			r.Get("/finance/pledges", handleListPledges(svc))
+			r.Get("/finance/pledges/{id}", handleGetPledge(svc))
+			r.With(requirePermission(rbac.ResourceFinance, rbac.ActionCreate)).
+				Post("/finance/pledges", handleMakePledge(svc))
+			// Cancelled, never deleted — same reason a campaign is closed.
+			r.With(requirePermission(rbac.ResourceFinance, rbac.ActionUpdate)).
+				Post("/finance/pledges/{id}/cancel", handleCancelPledge(svc))
 			// Ownership-checked inside the handler via selfOr, which is
 			// the only guard here and has to stay that way: a member reading
 			// their own receipt holds nothing that would satisfy a permission.
@@ -813,6 +825,16 @@ func writeFinanceError(w http.ResponseWriter, err error) {
 		httpx.Error(w, http.StatusBadGateway,
 			"The payment provider is not responding. Please try again shortly.")
 
+	case errors.Is(err, finance.ErrPledgeNotFound):
+		httpx.Error(w, http.StatusNotFound, "That pledge does not exist.")
+	case errors.Is(err, finance.ErrPledgeAmount):
+		httpx.Error(w, http.StatusBadRequest, "A pledge needs an amount above zero.")
+	case errors.Is(err, finance.ErrPledgeSchedule):
+		httpx.Error(w, http.StatusBadRequest,
+			"Choose how many instalments this pledge is spread over.")
+	case errors.Is(err, finance.ErrPledgeMember):
+		httpx.Error(w, http.StatusBadRequest, "Say which member made this pledge.")
+
 	case errors.Is(err, finance.ErrCampaignNotFound):
 		httpx.Error(w, http.StatusNotFound, "That campaign does not exist.")
 	case errors.Is(err, finance.ErrCampaignTitle):
@@ -826,5 +848,133 @@ func writeFinanceError(w http.ResponseWriter, err error) {
 
 	default:
 		httpx.Error(w, http.StatusInternalServerError, "Something went wrong. Please try again.")
+	}
+}
+
+// --- Pledges (WP-26, §8.2) ---
+//
+// A pledge is a promise to give over time. The read side is guarded two ways:
+// a member may always see their OWN pledges, because that is ownership rather
+// than a permission over the congregation's records — the same rule that lets
+// somebody read their own receipt. Seeing everybody's is finance:read.
+
+// pledgeInput is the wire shape of a pledge.
+type pledgeInput struct {
+	MemberID    string  `json:"memberId"`
+	CampaignID  string  `json:"campaignId"`
+	Amount      float64 `json:"amount"`
+	AmountMinor int64   `json:"amountMinor"`
+	Currency    string  `json:"currency"`
+	Frequency   string  `json:"frequency"`
+	Instalments int     `json:"instalments"`
+	StartDate   string  `json:"startDate"`
+	Note        string  `json:"note"`
+}
+
+func (in pledgeInput) toDomain() (finance.PledgeInput, error) {
+	out := finance.PledgeInput{
+		MemberID:    in.MemberID,
+		CampaignID:  in.CampaignID,
+		TotalMinor:  in.AmountMinor,
+		Currency:    in.Currency,
+		Frequency:   finance.Frequency(in.Frequency),
+		Instalments: in.Instalments,
+		Note:        in.Note,
+	}
+	// A major-unit amount is accepted for the same reason the giving endpoint
+	// accepts one: a client that sends 1000 meaning GHS 1,000 and gets a
+	// pledge of GHS 10 has been quietly misunderstood.
+	if out.TotalMinor == 0 && in.Amount > 0 {
+		out.TotalMinor = int64(in.Amount*100 + 0.5)
+	}
+	if in.StartDate != "" {
+		at, err := time.Parse(time.RFC3339, in.StartDate)
+		if err != nil {
+			// Also accept a plain date, which is what a date picker sends.
+			at, err = time.Parse("2006-01-02", in.StartDate)
+			if err != nil {
+				return out, err
+			}
+		}
+		out.StartDate = at
+	}
+	return out, nil
+}
+
+func handleMakePledge(svc *finance.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var body pledgeInput
+		if err := decode(r, &body); err != nil {
+			httpx.Error(w, http.StatusBadRequest, "Malformed request body")
+			return
+		}
+		in, err := body.toDomain()
+		if err != nil {
+			httpx.Error(w, http.StatusBadRequest,
+				"That start date could not be read. Use YYYY-MM-DD.")
+			return
+		}
+		out, err := svc.MakePledge(r.Context(), in)
+		if err != nil {
+			writeFinanceError(w, err)
+			return
+		}
+		httpx.JSON(w, http.StatusCreated, map[string]any{"pledge": out})
+	}
+}
+
+func handleListPledges(svc *finance.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		memberID := r.URL.Query().Get("memberId")
+		// No member named means "the whole congregation", which is a
+		// finance:read. Naming yourself is always allowed.
+		if !selfOr(r, memberID, rbac.ResourceFinance, rbac.ActionRead) {
+			httpx.Error(w, http.StatusForbidden,
+				"You do not have access to the church's pledges.")
+			return
+		}
+
+		behind := r.URL.Query().Get("behind") == "true"
+		out, err := svc.Pledges(r.Context(), memberID, behind)
+		if err != nil {
+			writeFinanceError(w, err)
+			return
+		}
+		httpx.JSON(w, http.StatusOK, map[string]any{"pledges": out})
+	}
+}
+
+func handleGetPledge(svc *finance.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		out, err := svc.PledgeByID(r.Context(), chi.URLParam(r, "id"))
+		if err != nil {
+			writeFinanceError(w, err)
+			return
+		}
+		if !selfOr(r, out.Pledge.MemberID, rbac.ResourceFinance, rbac.ActionRead) {
+			// 404 rather than 403: a distinct "forbidden" would confirm that a
+			// named member has made a pledge, which is most of what somebody
+			// asking after somebody else's giving wants to know.
+			httpx.Error(w, http.StatusNotFound, "That pledge does not exist.")
+			return
+		}
+		httpx.JSON(w, http.StatusOK, map[string]any{"pledge": out})
+	}
+}
+
+func handleCancelPledge(svc *finance.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Reason string `json:"reason"`
+		}
+		// A reason is optional, so a body is too.
+		_ = decode(r, &body)
+
+		out, err := svc.CancelPledge(r.Context(), chi.URLParam(r, "id"), body.Reason)
+		if err != nil {
+			writeFinanceError(w, err)
+			return
+		}
+		httpx.JSON(w, http.StatusOK, map[string]any{"pledge": out})
 	}
 }

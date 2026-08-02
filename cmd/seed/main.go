@@ -194,6 +194,12 @@ The ORG_ADMIN reads across every branch; a CHURCH_ADMIN sees one. That
 difference is what VisibleChurchIDs decides, and it is only visible with
 more than one branch seeded.
 
+PASTORAL (care@...) is the only account that can open a welfare case.
+Welfare is withheld from every blanket grant — the Administrator role
+holds AllExceptPastoral() — so a CHURCH_ADMIN gets 404 on every welfare
+route, and its attempt is recorded as denied. That is the enforcement,
+not an oversight: sign in as care@ to see the pastoral side.
+
 Quick check:
 
   curl -s -X POST http://localhost:8080/api/v1/auth/login \

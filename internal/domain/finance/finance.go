@@ -61,6 +61,7 @@ type ChurchDirectory interface {
 type Service struct {
 	coll      *mongodb.TenantCollection
 	campaigns *mongodb.TenantCollection
+	pledges   *mongodb.TenantCollection
 	global    *mongo.Collection
 	gateway   payments.Gateway
 	pub       Publisher
@@ -73,6 +74,7 @@ func NewService(db *mongodb.DB, gw payments.Gateway, dir ChurchDirectory, pub Pu
 	return &Service{
 		coll:      db.Tenant(Collection),
 		campaigns: db.Tenant(CampaignCollection),
+		pledges:   db.Tenant(PledgeCollection),
 		// A webhook arrives from the provider with no session and therefore no
 		// tenant, so the transaction it refers to has to be found before the
 		// church is known. This is the one place finance reads across tenants,

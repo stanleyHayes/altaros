@@ -457,10 +457,19 @@ func (s *Seeder) church(ctx context.Context, orgID bson.ObjectID, name, slug, ci
 
 // staff creates the logins for one church.
 func (s *Seeder) staff(ctx context.Context, churchID bson.ObjectID, churchName, slug string) ([]Login, error) {
-	people := []struct{ role, first, last string }{
-		{"CHURCH_ADMIN", "Emmanuel", "Owusu"},
-		{"DEPARTMENT_LEADER", "Grace", "Mensah"},
-		{"MEMBER", "Kwame", "Boateng"},
+	// The fourth account is the one WP-27 needs. Welfare is withheld from
+	// every blanket grant — the Administrator role holds AllExceptPastoral()
+	// — so without somebody in the pastoral role a seeded church has NOBODY
+	// who can open a welfare case, and the acceptance criterion ("a church
+	// admin cannot read welfare") reads as broken rather than enforced.
+	//
+	// It also stops the demonstration requiring an admin to be demoted, which
+	// is what happened when this account did not exist.
+	people := []struct{ role, slugRole, first, last string }{
+		{"CHURCH_ADMIN", "", "Emmanuel", "Owusu"},
+		{"DEPARTMENT_LEADER", "", "Grace", "Mensah"},
+		{"MEMBER", "", "Kwame", "Boateng"},
+		{"MEMBER", rbac.SystemPastoral, "Abena", "Asante"},
 	}
 
 	hash, err := bcrypt.GenerateFromPassword([]byte(s.opt.Password), bcrypt.DefaultCost)
@@ -472,7 +481,22 @@ func (s *Seeder) staff(ctx context.Context, churchID bson.ObjectID, churchName, 
 	logins := make([]Login, 0, len(people))
 
 	for _, p := range people {
-		email := fmt.Sprintf("%s@%s.org", strings.ToLower(roleLabel(p.role)), slug)
+		label := roleLabel(p.role)
+		roleID := s.roleIDFor(ctx, churchID, p.role)
+		// An explicit slug overrides the legacy-enum mapping. The pastoral
+		// worker's legacy role stays MEMBER on purpose: the enum has no
+		// pastoral value, and inventing one would mean touching the legacy
+		// TypeScript API, which ADR-005 says we do not do.
+		if p.slugRole != "" {
+			label = "care"
+			if role, err := rbac.NewService(s.db).RoleBySlug(s.scope(churchID), p.slugRole); err == nil {
+				roleID = role.ID.Hex()
+			} else {
+				s.opt.Log.Warn("could not resolve the pastoral role for a seeded user",
+					slog.String("slug", p.slugRole), slog.String("error", err.Error()))
+			}
+		}
+		email := fmt.Sprintf("%s@%s.org", strings.ToLower(label), slug)
 
 		// Upsert: `email` is globally unique today (ADR-006 changes that), so a
 		// second seed run would otherwise collide rather than refresh.
@@ -484,7 +508,7 @@ func (s *Seeder) staff(ctx context.Context, churchID bson.ObjectID, churchName, 
 				"passwordHash": string(hash),
 				"name":         p.first + " " + p.last,
 				"role":         p.role,
-				"roleId":       s.roleIDFor(ctx, churchID, p.role),
+				"roleId":       roleID,
 				"churchId":     churchID,
 				"isActive":     true,
 				MarkerField:    Marker,
@@ -494,10 +518,14 @@ func (s *Seeder) staff(ctx context.Context, churchID bson.ObjectID, churchName, 
 		if err != nil {
 			return nil, fmt.Errorf("seed: user %s: %w", email, err)
 		}
+		reported := p.role
+		if p.slugRole != "" {
+			reported = "PASTORAL"
+		}
 		logins = append(logins, Login{
 			Email:    email,
 			Password: s.opt.Password,
-			Role:     p.role,
+			Role:     reported,
 			Church:   churchName,
 			Slug:     slug,
 		})
