@@ -120,7 +120,12 @@ func (fixedPayout) PayoutFor(context.Context, string) (*finance.ChurchPayout, er
 		Currency:              "GHS",
 		CommissionBasisPoints: 150,
 		Name:                  "Grace Chapel",
+		FeeBearer:             money.BearerGiver,
 	}, nil
+}
+
+func (fixedPayout) FeeScheduleFor(context.Context, string) (money.FeeSchedule, error) {
+	return money.FeeSchedule{}, nil
 }
 
 func TestGivingProducesAnSMSReceiptThroughKafka(t *testing.T) {

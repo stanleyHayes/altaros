@@ -79,7 +79,11 @@ type Config struct {
 
 	JWT JWTConfig
 
-	Paystack   PaystackConfig
+	Paystack PaystackConfig
+	// SMS names which provider actually sends, and holds both providers'
+	// credentials. A deployment configures one; requiring both would block a
+	// boot on a key for a provider it does not use.
+	SMS        SMSConfig
 	AfricasTkg AfricasTalkingConfig
 	Resend     ResendConfig
 	Cloudinary CloudinaryConfig
@@ -143,6 +147,35 @@ type PaystackConfig struct {
 type AfricasTalkingConfig struct {
 	APIKey   string
 	Username string
+	SenderID string
+}
+
+// SMSProvider names the transport that actually sends.
+type SMSProvider string
+
+const (
+	// SMSArkesel is the Ghana provider chosen on 2 Aug 2026.
+	SMSArkesel SMSProvider = "arkesel"
+	// SMSAfricasTalking is the original transport, kept behind the same port.
+	SMSAfricasTalking SMSProvider = "africastalking"
+)
+
+// SMSConfig selects and configures the SMS provider.
+//
+// Explicit rather than inferred from which credentials happen to be present.
+// Inference reads well until a deployment holds keys for both — during a
+// provider switch, which is exactly when it matters — and then the transport
+// that sends is whichever branch was written first, silently.
+type SMSConfig struct {
+	Provider SMSProvider
+	Arkesel  ArkeselConfig
+}
+
+// ArkeselConfig holds the Arkesel credentials.
+type ArkeselConfig struct {
+	APIKey string
+	// SenderID must be REGISTERED with Arkesel. An unregistered one is a 403 on
+	// every send, so it is treated as a required secret rather than a nicety.
 	SenderID string
 }
 
@@ -254,6 +287,13 @@ func Load(serviceName string) (*Config, error) {
 			CallbackURL:   os.Getenv("PAYMENT_CALLBACK_URL"),
 			WebhookSecret: os.Getenv("PAYSTACK_WEBHOOK_SECRET"),
 		},
+		SMS: SMSConfig{
+			Provider: normaliseSMSProvider(os.Getenv("SMS_PROVIDER")),
+			Arkesel: ArkeselConfig{
+				APIKey:   os.Getenv("ARKESEL_API_KEY"),
+				SenderID: os.Getenv("ARKESEL_SENDER_ID"),
+			},
+		},
 		AfricasTkg: AfricasTalkingConfig{
 			APIKey:   os.Getenv("AT_API_KEY"),
 			Username: os.Getenv("AT_USERNAME"),
@@ -283,9 +323,24 @@ func Load(serviceName string) (*Config, error) {
 // requiredSecrets lists the secrets each service needs in a non-dev
 // environment. Keeping it per-service means the auth service isn't blocked by
 // a missing Cloudinary key it never uses.
-func requiredSecrets(service string) map[string]func(*Config) string {
+func requiredSecrets(service string, sms SMSProvider) map[string]func(*Config) string {
 	common := map[string]func(*Config) string{
 		"JWT_SECRET": func(c *Config) string { return c.JWT.Secret },
+	}
+
+	// Only the ACTIVE provider's credentials are required. Requiring both would
+	// mean a deployment that has switched to Arkesel cannot boot without also
+	// holding an Africa's Talking username it will never use — which is how a
+	// required-secrets check stops being read and starts being worked around.
+	smsSecrets := map[string]func(*Config) string{
+		"ARKESEL_API_KEY":   func(c *Config) string { return c.SMS.Arkesel.APIKey },
+		"ARKESEL_SENDER_ID": func(c *Config) string { return c.SMS.Arkesel.SenderID },
+	}
+	if sms == SMSAfricasTalking {
+		smsSecrets = map[string]func(*Config) string{
+			"AT_API_KEY":  func(c *Config) string { return c.AfricasTkg.APIKey },
+			"AT_USERNAME": func(c *Config) string { return c.AfricasTkg.Username },
+		}
 	}
 
 	perService := map[string]map[string]func(*Config) string{
@@ -295,8 +350,6 @@ func requiredSecrets(service string) map[string]func(*Config) string {
 			"PAYSTACK_WEBHOOK_SECRET": func(c *Config) string { return c.Paystack.WebhookSecret },
 		},
 		"notification": {
-			"AT_API_KEY":        func(c *Config) string { return c.AfricasTkg.APIKey },
-			"AT_USERNAME":       func(c *Config) string { return c.AfricasTkg.Username },
 			"RESEND_API_KEY":    func(c *Config) string { return c.Resend.APIKey },
 			"RESEND_FROM_EMAIL": func(c *Config) string { return c.Resend.FromEmail },
 		},
@@ -311,6 +364,13 @@ func requiredSecrets(service string) map[string]func(*Config) string {
 	}
 	for k, v := range perService[service] {
 		out[k] = v
+	}
+	if service == "notification" || service == "gateway" || service == "auth" {
+		// auth as well as notification: a login OTP is an SMS, and an auth
+		// service that boots without a transport refuses every sign-in.
+		for k, v := range smsSecrets {
+			out[k] = v
+		}
 	}
 	// The gateway fronts every service, so it must hold every secret those
 	// services would need to verify a request it forwards.
@@ -342,7 +402,7 @@ func (c *Config) validate() error {
 	}
 
 	var missing []string
-	for key, get := range requiredSecrets(c.ServiceName) {
+	for key, get := range requiredSecrets(c.ServiceName, c.SMS.Provider) {
 		if strings.TrimSpace(get(c)) == "" {
 			missing = append(missing, key)
 		}
@@ -352,6 +412,26 @@ func (c *Config) validate() error {
 		return &MissingSecretsError{Env: c.Env, Keys: missing}
 	}
 	return nil
+}
+
+// normaliseSMSProvider reads SMS_PROVIDER, defaulting to Arkesel.
+//
+// An UNRECOGNISED value falls back to the default rather than erroring, and
+// that is a deliberate asymmetry with NormalisePlan, which fails to the
+// cheapest tier: there, an unrecognised value granting paid features is a
+// revenue leak nobody notices. Here, both options send real messages through a
+// configured account, so the safe direction is "use the one this deployment is
+// set up for" — and a typo surfaces immediately as a missing-secret failure at
+// boot, naming the provider it fell back to.
+func normaliseSMSProvider(raw string) SMSProvider {
+	switch SMSProvider(strings.ToLower(strings.TrimSpace(raw))) {
+	case SMSAfricasTalking:
+		return SMSAfricasTalking
+	case SMSArkesel:
+		return SMSArkesel
+	default:
+		return SMSArkesel
+	}
 }
 
 // --- env helpers ---

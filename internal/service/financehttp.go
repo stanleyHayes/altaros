@@ -11,6 +11,7 @@ import (
 
 	"github.com/hayfordstanley/altar-os/internal/domain/church"
 	"github.com/hayfordstanley/altar-os/internal/domain/finance"
+	"github.com/hayfordstanley/altar-os/internal/domain/platformsetting"
 	"github.com/hayfordstanley/altar-os/internal/domain/rbac"
 	"github.com/hayfordstanley/altar-os/internal/platform/deps"
 	"github.com/hayfordstanley/altar-os/internal/platform/httpx"
@@ -20,10 +21,14 @@ import (
 	"github.com/hayfordstanley/altar-os/internal/platform/tenancy"
 )
 
-// DefaultCommissionBasisPoints is the platform's cut when a church has no
-// negotiated rate. 150 = 1.5%. See §10 Q-7 — this is a business decision that
-// is written into each church's subaccount at creation.
-const DefaultCommissionBasisPoints int64 = 150
+// DefaultCommissionBasisPoints is the fallback when nothing has been entered
+// on the platform dashboard.
+//
+// Q-7 is answered (2 Aug 2026): the rate is a value an operator sets, not a
+// constant a developer sets. This is what applies before they have — see
+// platformsetting, which is the real source and which a church may override
+// per-subaccount for a negotiated rate.
+const DefaultCommissionBasisPoints = platformsetting.DefaultCommissionBasisPoints
 
 // buildFinance mounts the giving and ledger routes (WP-14).
 func buildFinance(d *deps.Deps) http.Handler { return standalone(financeRoutes(d)) }
@@ -36,7 +41,10 @@ func financeRoutes(d *deps.Deps) routeSet {
 		WebhookSecret:                d.Config.Paystack.WebhookSecret,
 		DefaultCommissionBasisPoints: DefaultCommissionBasisPoints,
 	})
-	directory := &churchDirectory{churches: church.NewService(d.Mongo)}
+	directory := &churchDirectory{
+		churches: church.NewService(d.Mongo),
+		settings: platformsetting.NewService(d.Mongo),
+	}
 	// d.Events, not nil: this is what makes giving.completed actually reach
 	// the notification service. It was nil until now, so the receipt half of
 	// WP-15 could never fire however correct both halves were in isolation.
@@ -66,8 +74,8 @@ func financeRoutes(d *deps.Deps) routeSet {
 			// Guarding these with finance:read would stop the congregation
 			// giving, which is the product, and would leave members with no way
 			// to see their own receipts.
-			r.Post("/finance/give/quote", handleGivingQuote(svc))
-			r.Post("/finance/give", handleStartGiving(svc))
+			r.Post("/finance/give/quote", handleGivingQuote(svc, directory))
+			r.Post("/finance/give", handleStartGiving(svc, directory))
 			// Ownership-checked inside the handler via selfOr, which is
 			// the only guard here and has to stay that way: a member reading
 			// their own receipt holds nothing that would satisfy a permission.
@@ -119,7 +127,7 @@ func financeRoutes(d *deps.Deps) routeSet {
 // handleGivingQuote is the non-mutating first half of checkout. The mobile
 // client must be able to show the exact debit before it creates a pending
 // transaction or sends the member to Paystack.
-func handleGivingQuote(svc *finance.Service) http.HandlerFunc {
+func handleGivingQuote(svc *finance.Service, dir *churchDirectory) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			Amount    string `json:"amount"`
@@ -152,15 +160,40 @@ func handleGivingQuote(svc *finance.Service) http.HandlerFunc {
 		// Anonymous controls what the church sees; it must not reset the
 		// signed-in giver's cumulative transfer allowance.
 		priorToday, _ := svc.GivenTodayMinor(r.Context(), scope.UserID, time.Now())
-		httpx.JSON(w, http.StatusOK, money.QuoteELevy(amount, req.Channel, priorToday))
+
+		quote, err := givingQuoteFor(r.Context(), dir, scope.ChurchID, amount,
+			req.Channel, priorToday)
+		if err != nil {
+			writeFinanceError(w, err)
+			return
+		}
+		// The levy is spread at the top level as well as nested, because
+		// existing clients read `total`, `levy` and `exempt` from this
+		// response. Removing them would break a shipped mobile app to tidy a
+		// shape; `quote.total` is the field new clients should read, and it is
+		// the same number.
+		httpx.JSON(w, http.StatusOK, map[string]any{
+			"quote":  quote,
+			"levy":   quote.Levy.Levy,
+			"total":  quote.Total,
+			"exempt": quote.Levy.Exempt,
+			"reason": quote.Levy.Reason,
+			"fee":    quote.Fee,
+		})
 	}
 }
 
 // churchDirectory adapts the church service to what finance needs. The
 // adapter exists so the two services stay separable under ADR-004 — finance
 // depends on an interface it declares, not on the church package's shape.
+//
+// It is also where the platform's commercial terms and the church's own
+// settings are RECONCILED, so finance never has to know there were two sources:
+// the commission is the church's override or the platform rate (Q-7), and the
+// fee bearer is the church's choice or the platform default (Q-4).
 type churchDirectory struct {
 	churches *church.Service
+	settings *platformsetting.Service
 }
 
 func (c *churchDirectory) PayoutFor(ctx context.Context, churchID string) (*finance.ChurchPayout, error) {
@@ -172,15 +205,54 @@ func (c *churchDirectory) PayoutFor(ctx context.Context, churchID string) (*fina
 	if currency == "" {
 		currency = "GHS"
 	}
+
+	// A failure to read the platform settings must not stop a church taking a
+	// gift. Defaults() is what a platform with no settings document runs on
+	// anyway, so falling back to it degrades to the documented starting state
+	// rather than to nothing.
+	current, err := c.settings.Current(ctx)
+	if err != nil {
+		current = platformsetting.Defaults()
+	}
+
+	// The per-church override wins, and it is read from a POINTER so that a
+	// launch partner on 0% is distinguishable from a church with no override.
+	commission := current.CommissionBasisPoints
+	if ch.CommissionBasisPoints != nil {
+		commission = *ch.CommissionBasisPoints
+	}
+
+	// The church's choice wins; an unset one follows the platform default,
+	// which is what lets changing the default reach every church that never
+	// made a choice.
+	bearer := current.DefaultFeeBearer
+	if ch.FeeBearer != "" {
+		bearer = money.NormaliseFeeBearer(ch.FeeBearer)
+	}
+
 	return &finance.ChurchPayout{
 		SubaccountCode:        ch.PayoutSubaccount,
 		Currency:              currency,
-		CommissionBasisPoints: DefaultCommissionBasisPoints,
+		CommissionBasisPoints: commission,
 		Name:                  ch.Name,
+		FeeBearer:             bearer,
 	}, nil
 }
 
-func handleStartGiving(svc *finance.Service) http.HandlerFunc {
+// FeeScheduleFor returns the provider's rate card for a channel.
+func (c *churchDirectory) FeeScheduleFor(ctx context.Context, channel string) (money.FeeSchedule, error) {
+	current, err := c.settings.Current(ctx)
+	if err != nil {
+		// An empty schedule quotes a ZERO fee, which means the church absorbs
+		// a charge it did not expect. That is the right direction to fail: the
+		// alternative is guessing a rate and showing a giver a number nobody
+		// entered.
+		return money.FeeSchedule{}, nil
+	}
+	return current.FeeFor(channel), nil
+}
+
+func handleStartGiving(svc *finance.Service, directory *churchDirectory) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			Type string `json:"type"`
@@ -242,7 +314,20 @@ func handleStartGiving(svc *finance.Service) http.HandlerFunc {
 		// today: the threshold is cumulative, so charging per transaction
 		// under-quotes exactly the member who gives most often.
 		priorToday, _ := svc.GivenTodayMinor(r.Context(), scope.UserID, time.Now())
-		quote := money.QuoteELevy(amount, req.Channel, priorToday)
+
+		// The FULL quote, not the levy alone.
+		//
+		// This check exists so a giver is never debited more than the screen
+		// showed them. Comparing against the levy total alone made it blind to
+		// exactly the amount Q-4 introduced: with the giver bearing the
+		// provider fee, the debit exceeds the levy total by the fee and the
+		// guard would have passed without noticing.
+		quote, err := givingQuoteFor(r.Context(), directory, scope.ChurchID, amount,
+			req.Channel, priorToday)
+		if err != nil {
+			writeFinanceError(w, err)
+			return
+		}
 		if !acceptedQuoteTotal(req.AcceptedTotalMinor, quote) {
 			httpx.Error(w, http.StatusConflict, "The total changed. Review the latest quote before continuing.")
 			return
@@ -268,8 +353,28 @@ func handleStartGiving(svc *finance.Service) http.HandlerFunc {
 	}
 }
 
-func acceptedQuoteTotal(accepted int64, quote money.LevyQuote) bool {
+func acceptedQuoteTotal(accepted int64, quote money.GivingQuote) bool {
 	return accepted > 0 && accepted == quote.Total.Minor
+}
+
+// givingQuoteFor prices a gift the way StartGiving will.
+//
+// Shared by the quote endpoint and the confirmation guard on purpose: two
+// independent implementations of the same arithmetic would agree until one of
+// them was changed, and the symptom of them disagreeing is a giver being told
+// their total changed when it did not.
+func givingQuoteFor(ctx context.Context, dir *churchDirectory, churchID string,
+	amount money.Amount, channel string, priorTodayMinor int64) (money.GivingQuote, error) {
+
+	payout, err := dir.PayoutFor(ctx, churchID)
+	if err != nil {
+		return money.GivingQuote{}, err
+	}
+	schedule, err := dir.FeeScheduleFor(ctx, channel)
+	if err != nil {
+		return money.GivingQuote{}, err
+	}
+	return money.QuoteGiving(amount, channel, priorTodayMinor, schedule, payout.FeeBearer), nil
 }
 
 // handlePaystackWebhook authenticates and processes a provider callback.

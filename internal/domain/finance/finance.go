@@ -38,14 +38,23 @@ type ChurchPayout struct {
 	Currency       string
 	// CommissionBasisPoints is the platform's cut for this church. Per-church
 	// so a launch-partner denomination can be given different terms without a
-	// code change.
+	// code change. Resolved by the directory from the platform rate and any
+	// per-church override (Q-7).
 	CommissionBasisPoints int64
 	Name                  string
+	// FeeBearer is who absorbs the payment provider's fee — the giver or the
+	// church (Q-4). Already resolved against the platform default, so finance
+	// never has to know there was one.
+	FeeBearer money.FeeBearer
 }
 
 // ChurchDirectory resolves the payout configuration of a church.
 type ChurchDirectory interface {
 	PayoutFor(ctx context.Context, churchID string) (*ChurchPayout, error)
+	// FeeScheduleFor is separate from PayoutFor because the rate card depends
+	// on the CHANNEL, and PayoutFor is also called on the settlement path
+	// where no channel choice is being made.
+	FeeScheduleFor(ctx context.Context, channel string) (money.FeeSchedule, error)
 }
 
 // Service is the giving and ledger domain.
@@ -171,9 +180,14 @@ type GiveResult struct {
 	// AuthorizationURL is where the giver authorises the debit.
 	AuthorizationURL string `json:"authorizationUrl,omitempty"`
 	AccessCode       string `json:"accessCode,omitempty"`
-	// Levy is the quote shown before confirmation. The giver must see this
+	// Quote is the full pricing shown before confirmation — gift, provider
+	// fee, levy and the single total the giver is debited. They must see this
 	// before authorising: a flow that debits more than it displayed destroys
-	// trust faster than any bug (§2.3).
+	// trust faster than any bug (§2.3), and with the giver bearing the provider
+	// fee (Q-4's default) the amount charged is BY DEFINITION not the amount
+	// typed.
+	Quote money.GivingQuote `json:"quote"`
+	// Levy is kept alongside Quote for the clients that already read it.
 	Levy money.LevyQuote `json:"levy"`
 }
 
@@ -215,7 +229,19 @@ func (s *Service) StartGiving(ctx context.Context, req GiveRequest) (*GiveResult
 			money.ErrCurrencyMismatch, payout.Currency, req.Amount.Currency)
 	}
 
-	levy := money.QuoteELevy(req.Amount, req.Channel, req.PriorTodayMinor)
+	schedule, err := s.dir.FeeScheduleFor(ctx, req.Channel)
+	if err != nil {
+		return nil, fmt.Errorf("finance: resolve provider fee: %w", err)
+	}
+	quote := money.QuoteGiving(req.Amount, req.Channel, req.PriorTodayMinor,
+		schedule, payout.FeeBearer)
+	levy := quote.Levy
+
+	// The platform's commission is taken on the GIFT, never on the total.
+	//
+	// Charging it on gift+fee would mean the platform earns a cut of the
+	// payment processor's fee, which is not a service the platform performed
+	// and is not what a church agreed a commission rate on.
 	platformFee := req.Amount.PercentBasisPoints(payout.CommissionBasisPoints)
 
 	key, err := newIdempotencyKey()
@@ -228,10 +254,20 @@ func (s *Service) StartGiving(ctx context.Context, req GiveRequest) (*GiveResult
 		"type":             string(req.Type),
 		"direction":        string(DirectionIncome),
 		"channel":          req.Channel,
-		"grossMinor":       req.Amount.Minor,
-		"levyMinor":        levy.Levy.Minor,
-		"providerFeeMinor": int64(0),
+		"grossMinor": req.Amount.Minor,
+		"levyMinor":  levy.Levy.Minor,
+		// The ESTIMATE, replaced by the provider's actual figure on settlement.
+		// Recorded rather than left zero because with the giver bearing it this
+		// is money the giver was actually charged, and a pending row showing a
+		// zero fee misstates what left their account.
+		"providerFeeMinor": quote.Fee.ProviderFee.Minor,
 		"platformFeeMinor": platformFee.Minor,
+		// What the giver is debited, which differs from the gift whenever they
+		// bear the fee. Stored so a support question about a bank statement can
+		// be answered from the record rather than by re-deriving a rate card
+		// that has since changed.
+		"chargedMinor": quote.Fee.Charged.Minor,
+		"feeBearer":    string(quote.Fee.Bearer),
 		// Net is provisional until the provider reports its actual fee.
 		// Recording the optimistic figure now and correcting it on settlement
 		// is better than leaving it zero, which would read as "this gift was
@@ -278,8 +314,12 @@ func (s *Service) StartGiving(ctx context.Context, req GiveRequest) (*GiveResult
 		// The idempotency key is the provider reference. One string means the
 		// webhook can be matched without a second lookup table, and a retried
 		// initialise is rejected by the provider rather than charging twice.
-		Reference:      key,
-		Amount:         req.Amount,
+		Reference: key,
+		// The CHARGED amount, not the gift. When the giver bears the provider
+		// fee (Q-4's default) these differ, and charging the gift would leave
+		// the church short by the fee on every single transaction — silently,
+		// because every other number in the flow would still look right.
+		Amount:         quote.Fee.Charged,
 		SubaccountCode: payout.SubaccountCode,
 		PlatformFee:    platformFee,
 		Channel:        req.Channel,
@@ -308,6 +348,7 @@ func (s *Service) StartGiving(ctx context.Context, req GiveRequest) (*GiveResult
 		Transaction:      tx,
 		AuthorizationURL: charge.AuthorizationURL,
 		AccessCode:       charge.AccessCode,
+		Quote:            quote,
 		Levy:             levy,
 	}, nil
 }

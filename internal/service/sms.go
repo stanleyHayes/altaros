@@ -8,15 +8,47 @@ import (
 	"github.com/hayfordstanley/altar-os/internal/domain/auth"
 	"github.com/hayfordstanley/altar-os/internal/domain/notification"
 	"github.com/hayfordstanley/altar-os/internal/domain/notification/transport"
+	"github.com/hayfordstanley/altar-os/internal/platform/config"
 	"github.com/hayfordstanley/altar-os/internal/platform/deps"
 )
 
+// smsTransportFor returns the configured SMS transport, or nil.
+//
+// The provider is chosen by SMS_PROVIDER rather than inferred from which
+// credentials happen to be present. Inference reads well until a deployment
+// holds keys for both — during a provider switch, which is exactly when it
+// matters — and then the transport that sends is whichever branch was written
+// first, silently.
+//
+// Arkesel is the default (2 Aug 2026). Africa's Talking stays behind the same
+// notification.Transport port so switching back is one environment variable.
+func smsTransportFor(d *deps.Deps) notification.Transport {
+	switch d.Config.SMS.Provider {
+	case config.SMSAfricasTalking:
+		if d.Config.AfricasTkg.APIKey != "" && d.Config.AfricasTkg.Username != "" {
+			return transport.NewSMS(transport.SMSConfig{
+				APIKey:   d.Config.AfricasTkg.APIKey,
+				Username: d.Config.AfricasTkg.Username,
+				SenderID: d.Config.AfricasTkg.SenderID,
+			})
+		}
+	default:
+		if d.Config.SMS.Arkesel.APIKey != "" && d.Config.SMS.Arkesel.SenderID != "" {
+			return transport.NewArkesel(transport.ArkeselConfig{
+				APIKey:   d.Config.SMS.Arkesel.APIKey,
+				SenderID: d.Config.SMS.Arkesel.SenderID,
+			})
+		}
+	}
+	return nil
+}
+
 // smsSenderFor returns the SMS transport for this environment.
 //
-// The real Africa's Talking transport landed in WP-15 but was never connected
-// here, so OTP delivery still went through a development stub — meaning a
-// production deployment WITH valid credentials would still have refused to send
-// a login code. Configured credentials are now used.
+// The real transport landed in WP-15 but was never connected here, so OTP
+// delivery still went through a development stub — meaning a production
+// deployment WITH valid credentials would still have refused to send a login
+// code. Configured credentials are now used.
 //
 // The fallbacks are unchanged and deliberate. Development logs the code so the
 // OTP flow is usable locally. A non-development environment with no credentials
@@ -25,15 +57,8 @@ import (
 // is exactly how a "we sent you a code" screen ends up in front of a member who
 // will never receive one.
 func smsSenderFor(d *deps.Deps) auth.SMSSender {
-	if d.Config.AfricasTkg.APIKey != "" && d.Config.AfricasTkg.Username != "" {
-		return &realSMS{
-			transport: transport.NewSMS(transport.SMSConfig{
-				APIKey:   d.Config.AfricasTkg.APIKey,
-				Username: d.Config.AfricasTkg.Username,
-				SenderID: d.Config.AfricasTkg.SenderID,
-			}),
-			log: d.Log,
-		}
+	if sender := smsTransportFor(d); sender != nil {
+		return &realSMS{transport: sender, log: d.Log}
 	}
 
 	if d.Config.Env.RequiresRealSecrets() {
@@ -52,7 +77,7 @@ func smsSenderFor(d *deps.Deps) auth.SMSSender {
 // from importing the notification package, which would couple the login path to
 // the whole messaging domain.
 type realSMS struct {
-	transport *transport.SMS
+	transport notification.Transport
 	log       *slog.Logger
 }
 

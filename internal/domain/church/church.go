@@ -29,6 +29,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 
+	"github.com/hayfordstanley/altar-os/internal/platform/money"
 	"github.com/hayfordstanley/altar-os/internal/platform/mongodb"
 	"github.com/hayfordstanley/altar-os/internal/platform/tenancy"
 )
@@ -62,6 +63,8 @@ var (
 	// ErrCircularParent is returned when a branch would become its own
 	// ancestor, which would make the hierarchy walk loop forever.
 	ErrCircularParent = errors.New("church: a branch cannot be its own ancestor")
+	// ErrInvalidInput means a submitted setting was not recognised.
+	ErrInvalidInput = errors.New("church: that value is not valid")
 )
 
 // Organization is a denomination or church network.
@@ -98,10 +101,30 @@ type Church struct {
 	// PayoutSubaccount is the Paystack/Flutterwave subaccount giving settles
 	// into. Per ADR-002 funds go directly to the church; ALTAR OS never holds
 	// them, which keeps it outside Act 987 payment-aggregation licensing.
-	PayoutSubaccount string    `bson:"payoutSubaccountCode,omitempty" json:"payoutSubaccountCode,omitempty"`
-	IsActive         bool      `bson:"isActive"                 json:"isActive"`
-	CreatedAt        time.Time `bson:"createdAt"                json:"createdAt"`
-	UpdatedAt        time.Time `bson:"updatedAt"                json:"updatedAt"`
+	PayoutSubaccount string `bson:"payoutSubaccountCode,omitempty" json:"payoutSubaccountCode,omitempty"`
+
+	// FeeBearer is who absorbs the payment provider's processing fee — the
+	// giver or the church (Q-4, answered 2 Aug 2026). Per church, because it is
+	// the church's decision about its own congregation, and because two
+	// churches on this platform will legitimately present different totals for
+	// the same gift.
+	//
+	// Empty means "use the platform default", which is the giver. Stored empty
+	// rather than filled in on creation so that changing the platform default
+	// reaches every church that never made a choice — writing the default into
+	// each row would freeze it at whatever it was the day they signed up.
+	FeeBearer string `bson:"feeBearer,omitempty" json:"feeBearer,omitempty"`
+
+	// CommissionBasisPoints overrides the platform rate for this church.
+	//
+	// A POINTER, because zero is a real answer here: a launch partner on 0%
+	// commission must be distinguishable from a church that has no override.
+	// A plain int64 would make the two identical and quietly bill the partner.
+	CommissionBasisPoints *int64 `bson:"commissionBasisPoints,omitempty" json:"commissionBasisPoints,omitempty"`
+
+	IsActive  bool      `bson:"isActive"                 json:"isActive"`
+	CreatedAt time.Time `bson:"createdAt"                json:"createdAt"`
+	UpdatedAt time.Time `bson:"updatedAt"                json:"updatedAt"`
 }
 
 // Department is a ministry within a branch (choir, youth, ushers, media).
@@ -288,6 +311,55 @@ func (s *Service) CanAccessChurch(ctx context.Context, churchID string) error {
 		}
 	}
 	return ErrForbidden
+}
+
+// GivingSettings is the part of a church's configuration that decides what a
+// giver is charged. Written from the church admin portal.
+type GivingSettings struct {
+	// FeeBearer is "giver" or "church". Empty clears the override, returning
+	// the church to the platform default.
+	FeeBearer *string
+}
+
+// SetGivingSettings updates the church's giving configuration.
+//
+// Deliberately narrow: this writes the fee bearer and nothing else. The
+// commission rate is NOT here, because it is not the church's to set — a church
+// that could edit its own commission could set it to zero. That override exists
+// (Church.CommissionBasisPoints) and is written by a platform operator.
+func (s *Service) SetGivingSettings(ctx context.Context, churchID string, in GivingSettings) (*Church, error) {
+	if err := s.CanAccessChurch(ctx, churchID); err != nil {
+		return nil, err
+	}
+	oid, err := bson.ObjectIDFromHex(churchID)
+	if err != nil {
+		return nil, ErrNotFound
+	}
+
+	update := bson.M{}
+	if in.FeeBearer != nil {
+		value := strings.ToLower(strings.TrimSpace(*in.FeeBearer))
+		switch value {
+		case "":
+			// Cleared, not set to the default. See the note on the field: a
+			// church with no explicit choice follows the platform, and writing
+			// the default in would freeze it at today's value.
+			update["$unset"] = bson.M{"feeBearer": ""}
+		case string(money.BearerGiver), string(money.BearerChurch):
+			update["$set"] = bson.M{"feeBearer": value, "updatedAt": time.Now().UTC()}
+		default:
+			return nil, fmt.Errorf("%w: fee bearer must be %q or %q",
+				ErrInvalidInput, money.BearerGiver, money.BearerChurch)
+		}
+	}
+	if len(update) == 0 {
+		return s.ByID(ctx, churchID)
+	}
+
+	if _, err := s.churches.UpdateOne(ctx, bson.M{"_id": oid}, update); err != nil {
+		return nil, fmt.Errorf("church: update giving settings: %w", err)
+	}
+	return s.ByID(ctx, churchID)
 }
 
 // SetParent re-parents a branch, rejecting anything that would make it its own

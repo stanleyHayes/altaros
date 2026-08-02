@@ -123,12 +123,17 @@ func (f *fakeGateway) lastCharge() payments.ChargeRequest {
 
 // staticDirectory resolves every church to one payout config.
 type staticDirectory struct {
-	payout *ChurchPayout
-	err    error
+	payout   *ChurchPayout
+	err      error
+	schedule money.FeeSchedule
 }
 
 func (d *staticDirectory) PayoutFor(context.Context, string) (*ChurchPayout, error) {
 	return d.payout, d.err
+}
+
+func (d *staticDirectory) FeeScheduleFor(context.Context, string) (money.FeeSchedule, error) {
+	return d.schedule, nil
 }
 
 type capturePublisher struct {

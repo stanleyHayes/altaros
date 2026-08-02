@@ -58,6 +58,7 @@ func routeBuilders() map[string]func(*deps.Deps) routeSet {
 		"site":         siteRoutes,
 		"domain":       domainRoutes,
 		"event":        eventRoutes,
+		"platform":     platformRoutes,
 		"spiritual":    spiritualRoutes,
 	}
 }
@@ -89,6 +90,7 @@ func init() {
 		"invitation":    buildInvitation,
 		"site":          buildSite,
 		"domain":        buildDomain,
+		"platform":      buildPlatform,
 		"event":         buildEvent,
 		"spiritual":     buildSpiritual,
 		"communication": placeholder("communication", "broadcast + targeted messaging"),

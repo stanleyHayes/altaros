@@ -187,25 +187,44 @@ func (d *Deps) Checkers() []httpx.Checker {
 // Transports returns the notification transports for this environment.
 //
 // Each refuses to send when unconfigured rather than pretending to succeed, so
-// a deployment missing Africa's Talking credentials records suppressed
-// messages with a reason instead of reporting delivery for messages nobody
-// received. That distinction is the whole point: an SMS that was never sent is
+// a deployment missing SMS credentials records suppressed messages with a
+// reason instead of reporting delivery for messages nobody received. That
+// distinction is the whole point: an SMS that was never sent is
 // indistinguishable from one the member ignored.
+//
+// Exactly ONE SMS transport, chosen by SMS_PROVIDER. Returning both would put
+// two transports on the same channel, and the notification service picks by
+// channel — so which one sent would be decided by slice order.
 func (d *Deps) Transports() []notification.Transport {
 	if d == nil || d.Config == nil {
 		return nil
 	}
 	return []notification.Transport{
-		transport.NewSMS(transport.SMSConfig{
-			APIKey:   d.Config.AfricasTkg.APIKey,
-			Username: d.Config.AfricasTkg.Username,
-			SenderID: d.Config.AfricasTkg.SenderID,
-		}),
+		d.smsTransport(),
 		transport.NewEmail(transport.EmailConfig{
 			APIKey: d.Config.Resend.APIKey,
 			From:   d.Config.Resend.FromEmail,
 		}),
 	}
+}
+
+// smsTransport builds the SMS provider this deployment is configured for.
+//
+// Always returns a transport, never nil: an unconfigured one refuses each send
+// with a named reason, which is what turns "no credentials" into a suppressed
+// message somebody can see rather than a channel that silently does not exist.
+func (d *Deps) smsTransport() notification.Transport {
+	if d.Config.SMS.Provider == config.SMSAfricasTalking {
+		return transport.NewSMS(transport.SMSConfig{
+			APIKey:   d.Config.AfricasTkg.APIKey,
+			Username: d.Config.AfricasTkg.Username,
+			SenderID: d.Config.AfricasTkg.SenderID,
+		})
+	}
+	return transport.NewArkesel(transport.ArkeselConfig{
+		APIKey:   d.Config.SMS.Arkesel.APIKey,
+		SenderID: d.Config.SMS.Arkesel.SenderID,
+	})
 }
 
 // Location is the timezone quiet hours are evaluated in.
