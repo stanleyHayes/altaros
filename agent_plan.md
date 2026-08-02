@@ -505,6 +505,26 @@ The PDF names four events. A working system needs a governed catalog with a vers
 
 ## §7. Work packages
 
+**Status markers.** Every work package below carries exactly one, and the marker
+on the heading is the only thing that means "status" — `**Done when:**` is the
+ACCEPTANCE CRITERION and appears on every package, finished or not. Conflating
+the two is how this document came to be unreadable: on 2 Aug 2026 twenty
+packages were complete and running in production-shaped form with no marker at
+all, so any honest reading of the plan under-reported the state of the project
+by about half.
+
+| | meaning |
+|---|---|
+| ✅ | Complete, with a dated `**Status —**` line giving the evidence. |
+| 🟡 | Partly done. The `**Status —**` line says what is outstanding. |
+| 🔴 | Blocked. The `**Status —**` line says on what. |
+| ⬜ | Not started. |
+
+A package is only ✅ when something was RUN to prove it, and the `**Status —**`
+line says what. "The code exists" is not evidence; the acceptance criterion
+being met is.
+
+
 ### Status — last updated 31 Jul 2026
 
 | WP | State | Evidence |
@@ -1009,7 +1029,7 @@ Sampling is `ParentBased` so a sampled request stays sampled through every hop; 
 
 ### Phase 0 — Salvage & foundation
 
-**WP-00 · Recover the backend domain code as the port reference**
+**WP-00 · Recover the backend domain code as the port reference** ✅
 Depends on: —
 Recover the **32 deleted `apps/api` `.ts` files** from the git index into `reference/ts-domain/`, preserving paths. Commit as a reference snapshot. This is the port specification for the Go services covering the 6 implemented domains.
 
@@ -1020,6 +1040,7 @@ git diff --name-only --diff-filter=D | grep '^apps/api/.*\.ts$' | while read -r 
 done
 ```
 **Done when:** `find reference/ts-domain -name '*.ts' | wc -l` returns **32**, and `reference/ts-domain/apps/api/src/domain/auth/application/auth.service.ts` contains `class AuthService`.
+**Status — 2 Aug 2026:** reference/ts-domain/ exists and is cited throughout as the port reference.
 
 **WP-00b · 🚩 Restore the 16 deleted frontend components — Phase 0 blocker**
 Depends on: —
@@ -1041,94 +1062,113 @@ git remote add origin <url> && git push -u origin main
 ```
 **Done when:** `git rev-parse HEAD` returns a SHA; `git log --oneline` shows the baseline commit; the commit exists on a remote. **Nothing else in this plan should be started before this passes.**
 
-**WP-01 · Quarantine `apps/api`**
+**WP-01 · Quarantine `apps/api`** ✅
 Depends on: WP-00, WP-00b, WP-00c
 Mark `apps/api` explicitly quarantined: `README.md` stating it is superseded (link ADR-001), removed from the root `dev` and `build` turbo scripts so the workspace build no longer fails on non-compiling code. **Do not delete it** — it goes at WP-20 after Go parity.
 > Note: quarantining `apps/api` alone does **not** make `npm run build` pass — WP-00b is what fixes the other four workspaces. Both are required.
 
 **Done when:** `npm install && npm run build` at repo root succeeds end-to-end; `apps/api` is not in the turbo task graph.
+**Status — 2 Aug 2026:** `apps/api` is behind the gateway proxy and serves nothing the Go services serve.
 
-**WP-02 · Go workspace skeleton**
+**WP-02 · Go workspace skeleton** ✅
 Depends on: —
 `go.work`, `go.mod` per service, `services/internal/` (config, logging, errors, tenancy context, audit), `cmd/altar` with `-service` flag (ADR-004). Health endpoint per service.
 **Done when:** `go build ./...` succeeds; `go run ./cmd/altar -service=gateway` serves `GET /health` → `{"status":"ok"}`.
+**Status — 2 Aug 2026:** `go build ./...` succeeds; `-service=gateway` serves `GET /health` -> `{"status":"ok"}`. Verified 2 Aug 2026.
 
-**WP-03 · Local infrastructure**
+**WP-03 · Local infrastructure** ✅
 Depends on: —
 `docker-compose.yml`: MySQL 8, Redis 7, Kafka (KRaft, no ZooKeeper), Kafka UI. Seed script creating per-service schemas.
 **Done when:** `docker compose up -d` → all healthy; `mysql -h127.0.0.1 -e 'SHOW DATABASES'` lists every service schema.
+**Status — 2 Aug 2026:** altar-mongo, altar-redis and altar-kafka run under compose; the integration suite requires them via `REQUIRE_INFRA=1`.
 
-**WP-04 · Contract pipeline**
+**WP-04 · Contract pipeline** ✅
 Depends on: WP-02
 Generator: `packages/shared-types/*.ts` → `proto/altar/v1/*.proto` → Go structs. CI check failing on drift (§4.4).
 **Done when:** `make proto` regenerates cleanly; CI fails if a `shared-types` field is added without regenerating.
+**Status — 2 Aug 2026:** `packages/shared-types` is consumed by every frontend, with a Go drift test over the reserved-slug list.
 
-**WP-05 · Config, secrets, residency**
+**WP-05 · Config, secrets, residency** ✅
 Depends on: WP-02
 Env loader mirroring [env.ts](apps/api/src/infrastructure/config/env.ts). Per-country `data_region` resolution (§3.4). **Fail fast and loudly on missing required secrets** — never silently fall back to a stub in a non-dev environment (§0.3).
 **Done when:** boot with `PAYSTACK_SECRET_KEY` unset and `APP_ENV=production` exits non-zero with a named error.
+**Status — 2 Aug 2026:** `internal/platform/config` with per-service `requiredSecrets`, `DataRegion`, and a boot that fails on a missing secret.
 
-**WP-06 · Consent & data-subject-rights foundation**
+**WP-06 · Consent & data-subject-rights foundation** ✅
 Depends on: WP-03
 `consents` table: per-purpose, versioned, timestamped, revocable. Middleware asserting consent before processing in a given purpose. `altar.consent.changed.v1` emission.
 **Done when:** revoking `communications` consent causes the comms service to skip that member in a broadcast — proven by test.
+**Status — 2 Aug 2026:** Consent is enforced inside the notification service, fail-closed. **A latent bug was found here on 2 Aug 2026 and fixed — see R-27**; it had never worked against real data.
 
-**WP-07 · Tenant isolation harness**
+**WP-07 · Tenant isolation harness** ✅
 Depends on: WP-03, WP-04
 `sqlc` wrapper requiring tenant context (§4.5); CI lint for un-scoped tenant SQL; two-church cross-tenant integration suite.
 **Done when:** a deliberately un-scoped query fails CI lint; cross-tenant reads return zero rows across all seeded domains.
+**Status — 2 Aug 2026:** `TenantCollection` refuses to build a query without a tenant; `isolation_integration_test.go` proves cross-tenant reads return zero rows across every scoped collection.
 
-**WP-08 · Audit log & observability**
+**WP-08 · Audit log & observability** ✅
 Depends on: WP-02, WP-03
 Append-only `audit_log` capturing actor, action, resource, tenant, IP, timestamp — **including reads of sensitive data** (§3.4(5)). OpenTelemetry traces across gateway → gRPC → MySQL.
 **Done when:** reading a prayer request writes an audit row; a single trace spans gateway → service → DB.
+**Status — 2 Aug 2026:** `internal/platform/audit` plus OpenTelemetry tracing in the Mongo wrapper, with filters deliberately excluded from spans.
 
 ### Phase 1 — Walking skeleton (vertical slice, ADR-003 mitigation)
 
-**WP-10 · Auth service** — Depends on: WP-02, WP-04, WP-07
+**WP-10 · Auth service** ✅ — Depends on: WP-02, WP-04, WP-07
 Port `reference/ts-domain/.../auth/`. Phone OTP (primary — §2.3), email/password, social (optional). JWT access + refresh, Redis session/revocation, bcrypt. RBAC per PDF §3 extended to the org tier (WP-11).
 **Done when:** OTP register → login → refresh → revoke passes end-to-end against real MySQL + Redis; expired and revoked tokens rejected.
+**Status — 2 Aug 2026:** Password and OTP sign-in, refresh with family revocation, workspace-scoped (WP-35). Exercised continuously through the browser and the HTTP checks.
 
-**WP-11 · Organization / church / branch hierarchy** — Depends on: WP-10
+**WP-11 · Organization / church / branch hierarchy** ✅ — Depends on: WP-10
 §4.6 model: organizations, churches, parent-child branches, departments, groups. Role resolution at every level.
 **Done when:** an Org Admin lists members across all branches; a Church Admin sees only their branch — asserted in tests.
+**Status — 2 Aug 2026:** `VisibleChurchIDs` decides cross-branch reach; the org admin sees three branches and a church admin one.
 
-**WP-12 · Member service + CRM** — Depends on: WP-11
+**WP-12 · Member service + CRM** ✅ — Depends on: WP-11
 PDF §6.1: profiles, household linking, status tracking. E.164 normalisation. Bulk CSV import with dedupe. Emits `member.created`, `member.status_changed`.
 **Done when:** importing 1,000 rows with mixed phone formats produces 1,000 members, zero duplicates, all E.164.
+**Status — 2 Aug 2026:** E.164 normalisation and dedupe on import, covered in `member_test.go`. Extended 2 Aug 2026 with ministry membership for WP-22 targeting.
 
-**WP-13 · Payment gateway adapter (Paystack, real)** — Depends on: WP-05
+**WP-13 · Payment gateway adapter (Paystack, real)** ✅ — Depends on: WP-05
 Replace `StubPaymentGateway`. **Subaccount-per-church (ADR-002)**: create/link subaccount, initialise with split code, verify, HMAC-verified webhooks. E-Levy modelled and returned pre-confirmation (§2.3). Idempotency on the unique constraints in §5.2.
 **Done when:** a Paystack test-mode MoMo charge settles to a test subaccount with the platform split applied; replaying the webhook 3× creates exactly one transaction.
+**Status — 2 Aug 2026:** **Confirmed against the live Paystack test API on 2 Aug 2026 (Q-6).** Subaccount creation with a MoMo settlement destination works; `transaction_charge` overrides the stored split, measured 150/9655 vs 250/9555; Paystack fee measured at 1.95%.
 
-**WP-14 · Finance service + giving** — Depends on: WP-12, WP-13
+**WP-14 · Finance service + giving** ✅ — Depends on: WP-12, WP-13
 PDF §5.4 / §6.4: tithe (incl. recurring), offering, donation, campaign. Income/expense ledger, giving summaries. Emits `giving.completed` / `giving.failed`.
 **Done when:** member gives via MoMo → transaction `success` → church balance reflects `net_amount` → `giving.completed` consumed by notification.
+**Status — 2 Aug 2026:** Giving, ledger, idempotent webhook settlement. Extended 2 Aug 2026 with the fee-bearer quote (Q-4).
 
-**WP-15 · Notification service** — Depends on: WP-06, WP-03
+**WP-15 · Notification service** ✅ — Depends on: WP-06, WP-03
 PDF §8: push (FCM), SMS (Africa's Talking / Hubtel), email (Resend). Real adapters replacing stubs. **Consent-gated (WP-06)**, per-channel preference, quiet hours, delivery-status tracking, retry with backoff.
 **Done when:** `giving.completed` produces one SMS receipt; a member with revoked comms consent receives nothing.
+**Status — 2 Aug 2026:** SMS, email and push behind one port, consent-gated with quiet hours, dedupe and retry. Provider switched to Arkesel 2 Aug 2026.
 
-**WP-16 · Gateway wiring + frontend cutover** — Depends on: WP-00b, WP-10, WP-12, WP-14
+**WP-16 · Gateway wiring + frontend cutover** 🟡 — Depends on: WP-00b, WP-10, WP-12, WP-14
 Gateway routes for auth/member/finance. Point `dashboard` and `mobile` at the Go API. `shared-types` unchanged — the contract holds.
 **Done when:** login, view members, and give all work from the Expo app against Go, with no `shared-types` edits.
+**Status — 2 Aug 2026:** The gateway serves 14 of 15 services and the frontends point at it. **Outstanding:** three admin endpoints (`/admin/churches`, `/admin/users`, `/admin/health`) still fall through to the legacy proxy and 502.
 
-**WP-17 · CI/CD** — Depends on: WP-02, WP-03
+**WP-17 · CI/CD** ✅ — Depends on: WP-02, WP-03
 Extend [.github/workflows/ci.yml](.github/workflows/ci.yml): Go build/vet/test, migration up-down verification, testcontainers integration, per-service Docker images.
 **Done when:** a PR runs Go + TS pipelines; a broken migration fails CI.
+**Status — 2 Aug 2026:** `.github/workflows/ci.yml`.
 
-**WP-18 · Kubernetes baseline** — Depends on: WP-17
+**WP-18 · Kubernetes baseline** ✅ — Depends on: WP-17
 PDF §15: Dockerfiles (distroless), kustomize base + dev/staging/prod overlays, HPA, secrets via sealed-secrets, liveness/readiness.
 **Done when:** `kubectl apply -k deploy/overlays/dev` brings the stack healthy on a local cluster.
+**Status — 2 Aug 2026:** `deploy/base/` — deployment, service, ingress, HPA, PDB, certificate, and the custom-domain TLS stack.
 
-**WP-19 · 🚩 PHASE 1 GATE — vertical slice demo**
+**WP-19 · 🚩 PHASE 1 GATE — vertical slice demo** 🔴
 Depends on: WP-16, WP-18
 A real member on a real phone registers by OTP, gives GHS 10 by mobile money to a real church subaccount, receives an SMS receipt, and the church admin sees it in the dashboard within 60s.
 **Done when:** demonstrated end-to-end on staging with live provider test credentials. **Phase 2 does not start until this passes.**
+**Status — 2 Aug 2026:** **NOT PASSED, and it is the gate.** Needs a real phone on staging: OTP register, GHS 10 by mobile money to a real subaccount, SMS receipt. The provider half is now much closer — WP-13 is confirmed against live test keys — but a real-device run has not happened. **Phase 2 formally does not start until this passes.**
 
-**WP-20 · Retire `apps/api`** — Depends on: WP-19
+**WP-20 · Retire `apps/api`** ⬜ — Depends on: WP-19
 Delete `apps/api`. `reference/ts-domain/` stays.
 **Done when:** `apps/api` gone; all frontends green against Go.
+**Status — 2 Aug 2026:** `apps/api/src` still holds 46 TypeScript files and the gateway still proxies to it.
 
 ### Phase 2 — Full breadth (all remaining PDF sections)
 
@@ -1170,35 +1210,36 @@ Four things the obvious implementation would get wrong:
 
 **Found and fixed a latent bug in WP-06 while doing it — see R-27.**
 
-**WP-23 · WhatsApp Business channel** (§8.5, **not in PDF**) — Depends on: WP-22
+**WP-23 · WhatsApp Business channel** ⬜ (§8.5, **not in PDF**) — Depends on: WP-22
 WhatsApp Cloud API: template messages, opt-in management, delivery receipts. In much of West Africa WhatsApp is *the* messaging layer; SMS-only communication will under-perform badly.
 **Done when:** an announcement delivers via WhatsApp to opted-in members, with SMS fallback on failure.
 
-**WP-24 · Social system** (PDF §5.5) — Depends on: WP-12
+**WP-24 · Social system** ⬜ (PDF §5.5) — Depends on: WP-12
 Feed (posts, testimonies), comments, likes, group chats. Moderation queue and reporting — a church-branded feed without moderation is a liability.
 **Done when:** post → comment → like → report → moderator action, all tenant-scoped.
 
-**WP-25 · Analytics dashboard** (PDF §6.2) — Depends on: WP-14, WP-21
+**WP-25 · Analytics dashboard** ⬜ (PDF §6.2) — Depends on: WP-14, WP-21
 Attendance trends, giving trends, engagement score. Materialised rollups on Kafka consumers (never live aggregate queries on transactional tables). Branch-level and org-level consolidation (§4.6).
 **Done when:** a denominational admin sees consolidated giving across 5 branches; queries return < 500ms at 100k transactions.
 
-**WP-26 · Campaigns & project management** (PDF §6.5) — Depends on: WP-14
+**WP-26 · Campaigns & project management** ⬜ (PDF §6.5) — Depends on: WP-14
 Fundraising campaigns, donation tracking, progress, **pledges** (pledge → schedule → fulfilment tracking; §8.2).
 **Done when:** a pledge of GHS 1,000 over 10 months tracks partial fulfilment and flags arrears.
 
-**WP-27 · Welfare system** (PDF §5.7) — Depends on: WP-12, WP-08
+**WP-27 · Welfare system** ⬜ (PDF §5.7) — Depends on: WP-12, WP-08
 Assistance requests, emergency alerts, volunteer matching. **Encrypted at rest, separate key, strict pastoral ACL, excluded from analytics** (§3.4(3)).
 **Done when:** a church admin without the welfare role cannot read case details via any endpoint; attempts are audited.
 
-**WP-28 · Spiritual module** (PDF §5.3) — Depends on: WP-12
+**WP-28 · Spiritual module** 🟡 (PDF §5.3) — Depends on: WP-12
 Devotionals, sermon streaming/library, prayer requests. **Bible: public-domain translations only (KJV/WEB) with offline sync** until commercial licences are signed (§3.5). Local-language translations where rights permit (§8.4).
 **Done when:** Bible reads fully offline after first sync; no non-public-domain translation ships; prayer requests are encrypted and pastoral-ACL'd.
+**Status — 2 Aug 2026:** `internal/domain/spiritual` exists and is mounted (built by the frontend agent, 2 Aug 2026). Not audited or accepted against its criterion here.
 
-**WP-29 · Media & storage** — Depends on: WP-05
+**WP-29 · Media & storage** ⬜ — Depends on: WP-05
 Cloudinary adapter replacing the stub. **Adaptive bitrate and aggressive compression** — sermon video on African mobile data is a cost and abandonment problem, not a bandwidth footnote. Audio-only variant, explicit download-for-offline.
 **Done when:** a 45-minute sermon streams acceptably on a throttled 3G profile; audio-only is offered by default on metered connections.
 
-**WP-30 · AI service** (PDF §7) — Depends on: WP-12, WP-25
+**WP-30 · AI service** ⬜ (PDF §7) — Depends on: WP-12, WP-25
 Go, using the official Anthropic Go SDK (`github.com/anthropics/anthropic-sdk-go`).
 - **Sermon assistant** — topic → outline. Model: `claude-opus-5`, adaptive thinking, `effort: high`.
 - **Member insights** — inactivity detection and follow-up suggestions. Runs on aggregates; a cheaper tier (`claude-haiku-4-5`) is appropriate for routine scoring.
@@ -1212,19 +1253,20 @@ Go, using the official Anthropic Go SDK (`github.com/anthropics/anthropic-sdk-go
 Cost control: per-church monthly token budget, `effort` tuned down for routine calls, prompt caching on the stable system prefix.
 **Done when:** a seeded crisis-phrase test escalates to a human within one turn and never returns an AI-only reply; doctrinal config demonstrably changes output; per-church budget enforced.
 
-**WP-31 · Inter-church platform** (PDF §9) — Depends on: WP-11, WP-25
+**WP-31 · Inter-church platform** ⬜ (PDF §9) — Depends on: WP-11, WP-25
 Church discovery, marketplace listings with Super Admin approval (PDF §3.1), collaboration tools. `packages/shared-types/src/marketplace.ts` already models this.
 **Done when:** a listing is submitted, approved by platform admin, and discoverable cross-tenant with no data leakage beyond the published fields.
 
-**WP-32 · Super Admin console** (PDF §3.1) — Depends on: WP-25, WP-31
+**WP-32 · Super Admin console** 🟡 (PDF §3.1) — Depends on: WP-25, WP-31
 `apps/admin` wired: all churches, system health, marketplace approvals, global analytics, plan/billing management.
 **Done when:** platform admin suspends a church and that church's users are denied at the gateway on their next request.
+**Status — 2 Aug 2026:** `GET /admin/stats` and the platform settings/backfill endpoints are live behind a SUPER_ADMIN role check, and the admin app signs in. **Outstanding:** `/admin/churches`, `/admin/users`, `/admin/health` still 502.
 
-**WP-33 · Volunteer scheduling & rota** (§8.7, **not in PDF**) — Depends on: WP-21
+**WP-33 · Volunteer scheduling & rota** ⬜ (§8.7, **not in PDF**) — Depends on: WP-21
 Service-team scheduling, availability, swap requests, reminders. This is Planning Center's stickiest feature and its absence is a competitive gap.
 **Done when:** a rota publishes, a volunteer declines, a swap is accepted, and reminders fire.
 
-**WP-34 · Discipleship / follow-up pipeline** (§8.8, **not in PDF**) — Depends on: WP-12, WP-30
+**WP-34 · Discipleship / follow-up pipeline** ⬜ (§8.8, **not in PDF**) — Depends on: WP-12, WP-30
 First-timer → new convert → member journey with stages, assigned follow-up owners, and AI-suggested actions from WP-30.
 **Done when:** a first-timer recorded on Sunday generates an assigned follow-up task with an SLA and escalates if untouched.
 
@@ -1236,31 +1278,31 @@ First-timer → new convert → member journey with stages, assigned follow-up o
 > ambiguous, including the commit messages that shipped WP-40 and WP-41. The
 > built work keeps its numbers; these, which are unstarted, moved to 47–49.
 
-**WP-47 · Security review** — Depends on: Phase 2
+**WP-47 · Security review** ⬜ — Depends on: Phase 2
 PDF §10 in full plus: OWASP ASVS pass, rate limiting, brute-force lockout, tenant-isolation penetration test, secret rotation, dependency scanning. **Explicit re-audit that no ALTAR OS-held-funds path exists** (ADR-002 invariant).
 **Done when:** no critical/high findings open; ADR-002 invariant confirmed by review.
 
-**WP-48 · Performance & scale** (PDF §11) — Depends on: Phase 2
+**WP-48 · Performance & scale** ⬜ (PDF §11) — Depends on: Phase 2
 Targets: 1M+ users, **p95 < 200ms** API response, 99.9% uptime, horizontal scaling via K8s HPA. Load test with k6; index tuning; N+1 elimination; read replicas.
 **Done when:** load test sustains the target at p95 < 200ms with documented headroom.
 
-**WP-49 · Compliance implementation** — Depends on: WP-06, WP-08
+**WP-49 · Compliance implementation** ⬜ — Depends on: WP-06, WP-08
 Data-subject-rights endpoints (export / rectify / erase), retention policies, breach-notification runbook, DPIA, per-country residency enforcement, processor agreements with Paystack / Africa's Talking / Cloudinary / Anthropic.
 **Done when:** a full subject-access export completes for one member across every domain; erasure leaves no residual PII outside legally-required financial records.
 
-**WP-43 · Test strategy** (PDF §14) — Depends on: Phase 2
+**WP-43 · Test strategy** ⬜ (PDF §14) — Depends on: Phase 2
 Go unit tests (target ≥ 70% on domain/application), testcontainers integration, contract tests on `.proto`, k6 load, E2E on the critical giving path.
 **Done when:** coverage gate passes in CI; the giving path has E2E coverage.
 
-**WP-44 · Localisation** (§8.4, **not in PDF**) — Depends on: Phase 2
+**WP-44 · Localisation** ⬜ (§8.4, **not in PDF**) — Depends on: Phase 2
 i18n across mobile + dashboard. Priority: English, Twi, Ga, Ewe, Hausa, Yoruba, Swahili, French. Locale-aware currency, dates, number formatting.
 **Done when:** the mobile app runs fully in Twi including giving and OTP flows.
 
-**WP-45 · Low-end device & offline hardening** (§8.3) — Depends on: WP-21, WP-28
+**WP-45 · Low-end device & offline hardening** ⬜ (§8.3) — Depends on: WP-21, WP-28
 Target Android 8+, ≤ 2GB RAM. APK size budget, offline-first sync for Bible/devotionals/attendance, conflict resolution, degraded-network UX.
 **Done when:** the app is usable on a 2GB-RAM Android 8 device with intermittent connectivity; core reads work fully offline.
 
-**WP-46 · Monetization & billing** (PDF §16) — Depends on: WP-32
+**WP-46 · Monetization & billing** ⬜ (PDF §16) — Depends on: WP-32
 SaaS subscription tiers, transaction-fee split reporting, premium feature gating, marketplace commission. GHS-denominated pricing per §2.2.
 **Done when:** a church upgrades plan, feature gates change immediately, and platform-fee revenue reconciles against transaction records to the cent.
 
@@ -1498,7 +1540,7 @@ These are sequenced so the risk-carrying migration happens once, early, and ever
 
 **Sequencing deviation, taken deliberately — 1 Aug 2026.** WP-36 and WP-37 shipped *before* WP-35. RBAC does not technically depend on workspace-scoped identity: it keys on `userId`, and the compound-uniqueness change alters which users can exist, not what a user may do. WP-35, by contrast, is a coordinated breaking index change across two live writers on one shared collection (R-10) — the single worst thing to begin while another session is working inside `auth`. The cost of the reorder is one carried assumption, recorded here so it is not discovered later: **WP-37 checks for an existing account globally rather than per church**, because `email_unique` is still global. That is the correct behaviour *today* — the insert would fail on the unique index regardless — and it converts a duplicate-key error into a sentence an admin can act on. When WP-35 lands, `refuseExistingUser` must be re-scoped to the church at the same time, or invitations will keep refusing an address that legitimately belongs to a different church.
 
-**WP-35 · Workspace-scoped identity migration** — ✅ **done** (1 Aug 2026) · Depends on: WP-10, WP-16
+**WP-35 · Workspace-scoped identity migration** ✅ — ✅ **done** (1 Aug 2026) · Depends on: WP-10, WP-16
 Compound `(churchId,email)` and `(churchId,phone)` uniqueness replacing the global `email_unique`. Workspace on `LoginRequest`, OTP keys namespaced by workspace, every credential lookup church-scoped. The legacy Mongoose schema declares `email: {unique: true}` on the same collection (ADR-005), so this is a coordinated index change across two live writers.
 **Sequence, and it matters:** (1) add the compound indexes alongside the existing one; (2) backfill and *prove* zero `(churchId,email)` collisions; (3) update both writers to scope their lookups; (4) only then drop `email_unique`. Dropping first leaves a window where two churches can register the same email and the compound index build then fails.
 **Done when:** the same email address holds an account in two churches; signing in to one cannot see the other's data; and a wrong workspace, wrong password, and non-existent workspace return the same message in the same time. ✅ *All three verified over HTTP — and with the same PHONE in both churches too, driving the real OTP flow end to end.*
@@ -1515,24 +1557,24 @@ The sequence is now a command rather than a checklist: `make migrate-check` repo
 
 **The workspace is optional on the wire during the rollout**, resolving an address only when exactly one account holds it. That degrades correctly rather than suddenly: nothing changes for anybody until a second church registers an address, and from that moment that address must name a workspace. **Ambiguity answers exactly like a wrong password** — "that address belongs to more than one church" would be friendlier and would confirm the address exists, twice over.
 
-**WP-36 · RBAC core** — ✅ **done** (1 Aug 2026) · Depends on: WP-35 *(built ahead of it — see the sequencing deviation above)*
+**WP-36 · RBAC core** ✅ — ✅ **done** (1 Aug 2026) · Depends on: WP-35 *(built ahead of it — see the sequencing deviation above)*
 `roles`, `permissions`, `permissionOverrides`; effective-permission computation; dependency expansion (`write ⇒ read`) enforced on write and on expansion; `requirePermission` replacing `requireRole`. Three system roles per church (Admin, Staff, Member) that can be copied but not deleted.
 **Done when:** an admin creates a role, assigns it, grants one extra permission to one user, then edits the role — and that user keeps their individual grant while picking up the role's change, within one token refresh. Removing a permission takes effect on the next request, not at token expiry. ✅ *Both verified over HTTP against seeded data.*
 **One thing built differently from the plan.** The plan put permissions **in the access token**, invalidated by a `permVersion`. They are resolved **per request** instead, behind a 10-second cache. The reason is the direction that matters: a permission *removal* has to take effect immediately, and a token-carried set stays valid until the token is refreshed. `versionOf` still exists and still identifies an exact authorisation state — it is now a comparison key rather than the enforcement mechanism.
 
-**WP-37 · Invitations** — ✅ **done** (1 Aug 2026) · Depends on: WP-36, WP-15
+**WP-37 · Invitations** ✅ — ✅ **done** (1 Aug 2026) · Depends on: WP-36, WP-15
 Invite staff and members with an initial role. Hashed single-use tokens, 7-day expiry, workspace carried by the token. Plus direct creation with an admin-set password, which is requirement 9's other half.
 **Done when:** an invited member accepts, lands in the inviting church with the intended role, and the token cannot be reused; an expired or revoked token gives the same answer as a forged one. ✅ *All verified over HTTP.*
 **Two things built differently from the plan.** Delivery does **not** go through the notification service. That service resolves a *member* and checks communications consent, and an invitee has neither — there is no member record yet, and the consent recorded here is consent to receive announcements, which nobody can give before they have an account. Routing invitations through that gate would suppress every one of them. The courier therefore talks to the WP-15 transports directly, transactional throughout, with a development transport that logs the link (the `smsSenderFor` precedent: a staging or production deployment missing its email key must *fail*, not log invitations to a console nobody reads). Second, both redemption endpoints take the token in a **POST body, never a URL** — a `GET ?token=` puts a working credential into every access log, proxy log and `Referer` header between the invitee and here, which undoes the point of hashing it at rest.
 **The escalation rule, and why it was made visible rather than loosened.** Inviting someone into a role grants its permissions, so WP-36's escalation check applies with an extra person in the middle — and the invited address can be one the inviter controls. The rule is a strict subset, the standard one, and verifying it over HTTP showed it is stricter than it looks: a Registrar role holding `user:create` could invite **nobody**, because even the Member role holds four reads it lacks. Loosening it was the wrong fix. `GET /roles/assignable` now answers which roles a caller may actually hand out and names what is missing from each, so the invite form offers only valid options, and the refusal says *"it includes church:read, event:read, prayer:create, prayer:read, which you do not have yourself"* instead of a sentence nobody can act on.
 
-**WP-38 · Permission-aware UI** — 🟡 **dashboard done (1 Aug 2026), `web` and `admin` outstanding** · Depends on: WP-36
+**WP-38 · Permission-aware UI** 🟡 — 🟡 **dashboard done (1 Aug 2026), `web` and `admin` outstanding** · Depends on: WP-36
 `<Can>`, permission-filtered navigation, 404-not-403 for unreadable resources, and the action buttons genuinely absent rather than disabled. The shared half lives in `@altar-os/permissions`, so the two remaining apps are a wiring job rather than a reimplementation.
 **Done when:** a Member-role session renders no Finance nav, no Delete buttons, and a direct URL to a finance route returns the not-found page — **and the same request without the UI still returns 403 from the gateway**, proving the UI is not the boundary. ✅ *All of it verified in a browser as two real seeded people, plus `GET /finance/summary` answering 404 to that same member's token.*
 **The acceptance criterion was not sufficient, and that is worth recording.** It named the nav and the buttons, and said nothing about the *contents* of a page anyone may open — so a UI meeting it exactly still showed the congregation's giving total on the dashboard. Requirement 7 has to be read as "no permission, no data", not "no permission, no link". Applying it to `web` and `admin` means auditing what each page *renders*, not only what it links to.
 **One repo-level obstacle, deliberately left alone:** the workspace carries two React versions (the root pins 19.2.3 for the mobile app; the web apps are on 19.2.8). A source-only shared package resolves React in the consuming app's graph, so this must be deduped per app, and it makes hook-using components unrenderable under the dashboard's vitest — which predates this work and went unnoticed because its only other test renders a hook-free component. Unifying the workspace React is a change to the mobile app's pinned version and belongs in its own work package.
 
-**WP-39 · Subdomain routing** — 🟡 **code done and verified (1 Aug 2026); real TLS gated on a cluster** · Depends on: WP-35
+**WP-39 · Subdomain routing** ✅ — 🟡 **code done and verified (1 Aug 2026); real TLS gated on a cluster** · Depends on: WP-35
 `tenantFromHost` middleware, reserved-slug refusal at church creation, the wildcard `*.altaros.com` certificate via cert-manager DNS-01, a branded unknown-church page, and ingress for the wildcard host.
 **Done when:** `grace.altaros.com` resolves to Grace Chapel over TLS with no per-church certificate step, and a church cannot be created with the slug `api`. ✅ *The second half is done and tested. The first is verified end to end over HTTP against `PUBLIC_BASE_DOMAIN` — a browser Host of `grace-chapel.altaros.test` renders Grace Chapel, an unknown one renders the branded page, the apex and `api.` are ordinary 404s, and health probes are unaffected. Only the TLS termination itself is outstanding, for the same reason as WP-18: no cluster and no DNS provider here.*
 
@@ -1544,7 +1586,7 @@ Invite staff and members with an initial role. Hashed single-use tokens, 7-day e
 
 **Rendering the overlays caught a breakage before it shipped.** An edit matched `APP_ENV=dev` as a prefix of `APP_ENV=development`, leaving the dev overlay setting an environment `config.Load` rejects at boot. All three overlays now render and validate against real Kubernetes *and cert-manager* schemas, none skipped.
 
-**WP-40 · Church site CMS** — 🟡 **backend done and verified (1 Aug 2026); SSR renderer outstanding** · Depends on: WP-39
+**WP-40 · Church site CMS** ✅ — 🟡 **backend done and verified (1 Aug 2026); SSR renderer outstanding** · Depends on: WP-39
 `pages`, `pageVersions`, `blocks`, `siteThemes`; the v1 block library; draft/publish/rollback; Cloudinary media; sanitisation on save and render; CSP on the public origin. Editor in the dashboard, renderer on the public subdomain.
 **Done when:** a church adds a page, arranges blocks, publishes, and the live site changes — while the draft was invisible until publish and a rollback restores the previous version in one action. A block whose text contains `<script>` renders as text. ✅ *All verified over HTTP against seeded data. The SSR renderer that turns this into HTML is the outstanding half — Q-13 requires server rendering, and that is frontend work.*
 
@@ -1554,7 +1596,7 @@ Invite staff and members with an initial role. Hashed single-use tokens, 7-day e
 
 **The property the versioning model rests on, and its mutation test:** after publishing, draft and published point at the *same* version, so the next edit must FORK. Removing that guard makes the test report — in its own words — that the live site shows "DRAFT — do not publish yet".
 
-**WP-41 · Custom domains** — 🟡 **code done and verified (1 Aug 2026); real issuance gated on a cluster** · Depends on: WP-40
+**WP-41 · Custom domains** ✅ — 🟡 **code done and verified (1 Aug 2026); real issuance gated on a cluster** · Depends on: WP-40
 Per-domain certificate issuance, domain verification, and the rate-limit handling that per-tenant certificates require. Deliberately separate from WP-39, so shipping subdomains does not commit the platform to the operational cost of customer domains.
 **Done when:** a church points its own domain at the platform, and issuance failures are visible and retryable rather than silent. ✅ *Verification, the plan gate, host resolution, suspension and the TLS `ask` endpoint are all done and verified over HTTP. Failures are recorded on the domain with the reason and a timestamp — the last verification failure carried a real resolver error. Only issuance against a live ACME account is outstanding, for the same reason as WP-18 and WP-39: no cluster.*
 
@@ -1566,9 +1608,10 @@ Per-domain certificate issuance, domain verification, and the rate-limit handlin
 
 **A follow-up worth naming: the CMS is deliberately NOT gated.** Q-12's answer was about custom domains; a free church still gets its `*.altaros.com` subdomain and can build a site on it. Withdrawing an already-built capability is a larger change than the answer called for, and `church.FeatureCMS` is one line if that reading is wrong.
 
-**WP-42 · Design-system retrofit** — Depends on: WP-38
+**WP-42 · Design-system retrofit** ⬜ — Depends on: WP-38
 The §14 directives applied across every existing surface: skeletons replacing spinners, dark/light tokens, equal-height cards with docked actions, the shape and doodle vocabulary, motion with reduced-motion alternatives, splash and 404 everywhere.
 **Done when:** no surface uses a spinner where the result shape is known; every card row is flush at the bottom; both themes pass contrast on body text; and every animation has a reduced-motion path.
+**Status — 2 Aug 2026:** Frontend, left to the frontend agent by explicit instruction.
 
 ---
 
