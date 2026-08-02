@@ -3,6 +3,8 @@ package service
 import (
 	"errors"
 	"net/http"
+	"strconv"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -54,6 +56,14 @@ func platformRoutes(d *deps.Deps) routeSet {
 			// dashboard showed zeros for everything.
 			r.With(requirePlatformAdmin()).
 				Get("/admin/stats", handlePlatformStats(settings, d))
+			r.With(requirePlatformAdmin()).
+				Get("/admin/churches", handleAdminChurches(settings, d))
+			r.With(requirePlatformAdmin()).
+				Patch("/admin/churches/{id}/status", handleAdminChurchStatus(settings, d))
+			r.With(requirePlatformAdmin()).
+				Get("/admin/users", handleAdminUsers(settings, d))
+			r.With(requirePlatformAdmin()).
+				Get("/admin/health", handleAdminHealth(settings, d))
 
 			r.With(requirePlatformAdmin()).
 				Get("/platform/settings", handleGetPlatformSettings(settings))
@@ -140,6 +150,69 @@ func handleBackfillCommission(svc *platformsetting.Service, d *deps.Deps) http.H
 		// the record of the ones that worked, and the whole point of the report
 		// is being able to finish the job.
 		httpx.JSON(w, http.StatusOK, report)
+	}
+}
+
+// startedAt is when this process came up, for the uptime the health page shows.
+var startedAt = time.Now()
+
+// adminPageParams reads page and limit. Named for this file rather than
+// generically, because spiritualhttp.go already owns `pageParams`.
+func adminPageParams(r *http.Request) (int, int) {
+	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	return page, limit
+}
+
+func handleAdminChurches(svc *platformsetting.Service, d *deps.Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		page, limit := adminPageParams(r)
+		out, err := svc.Churches(r.Context(), d.Mongo, page, limit)
+		if err != nil {
+			writePlatformError(w, err)
+			return
+		}
+		httpx.JSON(w, http.StatusOK, out)
+	}
+}
+
+func handleAdminChurchStatus(svc *platformsetting.Service, d *deps.Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			// A pointer, so an omitted field is not read as "deactivate". This
+			// endpoint can take a church offline platform-wide; a malformed
+			// body must not be able to do that by accident.
+			IsActive *bool `json:"isActive"`
+		}
+		if err := decode(r, &body); err != nil || body.IsActive == nil {
+			httpx.Error(w, http.StatusBadRequest, "Say whether the church should be active.")
+			return
+		}
+		if err := svc.SetChurchActive(r.Context(), d.Mongo,
+			chi.URLParam(r, "id"), *body.IsActive); err != nil {
+			writePlatformError(w, err)
+			return
+		}
+		httpx.JSON(w, http.StatusOK, map[string]any{"isActive": *body.IsActive})
+	}
+}
+
+func handleAdminUsers(svc *platformsetting.Service, d *deps.Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		page, limit := adminPageParams(r)
+		out, err := svc.Users(r.Context(), d.Mongo, page, limit,
+			r.URL.Query().Get("role"), r.URL.Query().Get("search"))
+		if err != nil {
+			writePlatformError(w, err)
+			return
+		}
+		httpx.JSON(w, http.StatusOK, out)
+	}
+}
+
+func handleAdminHealth(svc *platformsetting.Service, d *deps.Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		httpx.JSON(w, http.StatusOK, svc.HealthOf(r.Context(), d.Mongo, startedAt))
 	}
 }
 
@@ -408,6 +481,8 @@ func handleSetRegistrationSettings(churches *church.Service, baseDomain string) 
 
 func writePlatformError(w http.ResponseWriter, err error) {
 	switch {
+	case errors.Is(err, platformsetting.ErrChurchNotFound):
+		httpx.Error(w, http.StatusNotFound, "That church does not exist.")
 	case errors.Is(err, platformsetting.ErrInvalidRate):
 		httpx.Error(w, http.StatusBadRequest, err.Error())
 	case errors.Is(err, platformsetting.ErrInvalidFee):

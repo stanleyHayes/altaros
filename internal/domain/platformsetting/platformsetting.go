@@ -63,6 +63,8 @@ const singletonID = "platform"
 var (
 	// ErrInvalidRate means a commission rate is outside the allowed range.
 	ErrInvalidRate = errors.New("platformsetting: commission rate is out of range")
+	// ErrChurchNotFound means no church matched.
+	ErrChurchNotFound = errors.New("platformsetting: church not found")
 	// ErrInvalidFee means a provider fee schedule is not usable.
 	ErrInvalidFee = errors.New("platformsetting: provider fee schedule is not valid")
 )

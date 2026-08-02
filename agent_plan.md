@@ -1144,10 +1144,10 @@ PDF §8: push (FCM), SMS (Africa's Talking / Hubtel), email (Resend). Real adapt
 **Done when:** `giving.completed` produces one SMS receipt; a member with revoked comms consent receives nothing.
 **Status — 2 Aug 2026:** SMS, email and push behind one port, consent-gated with quiet hours, dedupe and retry. Provider switched to Arkesel 2 Aug 2026.
 
-**WP-16 · Gateway wiring + frontend cutover** 🟡 — Depends on: WP-00b, WP-10, WP-12, WP-14
+**WP-16 · Gateway wiring + frontend cutover** ✅ — Depends on: WP-00b, WP-10, WP-12, WP-14
 Gateway routes for auth/member/finance. Point `dashboard` and `mobile` at the Go API. `shared-types` unchanged — the contract holds.
 **Done when:** login, view members, and give all work from the Expo app against Go, with no `shared-types` edits.
-**Status — 2 Aug 2026:** The gateway serves 14 of 15 services and the frontends point at it. **Outstanding:** three admin endpoints (`/admin/churches`, `/admin/users`, `/admin/health`) still fall through to the legacy proxy and 502.
+**Status — 2 Aug 2026:** The gateway serves 14 of 15 services and the frontends point at it. The three admin endpoints that were falling through to the legacy proxy (`/admin/churches`, `/admin/users`, `/admin/health`) are now served in Go and verified in the browser.
 
 **WP-17 · CI/CD** ✅ — Depends on: WP-02, WP-03
 Extend [.github/workflows/ci.yml](.github/workflows/ci.yml): Go build/vet/test, migration up-down verification, testcontainers integration, per-service Docker images.
@@ -1260,7 +1260,7 @@ Church discovery, marketplace listings with Super Admin approval (PDF §3.1), co
 **WP-32 · Super Admin console** 🟡 (PDF §3.1) — Depends on: WP-25, WP-31
 `apps/admin` wired: all churches, system health, marketplace approvals, global analytics, plan/billing management.
 **Done when:** platform admin suspends a church and that church's users are denied at the gateway on their next request.
-**Status — 2 Aug 2026:** `GET /admin/stats` and the platform settings/backfill endpoints are live behind a SUPER_ADMIN role check, and the admin app signs in. **Outstanding:** `/admin/churches`, `/admin/users`, `/admin/health` still 502.
+**Status — 2 Aug 2026:** The operator console works end to end: stats, church directory (with per-church member counts and platform commission), user directory, system health, platform settings and the commission backfill — all behind a SUPER_ADMIN role check, all verified in the browser. Two deliberate restraints: phone numbers are MASKED in the user directory (an operator listing every account has no need for a readable directory of members' numbers), and the search term is regex-escaped and anchored, because an unescaped user-supplied regex over every account on the platform is a denial of service. **Outstanding:** per-church drill-down and an audit trail of operator actions.
 
 **WP-33 · Volunteer scheduling & rota** ⬜ (§8.7, **not in PDF**) — Depends on: WP-21
 Service-team scheduling, availability, swap requests, reminders. This is Planning Center's stickiest feature and its absence is a competitive gap.
@@ -1681,6 +1681,8 @@ The PDF is a strong skeleton. These are the gaps that research and the repo audi
 **Church admin workspace redesign — 2 Aug 2026:** the church dashboard is now a full sanctuary-green operating workspace rather than a default MUI shell. Every shared primitive was rethemed (canvas, typography, cards, tables, fields, dialogs, chips, buttons, alerts, skeletons and focus states); the sidebar now exposes permission-aware ministry groups, workspace health, AI and settings; the navbar adds contextual status, search, language choice, direct settings, live notifications and a detailed account menu. The overview has a new editorial daily-command hero and redesigned metrics. Settings is now a Ghana-localized, anchored workspace covering identity, branding, regional defaults, registration, alert routing, security/sessions and plan state. The missing affordances were audited against RentOS and adapted to Altar OS without copying its visual styling. Dashboard production build and `git diff --check` pass; pre-existing lint debt remains in analytics/dashboard chart casts outside this redesign slice.
 
 **Church signup onboarding redesign — 2 Aug 2026:** replaced the oversized single-form church registration screen and off-brand orange CTA with a responsive four-stage sanctuary-green flow: church profile, ministry priorities, package choice and founding administrator. The onboarding now captures city, church tradition, average weekly attendance and up to four setup priorities, then offers the same Starter, Growth and Ministry packages presented by marketing. The selected paid package is stored as activation intent while the active entitlement remains free until billing is confirmed. Shared registration types, API validation and Mongo church persistence now retain the onboarding profile instead of discarding UI-only answers. API and dashboard production builds pass; auth service tests pass; changed-file lint and diff integrity pass.
+
+**Platform admin and member-web redesign — 2 Aug 2026:** rebuilt both signed-in products as distinct post-login systems. Platform admin is now a green-black operator console with production context, grouped navigation, contextual command header, secure account controls, composed skeletons, explicit API failures, editorial metrics and redesigned tenant, identity, finance and infrastructure pages. Member web now uses a calm warm-green church-home language with a floating bottom navigation, contextual member header, responsive content width, a fully recomposed daily home, Ghana-localized giving and consistent editorial introductions across events, giving, community, spiritual life, welfare and church discovery. Shared themes now control accessible semantic chips, restrained radii, fields, cards, tabs, menus, motion and focus states. Admin and member-web production builds pass; changed-file lint has no redesign errors; `git diff --check` passes.
 
 ---
 

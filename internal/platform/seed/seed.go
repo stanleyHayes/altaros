@@ -381,6 +381,8 @@ func (s *Seeder) church(ctx context.Context, orgID bson.ObjectID, name, slug, ci
 	var existing struct {
 		ID                   bson.ObjectID `bson:"_id"`
 		Name                 string        `bson:"name"`
+		City                 string        `bson:"city"`
+		Country              string        `bson:"country"`
 		PayoutSubaccountCode string        `bson:"payoutSubaccountCode"`
 	}
 	err := s.raw.Collection("churches").FindOne(ctx, bson.M{"slug": slug}).Decode(&existing)
@@ -393,6 +395,19 @@ func (s *Seeder) church(ctx context.Context, orgID bson.ObjectID, name, slug, ci
 		set := bson.M{"organizationId": orgID, "updatedAt": time.Now().UTC()}
 		if existing.PayoutSubaccountCode == "" {
 			set["payoutSubaccountCode"] = "ACCT_seed_" + strings.ReplaceAll(slug, "-", "_")
+		}
+		// Fill in what is MISSING, still without overwriting anything set.
+		//
+		// An adopted church carries no seed marker, so Reset never removes it —
+		// which means anything the adopt path fails to fill stays empty across
+		// every future run. Two of the three seeded churches had no city for
+		// exactly this reason, and it showed up as ", Ghana" in the operator's
+		// church directory.
+		if existing.City == "" {
+			set["city"] = city
+		}
+		if existing.Country == "" {
+			set["country"] = "Ghana"
 		}
 		if _, err := s.raw.Collection("churches").
 			UpdateByID(ctx, existing.ID, bson.M{"$set": set}); err != nil {
@@ -883,9 +898,30 @@ func (s *Seeder) linkLogins(ctx context.Context, churchID bson.ObjectID, members
 		return fmt.Errorf("seed: read church users: %w", err)
 	}
 
+	// Which users already have a member record here. A re-run without -reset
+	// creates a FRESH batch of members and would otherwise try to link the same
+	// user to a second one — which the unique (churchId, userId) index refuses,
+	// correctly. The index is right; linking blindly was wrong.
+	linked := map[string]bool{}
+	if cursor, err := s.raw.Collection("members").Find(ctx,
+		bson.M{"churchId": churchID, "userId": bson.M{"$type": "objectId"}},
+		options.Find().SetProjection(bson.M{"userId": 1})); err == nil {
+		var rows []struct {
+			UserID bson.ObjectID `bson:"userId"`
+		}
+		if cursor.All(ctx, &rows) == nil {
+			for _, r := range rows {
+				linked[r.UserID.Hex()] = true
+			}
+		}
+	}
+
 	for i, user := range users {
 		if i >= len(members) {
 			break
+		}
+		if linked[user.ID.Hex()] {
+			continue
 		}
 		first, last, _ := strings.Cut(user.Name, " ")
 		update := bson.M{"userId": user.ID}
@@ -1207,6 +1243,20 @@ func (s *Seeder) website(ctx context.Context, churchID bson.ObjectID, name, city
 
 	if err := svc.EnsureIndexes(scoped); err != nil {
 		return fmt.Errorf("seed: site indexes: %w", err)
+	}
+
+	// A re-run without -reset previously died here with "a page already exists
+	// at that address", while the command's own output says "Re-running is
+	// additive". A tool that documents a mode it then crashes in is worse than
+	// one that never offered it: the next person reasonably assumes the crash
+	// means something is broken, and reaches for -reset — which deletes data.
+	//
+	// An existing home page is not an error, it is the additive case. The
+	// church already has a website and the seeder leaves it alone.
+	if pages, lookupErr := svc.Pages(scoped); lookupErr == nil && len(pages) > 0 {
+		s.opt.Log.Info("church already has a website, leaving it alone",
+			slog.String("church", name), slog.Int("pages", len(pages)))
+		return nil
 	}
 
 	home, err := svc.CreatePage(scoped, site.PageInput{
