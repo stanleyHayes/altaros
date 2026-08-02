@@ -166,3 +166,60 @@ func TestUpdateCannotReassignTenant(t *testing.T) {
 		t.Fatalf("reassigning %s must be refused, got %v", TenantField, err)
 	}
 }
+
+// UpdateMany is the newest write path, so it gets the same two checks the
+// others have rather than inheriting confidence from them. A bulk update is the
+// worse one to get wrong: an unscoped filter rewrites every church at once.
+func TestUpdateManyStaysInsideOneChurch(t *testing.T) {
+	db := testDB(t)
+	coll := db.Tenant("members")
+	ctxA := tenancy.WithScope(context.Background(), tenancy.Scope{ChurchID: "many_a"})
+	ctxB := tenancy.WithScope(context.Background(), tenancy.Scope{ChurchID: "many_b"})
+
+	for _, c := range []context.Context{ctxA, ctxA, ctxB} {
+		if _, err := coll.InsertOne(c, bson.M{"status": "pending"}); err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+	}
+
+	res, err := coll.UpdateMany(ctxA, bson.M{"status": "pending"},
+		bson.M{"$set": bson.M{"status": "done"}})
+	if err != nil {
+		t.Fatalf("UpdateMany: %v", err)
+	}
+	if res.ModifiedCount != 2 {
+		t.Errorf("updated %d documents, want only church A's 2", res.ModifiedCount)
+	}
+
+	stillPending, err := coll.CountDocuments(ctxB, bson.M{"status": "pending"})
+	if err != nil {
+		t.Fatalf("count B: %v", err)
+	}
+	if stillPending != 1 {
+		t.Errorf("church B has %d pending, want its document untouched", stillPending)
+	}
+}
+
+func TestUpdateManyCannotReassignTenant(t *testing.T) {
+	db := testDB(t)
+	coll := db.Tenant("members")
+	ctx := tenancy.WithScope(context.Background(), tenancy.Scope{ChurchID: "updm_a"})
+
+	if _, err := coll.InsertOne(ctx, bson.M{"name": "Ama"}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	_, err := coll.UpdateMany(ctx, bson.M{"name": "Ama"},
+		bson.M{"$set": bson.M{TenantField: "updm_b"}})
+	if !errors.Is(err, ErrCrossTenant) {
+		t.Fatalf("reassigning %s must be refused, got %v", TenantField, err)
+	}
+}
+
+func TestUpdateManyRefusesWithoutATenant(t *testing.T) {
+	db := testDB(t)
+	coll := db.Tenant("members")
+	if _, err := coll.UpdateMany(context.Background(), bson.M{},
+		bson.M{"$set": bson.M{"status": "done"}}); err == nil {
+		t.Fatal("UpdateMany built a query with no church in context")
+	}
+}

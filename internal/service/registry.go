@@ -65,6 +65,7 @@ func routeBuilders() map[string]func(*deps.Deps) routeSet {
 		"welfare":       welfareRoutes,
 		"communication": communicationRoutes,
 		"spiritual":     spiritualRoutes,
+		"social":        socialRoutes,
 	}
 }
 
@@ -103,6 +104,7 @@ func init() {
 		"event":         buildEvent,
 		"spiritual":     buildSpiritual,
 		"communication": buildCommunication,
+		"social":        buildSocial,
 		"ai":            placeholder("ai", "sermon assistant, member insights, prayer chat"),
 		"notification":  buildNotification,
 	}

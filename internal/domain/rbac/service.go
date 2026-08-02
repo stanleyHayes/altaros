@@ -22,15 +22,21 @@ import (
 type Service struct {
 	roles *mongodb.TenantCollection
 	users *mongodb.TenantCollection
-	now   func() time.Time
+	// global is the roles collection WITHOUT a tenant filter, used by exactly
+	// one caller: BackfillSystemRoles, which is a platform migration across
+	// every church rather than an operation inside one. Named so that its
+	// appearance anywhere else is obvious in review.
+	global *mongo.Collection
+	now    func() time.Time
 }
 
 // NewService builds the RBAC service.
 func NewService(db *mongodb.DB) *Service {
 	return &Service{
-		roles: db.Tenant(RoleCollection),
-		users: db.Tenant(UserCollection),
-		now:   time.Now,
+		roles:  db.Tenant(RoleCollection),
+		users:  db.Tenant(UserCollection),
+		global: db.Global(RoleCollection),
+		now:    time.Now,
 	}
 }
 

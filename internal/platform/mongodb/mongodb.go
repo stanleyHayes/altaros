@@ -360,6 +360,26 @@ func (t *TenantCollection) UpdateOne(ctx context.Context, filter any, update bso
 	return t.coll.UpdateOne(ctx, scoped, update)
 }
 
+// UpdateMany updates every matching document within the caller's church.
+//
+// The same reassignment guard as UpdateOne, and for a stronger reason: a bulk
+// update that could rewrite churchId would move somebody else's documents into
+// this church in one statement rather than one at a time.
+func (t *TenantCollection) UpdateMany(ctx context.Context, filter any, update bson.M) (*mongo.UpdateResult, error) {
+	scoped, err := t.scopedFilter(ctx, filter)
+	if err != nil {
+		return nil, err
+	}
+	if set, ok := update["$set"].(bson.M); ok {
+		if _, present := set[TenantField]; present {
+			return nil, fmt.Errorf("%s: %w (update may not reassign %s)",
+				t.name, ErrCrossTenant, TenantField)
+		}
+		set["updatedAt"] = time.Now().UTC()
+	}
+	return t.coll.UpdateMany(ctx, scoped, update)
+}
+
 // UpsertOne updates a document within the caller's church, creating it if it
 // does not exist.
 //

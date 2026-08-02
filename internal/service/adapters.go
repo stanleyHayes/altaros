@@ -100,3 +100,52 @@ func newNotificationService(d *deps.Deps) *notification.Service {
 		d.Transports()...,
 	).WithLocation(d.Location())
 }
+
+// memberNames resolves a signed-in caller into a display name and avatar.
+//
+// Used by the feed (WP-24), which denormalises the author's name onto every
+// post. The name is looked up rather than trusted from the request body,
+// because a client that supplies its own display name can post as somebody
+// else — and on a church feed, a post appearing under the pastor's name is the
+// whole attack rather than a cosmetic problem.
+type memberNames struct {
+	accounts *mongo.Collection
+}
+
+func newMemberNames(d *deps.Deps) *memberNames {
+	return &memberNames{accounts: d.Mongo.Global(auth.Collection)}
+}
+
+// lookup returns a caller's display name and avatar, or empty strings.
+//
+// Read from the ACCOUNT rather than the member record: the avatar only exists
+// there, the name is the one the person set on their own profile, and an
+// authenticated caller always has an account whereas they may not yet have
+// been linked to a member.
+//
+// A miss is not an error. The worst case is a post attributed to an id rather
+// than a name, which is better than refusing to let somebody post because
+// their profile could not be read.
+func (n *memberNames) lookup(ctx context.Context, userID string) (name, avatar string) {
+	if n == nil || n.accounts == nil {
+		return "", ""
+	}
+	oid, err := bson.ObjectIDFromHex(userID)
+	if err != nil {
+		return "", ""
+	}
+	churchID, err := tenancy.MustChurchID(ctx)
+	if err != nil {
+		return "", ""
+	}
+
+	var account auth.User
+	// Scoped by church as well as id: users are a GLOBAL collection, so an id
+	// alone would read across churches.
+	if err := n.accounts.FindOne(ctx, bson.M{
+		"_id": oid, "churchId": mongodb.ID(churchID),
+	}).Decode(&account); err != nil {
+		return "", ""
+	}
+	return account.Name, account.AvatarURL
+}

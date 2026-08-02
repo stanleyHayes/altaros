@@ -134,6 +134,10 @@ func systemRoles() []systemRole {
 		NewPermission(ResourceCommunication, ActionCreate),
 		NewPermission(ResourceChurch, ActionRead),
 		NewPermission(ResourceReport, ActionRead),
+		// Staff moderate the feed. This is the group that actually does it —
+		// an administrator is not who a church wants reading every report.
+		NewPermission(ResourceSocial, ActionRead),
+		NewPermission(ResourceSocial, ActionUpdate),
 	)
 
 	// A member reads what concerns them. Note the absence of finance: a member

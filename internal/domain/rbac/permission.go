@@ -73,10 +73,15 @@ const (
 	ResourceEvent         Resource = "event"
 	ResourceCommunication Resource = "communication"
 	ResourcePrayer        Resource = "prayer"
-	ResourceWelfare       Resource = "welfare"
-	ResourceChurch        Resource = "church"
-	ResourceReport        Resource = "report"
-	ResourceSettings      Resource = "settings"
+	// ResourceSocial is the congregation feed. It guards MODERATION, not
+	// participation: posting, commenting and liking are things a member does,
+	// the same way giving is, and putting them behind a permission would mean
+	// a church had to grant its congregation the right to speak.
+	ResourceSocial   Resource = "social"
+	ResourceWelfare  Resource = "welfare"
+	ResourceChurch   Resource = "church"
+	ResourceReport   Resource = "report"
+	ResourceSettings Resource = "settings"
 	// ResourceRole is itself a resource, which is what makes "roles can be
 	// created by an admin WITH THE RIGHT PERMISSIONS" expressible rather than
 	// hard-coded to a role name.
@@ -89,7 +94,7 @@ const (
 var AllResources = []Resource{
 	ResourceChurch, ResourceCommunication, ResourceEvent, ResourceFinance,
 	ResourceMember, ResourcePrayer, ResourceReport, ResourceRole,
-	ResourceSettings, ResourceUser, ResourceWelfare,
+	ResourceSettings, ResourceSocial, ResourceUser, ResourceWelfare,
 }
 
 // Valid reports whether a resource is recognised.
