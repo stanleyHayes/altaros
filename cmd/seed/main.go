@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/hayfordstanley/altar-os/internal/domain/church"
 	"github.com/hayfordstanley/altar-os/internal/platform/config"
 	"github.com/hayfordstanley/altar-os/internal/platform/logging"
 	"github.com/hayfordstanley/altar-os/internal/platform/mongodb"
@@ -142,20 +143,53 @@ func writeCredentials(path string, r *seed.Result, database string) error {
 	fmt.Fprintf(&b, "These are fixture accounts on a development database. They are not\n")
 	fmt.Fprintf(&b, "secrets, and this file is gitignored so it cannot become one.\n")
 	fmt.Fprintf(&b, "Rewritten by `make seed`.\n\n")
-	fmt.Fprintf(&b, "Gateway:   http://localhost:8080/api/v1\n")
-	fmt.Fprintf(&b, "Dashboard: http://localhost:5173\n\n")
+	fmt.Fprintf(&b, "Gateway: %s\n\n", gatewayURL())
+
+	// Which app each account signs into, because the accounts are not
+	// interchangeable and knowing the password does not tell you where to
+	// type it. The platform operator in particular cannot sign into the church
+	// dashboard in any useful way, and a church admin is refused by the admin
+	// app outright — so a flat list of logins with one URL beside it sends
+	// somebody to the wrong door.
+	//
+	// The ports are read from the environment rather than hard-coded. They were
+	// hard-coded to 5173, which on a machine running more than one project is
+	// somebody else's app — and the file then confidently points at it.
+	fmt.Fprintf(&b, "APPS\n%s\n", strings.Repeat("-", 96))
+	for _, app := range appURLs() {
+		fmt.Fprintf(&b, "%-12s %-30s %s\n", app.name, app.url, app.who)
+	}
+	fmt.Fprintf(&b, "\n")
 
 	if len(r.Logins) > 0 {
 		fmt.Fprintf(&b, "PASSWORD (all accounts): %s\n\n", r.Logins[0].Password)
 	}
 
+	// The platform operator first and called out by name. It is the account
+	// somebody looks for when the admin app refuses them, and burying it at the
+	// bottom of an alphabetical list is how it gets missed.
+	if ops := operatorLogin(r); ops != nil {
+		fmt.Fprintf(&b, "PLATFORM OPERATOR — the only account the admin app accepts\n")
+		fmt.Fprintf(&b, "%s\n", strings.Repeat("-", 96))
+		fmt.Fprintf(&b, "%-42s  %-18s  %s\n\n", ops.Email, ops.Role, ops.Church)
+	}
+
+	fmt.Fprintf(&b, "CHURCH ACCOUNTS\n")
 	fmt.Fprintf(&b, "%-42s  %-18s  %s\n", "EMAIL", "ROLE", "CHURCH")
 	fmt.Fprintf(&b, "%s\n", strings.Repeat("-", 96))
 	for _, l := range r.Logins {
+		if l.Role == church.RoleSuperAdmin {
+			continue
+		}
 		fmt.Fprintf(&b, "%-42s  %-18s  %s\n", l.Email, l.Role, l.Church)
 	}
 
 	fmt.Fprintf(&b, `
+The SUPER_ADMIN is the platform operator — ALTAR OS staff, not a church.
+It is the only role the admin app accepts, and the only one that may set
+the commission rate and the provider rate card. It carries a church so
+that its token names one; the role check requires that.
+
 The ORG_ADMIN reads across every branch; a CHURCH_ADMIN sees one. That
 difference is what VisibleChurchIDs decides, and it is only visible with
 more than one branch seeded.
@@ -168,6 +202,48 @@ Quick check:
 `, firstEmail(r), firstPassword(r))
 
 	return os.WriteFile(path, []byte(b.String()), 0o600)
+}
+
+// appEntry is one frontend and who signs into it.
+type appEntry struct{ name, url, who string }
+
+// appURLs reports where each app is expected to be.
+//
+// Overridable, because the defaults collide with whatever else is running on a
+// developer's machine — Vite's 5173 is claimed by the first project started,
+// and a credentials file that names it is pointing at a stranger's app.
+func appURLs() []appEntry {
+	return []appEntry{
+		{"Dashboard", envOr("DASHBOARD_URL", "http://localhost:5173"),
+			"church staff — CHURCH_ADMIN, DEPARTMENT_LEADER, MEMBER"},
+		{"Admin", envOr("ADMIN_URL", "http://localhost:5176"),
+			"platform operators — SUPER_ADMIN only"},
+		{"Member web", envOr("MEMBER_WEB_URL", "http://localhost:5174"),
+			"congregation — MEMBER"},
+		{"Marketing", envOr("MARKETING_URL", "http://localhost:5175"),
+			"public, no sign-in"},
+	}
+}
+
+func envOr(key, fallback string) string {
+	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
+		return v
+	}
+	return fallback
+}
+
+func gatewayURL() string {
+	return envOr("GATEWAY_URL", "http://localhost:8080/api/v1")
+}
+
+// operatorLogin finds the platform operator among the seeded accounts.
+func operatorLogin(r *seed.Result) *seed.Login {
+	for i := range r.Logins {
+		if r.Logins[i].Role == church.RoleSuperAdmin {
+			return &r.Logins[i]
+		}
+	}
+	return nil
 }
 
 func firstEmail(r *seed.Result) string {

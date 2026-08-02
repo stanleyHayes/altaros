@@ -327,6 +327,15 @@ func (s *Seeder) Run(ctx context.Context) (*Result, error) {
 	result.Users++
 	result.Logins = append(result.Logins, orgLogin)
 
+	// The platform operator, so the admin app and the settings behind Q-7's
+	// role check are reachable through the product rather than only by hand.
+	opsLogin, err := s.platformAdmin(ctx, branches[0].slug)
+	if err != nil {
+		return nil, err
+	}
+	result.Users++
+	result.Logins = append(result.Logins, opsLogin)
+
 	return result, nil
 }
 
@@ -479,6 +488,67 @@ func (s *Seeder) staff(ctx context.Context, churchID bson.ObjectID, churchName, 
 		})
 	}
 	return logins, nil
+}
+
+// platformAdmin creates the ALTAR OS operator account.
+//
+// Without one the admin app cannot be signed into at all, and neither can the
+// platform settings that Q-7 put behind a SUPER_ADMIN role check — so the
+// commission rate and the provider rate card were unreachable through the
+// product and could only be set by writing to Mongo by hand.
+//
+// It carries a CHURCH, which looks wrong for a platform operator and is
+// deliberate: isPlatformAdmin is scoped exactly as requireRole scopes it, so
+// the SUPER_ADMIN bypass only applies to an operator whose token names a church
+// — one who has picked a church to act in. A churchless platform admin is
+// refused by both guards, which is the existing behaviour and not something
+// seeding should quietly widen.
+func (s *Seeder) platformAdmin(ctx context.Context, homeSlug string) (Login, error) {
+	hash, err := bcrypt.GenerateFromPassword([]byte(s.opt.Password), bcrypt.DefaultCost)
+	if err != nil {
+		return Login{}, fmt.Errorf("seed: hash password: %w", err)
+	}
+
+	var home struct {
+		ID   bson.ObjectID `bson:"_id"`
+		Name string        `bson:"name"`
+	}
+	if err := s.raw.Collection("churches").
+		FindOne(ctx, bson.M{"slug": homeSlug}).Decode(&home); err != nil {
+		return Login{}, fmt.Errorf("seed: find home church: %w", err)
+	}
+
+	now := time.Now().UTC()
+	email := "ops@altaros.com"
+
+	_, err = s.raw.Collection("users").UpdateOne(ctx,
+		bson.M{"email": email},
+		bson.M{
+			"$set": bson.M{
+				"email":        email,
+				"phone":        s.phoneE164(),
+				"passwordHash": string(hash),
+				"name":         "Altar OS Operations",
+				"role":         church.RoleSuperAdmin,
+				"churchId":     home.ID,
+				"isActive":     true,
+				MarkerField:    Marker,
+				"updatedAt":    now,
+			},
+			"$setOnInsert": bson.M{"createdAt": now},
+		},
+		options.UpdateOne().SetUpsert(true))
+	if err != nil {
+		return Login{}, fmt.Errorf("seed: platform admin: %w", err)
+	}
+
+	return Login{
+		Email:    email,
+		Password: s.opt.Password,
+		Role:     church.RoleSuperAdmin,
+		Church:   "ALTAR OS (platform operator)",
+		Slug:     homeSlug,
+	}, nil
 }
 
 func (s *Seeder) orgAdmin(ctx context.Context, orgID bson.ObjectID, homeSlug string) (Login, error) {

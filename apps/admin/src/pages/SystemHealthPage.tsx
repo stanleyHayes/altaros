@@ -32,7 +32,7 @@ export default function SystemHealthPage() {
 
   useEffect(() => {
     AdminService.getHealth()
-      .then((res) => setHealth(res.data))
+      .then(setHealth)
       .catch(() => setError(true))
       .finally(() => setLoading(false));
   }, []);

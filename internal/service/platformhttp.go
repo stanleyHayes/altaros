@@ -46,6 +46,14 @@ func platformRoutes(d *deps.Deps) routeSet {
 			r.Use(resolvePermissions(d))
 
 			// --- the platform operator ---
+			//
+			// /admin/stats rather than /platform/stats, because that is the
+			// path the admin app already calls. It was falling through to the
+			// legacy TypeScript proxy and answering 502, so the operator
+			// dashboard showed zeros for everything.
+			r.With(requirePlatformAdmin()).
+				Get("/admin/stats", handlePlatformStats(settings, d))
+
 			r.With(requirePlatformAdmin()).
 				Get("/platform/settings", handleGetPlatformSettings(settings))
 			r.With(requirePlatformAdmin()).
@@ -84,6 +92,17 @@ func requirePlatformAdmin() func(http.Handler) http.Handler {
 }
 
 // --- the platform operator ----------------------------------------------------
+
+func handlePlatformStats(svc *platformsetting.Service, d *deps.Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		stats, err := svc.StatsFor(r.Context(), d.Mongo)
+		if err != nil {
+			writePlatformError(w, err)
+			return
+		}
+		httpx.JSON(w, http.StatusOK, stats)
+	}
+}
 
 func handleGetPlatformSettings(svc *platformsetting.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {

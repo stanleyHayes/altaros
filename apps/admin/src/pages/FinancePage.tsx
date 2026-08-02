@@ -26,11 +26,11 @@ export default function FinancePage() {
       AdminService.getStats(),
     ])
       .then(([churchRes, statsRes]) => {
-        const sorted = churchRes.data.sort(
+        const sorted = churchRes.items.sort(
           (a, b) => b.totalRevenue - a.totalRevenue,
         );
         setChurches(sorted);
-        setTotalRevenue(statsRes.data.totalRevenue);
+        setTotalRevenue(statsRes.totalRevenue);
       })
       .catch(() => {})
       .finally(() => setLoading(false));

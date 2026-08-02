@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Box, Typography, Grid, Card, CardContent, CircularProgress } from "@mui/material";
+import { Alert, Box, Typography, Grid, Card, CardContent, CircularProgress } from "@mui/material";
 import {
   Church as ChurchIcon,
   People as PeopleIcon,
@@ -11,12 +11,15 @@ import AdminService, { type PlatformStats } from "@/services/admin.service";
 
 export default function DashboardPage() {
   const [stats, setStats] = useState<PlatformStats | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     AdminService.getStats()
-      .then((res) => setStats(res.data))
-      .catch(() => {})
+      .then(setStats)
+      // A discarded error rendered as a platform of all zeros, which reads as
+      // a real empty platform rather than as a failure. Kept and shown.
+      .catch((err: Error) => setError(err.message))
       .finally(() => setLoading(false));
   }, []);
 
@@ -33,6 +36,12 @@ export default function DashboardPage() {
       <Typography variant="h4" sx={{ fontWeight: 700, mb: 3 }}>
         Platform Overview
       </Typography>
+
+      {error && (
+        <Alert severity="error" sx={{ mb: 3 }}>
+          These figures could not be loaded, so nothing below is current. {error}
+        </Alert>
+      )}
 
       <Grid container spacing={3} sx={{ mb: 4 }}>
         <Grid size={{ xs: 12, sm: 6, md: 3 }}>

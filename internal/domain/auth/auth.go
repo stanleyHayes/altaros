@@ -87,6 +87,14 @@ type User struct {
 	IsActive                  bool       `bson:"isActive"         json:"isActive"`
 	PhoneVerified             bool       `bson:"phoneVerified"    json:"phoneVerified"`
 	PhoneVerificationRequired bool       `bson:"phoneVerificationRequired,omitempty" json:"phoneVerificationRequired,omitempty"`
+	// LastLoginAt is when a session was last issued for this account.
+	//
+	// Written because "active users" has to mean something. The `isActive`
+	// flag answers a different question — whether an account has been disabled
+	// — and it stays true forever for somebody who signed up once and never
+	// returned, so counting it would report every account ever created as
+	// active. A platform dashboard showing that is worse than showing nothing.
+	LastLoginAt *time.Time `bson:"lastLoginAt,omitempty" json:"lastLoginAt,omitempty"`
 	// SelfRegistered marks an account somebody created for themselves rather
 	// than one the church added or invited (Q-10, R-17).
 	//
@@ -96,7 +104,7 @@ type User struct {
 	// — but it is the difference between "who is this" and "who let them in".
 	SelfRegistered bool      `bson:"selfRegistered,omitempty" json:"selfRegistered,omitempty"`
 	CreatedAt      time.Time `bson:"createdAt"        json:"createdAt"`
-	UpdatedAt                 time.Time  `bson:"updatedAt"        json:"updatedAt"`
+	UpdatedAt      time.Time `bson:"updatedAt"        json:"updatedAt"`
 }
 
 // SMSSender delivers the OTP. Kept as an interface so tests capture the code
@@ -492,6 +500,10 @@ func (s *Service) Refresh(ctx context.Context, refreshToken string) (*Result, er
 	if err != nil {
 		return nil, err
 	}
+	// A refresh counts as activity. Somebody who stays signed in for months
+	// never re-enters a password, and a metric that only counted sign-ins would
+	// report the most engaged users as the least active.
+	s.recordLogin(ctx, user)
 	return &Result{User: user, Tokens: pair}, nil
 }
 
@@ -536,7 +548,28 @@ func (s *Service) issueFor(ctx context.Context, user *User) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
+	s.recordLogin(ctx, user)
 	return &Result{User: user, Tokens: pair}, nil
+}
+
+// recordLogin stamps the sign-in time, best effort.
+//
+// Deliberately does NOT fail the login. A person who has just proved who they
+// are should not be refused because a statistics field could not be written —
+// the cost of losing one data point is a slightly low number on an operator
+// dashboard; the cost of the alternative is somebody locked out of their
+// church's records.
+func (s *Service) recordLogin(ctx context.Context, user *User) {
+	if user == nil || user.ID.IsZero() {
+		return
+	}
+	now := time.Now().UTC()
+	if _, err := s.users.UpdateOne(ctx,
+		bson.M{"_id": user.ID},
+		bson.M{"$set": bson.M{"lastLoginAt": now}}); err != nil {
+		return
+	}
+	user.LastLoginAt = &now
 }
 
 func (s *Service) byIDString(ctx context.Context, id string) (*User, error) {

@@ -43,50 +43,53 @@ export interface SystemHealth {
   nodeVersion: string;
 }
 
-interface StatsResponse {
-  success: boolean;
-  data: PlatformStats;
+export interface Pagination {
+  page: number;
+  limit: number;
+  total: number;
+  totalPages: number;
 }
 
-interface ChurchesResponse {
-  success: boolean;
-  data: ChurchRow[];
-  pagination: { page: number; limit: number; total: number; totalPages: number };
-}
-
-interface UsersResponse {
-  success: boolean;
-  data: UserRow[];
-  pagination: { page: number; limit: number; total: number; totalPages: number };
-}
-
-interface HealthResponse {
-  success: boolean;
-  data: SystemHealth;
+/**
+ * A paginated list, as the API returns it once the envelope is off.
+ *
+ * The envelope types that used to live here (`{ success, data, pagination }`)
+ * were the bug api.ts warns about, one layer up: `get()` unwraps to `data`, so
+ * declaring the envelope as the type parameter meant every call site read
+ * `response.data` as `undefined`. On the dashboard that surfaced as a platform
+ * overview of all zeros — indistinguishable from a real empty platform, and
+ * made worse by a `.catch(() => {})` that discarded the reason.
+ *
+ * Pagination therefore has to travel INSIDE the payload, not beside it, or
+ * unwrapping loses it.
+ */
+export interface Page<T> {
+  items: T[];
+  pagination: Pagination;
 }
 
 const AdminService = {
-  async getStats(): Promise<StatsResponse> {
-    return get<StatsResponse>("/admin/stats");
+  async getStats(): Promise<PlatformStats> {
+    return get<PlatformStats>("/admin/stats");
   },
 
-  async getChurches(page = 1, limit = 20): Promise<ChurchesResponse> {
-    return get<ChurchesResponse>(`/admin/churches?page=${page}&limit=${limit}`);
+  async getChurches(page = 1, limit = 20): Promise<Page<ChurchRow>> {
+    return get<Page<ChurchRow>>(`/admin/churches?page=${page}&limit=${limit}`);
   },
 
   async updateChurchStatus(id: string, isActive: boolean): Promise<void> {
     await patch(`/admin/churches/${id}/status`, { isActive });
   },
 
-  async getUsers(page = 1, limit = 20, role?: string, search?: string): Promise<UsersResponse> {
+  async getUsers(page = 1, limit = 20, role?: string, search?: string): Promise<Page<UserRow>> {
     const params = new URLSearchParams({ page: String(page), limit: String(limit) });
     if (role) params.set("role", role);
     if (search) params.set("search", search);
-    return get<UsersResponse>(`/admin/users?${params}`);
+    return get<Page<UserRow>>(`/admin/users?${params}`);
   },
 
-  async getHealth(): Promise<HealthResponse> {
-    return get<HealthResponse>("/admin/health");
+  async getHealth(): Promise<SystemHealth> {
+    return get<SystemHealth>("/admin/health");
   },
 };
 

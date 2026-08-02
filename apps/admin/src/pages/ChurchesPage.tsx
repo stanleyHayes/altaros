@@ -32,7 +32,7 @@ export default function ChurchesPage() {
     setLoading(true);
     try {
       const res = await AdminService.getChurches(page + 1, rowsPerPage);
-      setChurches(res.data);
+      setChurches(res.items);
       setTotal(res.pagination.total);
     } catch {
       // ignore

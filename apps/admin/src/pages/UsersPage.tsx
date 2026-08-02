@@ -48,7 +48,7 @@ export default function UsersPage() {
         roleFilter || undefined,
         search || undefined,
       );
-      setUsers(res.data);
+      setUsers(res.items);
       setTotal(res.pagination.total);
     } catch {
       // ignore
