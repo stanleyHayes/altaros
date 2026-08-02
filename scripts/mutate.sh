@@ -27,6 +27,9 @@
 # Usage:
 #   scripts/mutate.sh <file> <python-expr-file> <pkg> [pkg...]
 #
+# Set RUN=<regexp> to scope to a subset of tests, which is what makes it
+# usable on pure logic while the database is unavailable.
+#
 # The python expression file is executed with `src` bound to the file's text
 # and must produce `out`. Example:
 #
@@ -58,23 +61,33 @@ trap restore EXIT INT TERM
 
 # --- skipped tests catch nothing ---
 #
-# Most of the meaningful tests here are integration tests that SKIP when Mongo
-# is unavailable. A skipped test cannot fail, so without REQUIRE_INFRA every
-# mutant survives and the run reads as "none of this is covered" when the truth
-# is "none of this ran". That is the most expensive way to be wrong, because it
-# looks like a finding.
-if [ "${REQUIRE_INFRA:-}" != "1" ]; then
-  echo "INCONCLUSIVE  set REQUIRE_INFRA=1 — skipped tests cannot catch a mutant" >&2
-  exit 3
-fi
+# Most meaningful tests here are integration tests that SKIP when Mongo is
+# unavailable. A skipped test cannot fail, so a mutant "survives" every one of
+# them, and the run reads as "none of this is covered" when the truth is "none
+# of this ran". That is the most expensive way to be wrong, because it looks
+# like a finding.
+#
+# The check is therefore on what actually EXECUTED, not on an environment
+# variable standing in for it: the baseline must produce at least one PASS
+# among the selected tests. That also makes RUN= usable against pure logic
+# while the database is down, which an env-var gate would have forbidden for
+# no reason.
+RUNFLAG=()
+[ -n "${RUN:-}" ] && RUNFLAG=(-run "$RUN")
 
-# --- baseline: the tests must build AND pass before a mutant means anything ---
-if ! go vet "${PKGS[@]}" >/dev/null 2>&1; then
-  echo "INCONCLUSIVE  baseline does not build — fix that first"
+baseline=$(go test "${PKGS[@]}" "${RUNFLAG[@]}" -count=1 -timeout "$GOTEST_TIMEOUT" -v 2>&1)
+baseline_status=$?
+
+passes=$(printf '%s\n' "$baseline" | grep -c -- '--- PASS')
+skips=$(printf '%s\n' "$baseline" | grep -c -- '--- SKIP')
+
+if [ "$baseline_status" -ne 0 ]; then
+  echo "INCONCLUSIVE  baseline already fails — a mutant proves nothing"
+  printf '%s\n' "$baseline" | grep -m2 -- '--- FAIL' | sed 's/^/              /'
   exit 3
 fi
-if ! go test "${PKGS[@]}" -count=1 -timeout "$GOTEST_TIMEOUT" >/dev/null 2>&1; then
-  echo "INCONCLUSIVE  baseline tests already fail — a mutant proves nothing"
+if [ "$passes" -eq 0 ]; then
+  echo "INCONCLUSIVE  no selected test actually ran ($skips skipped) — nothing could catch a mutant"
   exit 3
 fi
 
@@ -102,9 +115,9 @@ if ! go vet "${PKGS[@]}" >/dev/null 2>&1; then
   exit 3
 fi
 
-if go test "${PKGS[@]}" -count=1 -timeout "$GOTEST_TIMEOUT" >/dev/null 2>&1; then
-  echo "SURVIVED      no test noticed this change"
+if go test "${PKGS[@]}" "${RUNFLAG[@]}" -count=1 -timeout "$GOTEST_TIMEOUT" >/dev/null 2>&1; then
+  echo "SURVIVED      no test noticed this change ($passes ran)"
   exit 1
 fi
-echo "CAUGHT        a test failed, as it should"
+echo "CAUGHT        a test failed, as it should ($passes ran)"
 exit 0
