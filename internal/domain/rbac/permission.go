@@ -310,6 +310,51 @@ func All() Set {
 	return s
 }
 
+// PastoralResources are the ones a blanket administrative role does NOT sweep
+// in, because they carry hardship and safeguarding information about named
+// people.
+//
+// Welfare is the case that forced this. WP-27's acceptance criterion is "a
+// church admin WITHOUT the welfare role cannot read case details" — which was
+// impossible while the Administrator role held All(), because All() includes
+// welfare and every church admin therefore held it by default.
+//
+// The point is not that administrators are untrusted. It is that a church's
+// welfare records name people in crisis, and access to them should be a
+// decision somebody made rather than a side effect of being given the admin
+// role to manage the giving reports. §3.4(3) calls for a strict pastoral ACL,
+// and an ACL that everybody satisfies is not one.
+//
+// Granting it is one explicit step: add welfare permissions to a role, or grant
+// them to a person through the ADR-008 overlay.
+var PastoralResources = []Resource{ResourceWelfare}
+
+// isPastoral reports whether a resource is withheld from blanket grants.
+func isPastoral(r Resource) bool {
+	for _, p := range PastoralResources {
+		if p == r {
+			return true
+		}
+	}
+	return false
+}
+
+// AllExceptPastoral is every permission a blanket administrative role gets.
+//
+// Deliberately NOT All(). See PastoralResources.
+func AllExceptPastoral() Set {
+	s := make(Set, len(AllResources)*len(AllActions))
+	for _, r := range AllResources {
+		if isPastoral(r) {
+			continue
+		}
+		for _, a := range AllActions {
+			s.Add(NewPermission(r, a))
+		}
+	}
+	return s
+}
+
 // ReadOnly returns read on every resource.
 func ReadOnly() Set {
 	s := make(Set, len(AllResources))

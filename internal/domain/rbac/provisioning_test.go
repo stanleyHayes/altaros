@@ -170,13 +170,16 @@ func TestProvisioningIsIdempotentUnderConcurrency(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Roles: %v", err)
 	}
-	// Three system roles, not twenty-four. The unique index on
-	// (churchId, slug) is what holds this.
-	if len(roles) != 3 {
+	// One set of system roles, not one per concurrent caller. The unique index
+	// on (churchId, slug) is what holds this. Counted against systemRoles()
+	// rather than a literal, so adding a role — as WP-27 did with pastoral
+	// care — does not silently turn this into a test of the wrong number.
+	if want := len(systemRoles()); len(roles) != want {
 		names := make([]string, len(roles))
 		for i, r := range roles {
 			names[i] = r.Slug
 		}
-		t.Fatalf("got %d roles after concurrent provisioning, want 3: %v", len(roles), names)
+		t.Fatalf("got %d roles after concurrent provisioning, want %d: %v",
+			len(roles), want, names)
 	}
 }

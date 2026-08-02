@@ -553,13 +553,24 @@ func TestEveryChurchGetsTheThreeSystemRoles(t *testing.T) {
 		t.Fatalf("second run: %v", err)
 	}
 	roles, _ := h.svc.Roles(h.ctx)
-	if len(roles) != 3 {
-		t.Fatalf("want exactly 3 system roles after two runs, got %d", len(roles))
+	if len(roles) != len(systemRoles()) {
+		t.Fatalf("want exactly %d system roles after two runs, got %d",
+			len(systemRoles()), len(roles))
 	}
 }
 
-// The admin role must actually be able to run the church.
-func TestAdminRoleHoldsEverything(t *testing.T) {
+// The admin role must be able to run the church — and must NOT hold welfare.
+//
+// This used to assert that the admin held literally everything, which is the
+// contract WP-27 had to break. Its acceptance criterion is "a church admin
+// WITHOUT the welfare role cannot read case details", and that was unachievable
+// while every admin got welfare by being made an admin.
+//
+// The point is not that administrators are untrusted. It is that a church's
+// welfare records name people in crisis, and access to them should be a
+// decision somebody made rather than a side effect of being handed the admin
+// role to manage giving reports.
+func TestAdminRoleHoldsEverythingExceptPastoralCare(t *testing.T) {
 	h := newHarness(t)
 
 	admin, err := h.svc.RoleBySlug(h.ctx, SystemAdmin)
@@ -570,8 +581,40 @@ func TestAdminRoleHoldsEverything(t *testing.T) {
 
 	for _, r := range AllResources {
 		for _, a := range AllActions {
-			if !held.Can(r, a) {
+			pastoral := isPastoral(r)
+			switch {
+			case pastoral && held.Can(r, a):
+				t.Errorf("the admin role holds %s, which no blanket grant may "+
+					"include — WP-27's criterion depends on it", NewPermission(r, a))
+			case !pastoral && !held.Can(r, a):
 				t.Errorf("the admin role is missing %s", NewPermission(r, a))
+			}
+		}
+	}
+}
+
+// And somebody has to be able to hold it, or the feature is unreachable.
+func TestThePastoralRoleHoldsWelfareAndLittleElse(t *testing.T) {
+	h := newHarness(t)
+
+	pastoral, err := h.svc.RoleBySlug(h.ctx, SystemPastoral)
+	if err != nil {
+		t.Fatalf("the pastoral role was not provisioned: %v", err)
+	}
+	held := pastoral.PermissionSet()
+
+	for _, a := range []Action{ActionRead, ActionCreate, ActionUpdate} {
+		if !held.Can(ResourceWelfare, a) {
+			t.Errorf("the pastoral role cannot %s welfare", a)
+		}
+	}
+	// Deliberately narrow. A pastoral carer needs to know who a case is about;
+	// they have no business in the giving ledger.
+	for _, r := range []Resource{ResourceFinance, ResourceRole, ResourceSettings} {
+		for _, a := range AllActions {
+			if held.Can(r, a) {
+				t.Errorf("the pastoral role holds %s, which is beyond its purpose",
+					NewPermission(r, a))
 			}
 		}
 	}

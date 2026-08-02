@@ -106,6 +106,8 @@ const (
 	SystemAdmin  = "admin"
 	SystemStaff  = "staff"
 	SystemMember = "member"
+	// SystemPastoral holds welfare, which no blanket role includes.
+	SystemPastoral = "pastoral"
 )
 
 // systemRole describes a role every church starts with.
@@ -147,8 +149,14 @@ func systemRoles() []systemRole {
 	return []systemRole{
 		{
 			slug: SystemAdmin, name: "Administrator",
-			description: "Full access, including creating roles and inviting people.",
-			permissions: All(),
+			description: "Full access, including creating roles and inviting people. " +
+				"Welfare cases are separate — see Pastoral care.",
+			// NOT All(). Welfare is withheld from every blanket grant, because
+			// a church's welfare records name people in crisis and access to
+			// them should be a decision somebody made rather than a side
+			// effect of being handed the admin role to manage giving reports.
+			// See rbac.PastoralResources.
+			permissions: AllExceptPastoral(),
 		},
 		{
 			slug: SystemStaff, name: "Staff",
@@ -159,6 +167,25 @@ func systemRoles() []systemRole {
 			slug: SystemMember, name: "Member",
 			description: "A member of the congregation.",
 			permissions: member,
+		},
+		{
+			// The role that DOES hold welfare, and holds almost nothing else.
+			//
+			// Provisioned for every church so that granting pastoral access is
+			// one obvious step rather than a permission somebody has to know
+			// exists. It is deliberately narrow: reading a welfare case needs
+			// member:read to know who the case is about, and nothing beyond
+			// that. A pastoral carer has no business in the giving ledger.
+			slug: SystemPastoral, name: "Pastoral care",
+			description: "Reads and works welfare cases. Held by the few people " +
+				"a church trusts with hardship and safeguarding information.",
+			permissions: NewSet(
+				NewPermission(ResourceWelfare, ActionRead),
+				NewPermission(ResourceWelfare, ActionCreate),
+				NewPermission(ResourceWelfare, ActionUpdate),
+				NewPermission(ResourceMember, ActionRead),
+				NewPermission(ResourceChurch, ActionRead),
+			),
 		},
 	}
 }

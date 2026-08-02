@@ -88,6 +88,17 @@ type Config struct {
 	Resend     ResendConfig
 	Cloudinary CloudinaryConfig
 	Anthropic  AnthropicConfig
+
+	// WelfareKey encrypts welfare case contents (WP-27, §3.4(3)).
+	//
+	// Its OWN secret, deliberately separate from JWT_SECRET and the database
+	// credentials. The point of a separate key is that losing any one secret
+	// stops short of the most sensitive data in the product; a key that lives
+	// beside the thing it protects leaks with it.
+	//
+	// Absent, the welfare service refuses to store anything rather than
+	// writing plaintext — see welfare.NewService.
+	WelfareKey string
 }
 
 // MongoConfig configures the MongoDB connection.
@@ -308,6 +319,7 @@ func Load(serviceName string) (*Config, error) {
 			APIKey:    os.Getenv("CLOUDINARY_API_KEY"),
 			APISecret: os.Getenv("CLOUDINARY_API_SECRET"),
 		},
+		WelfareKey: os.Getenv("WELFARE_ENCRYPTION_KEY"),
 		Anthropic: AnthropicConfig{
 			APIKey: os.Getenv("ANTHROPIC_API_KEY"),
 			Model:  getenv("ANTHROPIC_MODEL", "claude-opus-5"),
