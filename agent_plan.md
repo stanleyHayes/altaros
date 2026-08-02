@@ -1257,9 +1257,20 @@ Devotionals, sermon streaming/library, prayer requests. **Bible: public-domain t
 **Done when:** Bible reads fully offline after first sync; no non-public-domain translation ships; prayer requests are encrypted and pastoral-ACL'd.
 **Status — 2 Aug 2026:** `internal/domain/spiritual` exists and is mounted (built by the frontend agent, 2 Aug 2026). Not audited or accepted against its criterion here.
 
-**WP-29 · Media & storage** ⬜ — Depends on: WP-05
+**WP-29 · Media & storage** 🟡 — Depends on: WP-05
 Cloudinary adapter replacing the stub. **Adaptive bitrate and aggressive compression** — sermon video on African mobile data is a cost and abandonment problem, not a bandwidth footnote. Audio-only variant, explicit download-for-offline.
 **Done when:** a 45-minute sermon streams acceptably on a throttled 3G profile; audio-only is offered by default on metered connections.
+**Status — 2 Aug 2026: built, one half of the criterion still unproven.** `internal/domain/media`, mounted at `/media`.
+
+**Audio-only IS the default on a metered connection** — not an option somebody has to find. A sermon is words, and the video is roughly twenty times the data for the same content in a market that pays per megabyte (§2.1). Metered is read from the `Save-Data` header first, because that is an explicit user preference rather than a guess.
+
+**Uploads are SIGNED, never proxied.** The bytes go straight from the browser to Cloudinary. A 45-minute sermon through a Go handler is 400MB of memory on a pod sized for JSON, and it makes a church on mobile data pay for the round trip twice. It is also R-13: uploads are deliberately off-origin, because a file served from the church's own origin can carry script that runs with the site's privileges.
+
+**A signature is a capability, so it is constrained.** Every one pins the church's own folder — derived from the TENANT, never from a request body — plus the resource type and a 10-minute expiry. An unconstrained signature is an open upload endpoint on somebody else's CDN, billed to us and discoverable in a network tab. On confirmation the server re-checks everything: the public id must sit inside this church's folder, the delivery URL must be **this platform's** Cloudinary account (the host alone is shared by every customer of the provider), the format must be on the allowlist and the size under the per-kind ceiling.
+
+**SVG is not an image.** It is a document that can carry script, and serving one from a church's own media library is R-13 with extra steps. The list is an ALLOWLIST, because a blocklist is a list of the attacks somebody thought of.
+
+**Still 🟡, and this is the honest part:** "a 45-minute sermon streams acceptably on a throttled 3G profile" has **not been measured**. The adaptive-bitrate and audio-only transformations are built and unit-tested, but proving the criterion needs a real sermon in a real Cloudinary account played over a throttled connection. Marking this ✅ on the strength of the code would be exactly the kind of claim §7's legend forbids.
 
 **WP-30 · AI service** ⬜ (PDF §7) — Depends on: WP-12, WP-25
 Go, using the official Anthropic Go SDK (`github.com/anthropics/anthropic-sdk-go`).

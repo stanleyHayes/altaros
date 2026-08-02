@@ -49,6 +49,7 @@ func EnsureIndexes(ctx context.Context, d *deps.Deps) error {
 		{"event", newEventService(d).EnsureIndexes},
 		{"communication", newCommunicationService(d).EnsureIndexes},
 		{"rota", newRotaService(d).EnsureIndexes},
+		{"media", newMediaService(d).EnsureIndexes},
 		{"spiritual", spiritual.NewService(d.Mongo).EnsureIndexes},
 		{"site", site.NewService(d.Mongo).EnsureIndexes},
 		{"customdomain", customdomain.NewService(d.Mongo).EnsureIndexes},
