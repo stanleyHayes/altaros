@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/hayfordstanley/altar-os/internal/domain/church"
+	"github.com/hayfordstanley/altar-os/internal/domain/discipleship"
 	"github.com/hayfordstanley/altar-os/internal/domain/notification"
 	"github.com/hayfordstanley/altar-os/internal/platform/deps"
 	"github.com/hayfordstanley/altar-os/internal/platform/events"
@@ -29,6 +30,12 @@ func StartConsumers(ctx context.Context, d *deps.Deps) error {
 	// to the broker would mean a deployment without Kafka silently drops every
 	// announcement sent after 21:00.
 	go startNotificationSweeper(ctx, d, notifications)
+
+	// The escalation sweeper, for the same reason. WP-34's criterion is that
+	// an untouched follow-up "escalates if untouched", and an escalation that
+	// only happens when somebody opens a page is a report rather than a
+	// process — the whole point is that it fires when nobody is looking.
+	go startEscalationSweeper(ctx, d)
 
 	if d.Events == nil || !d.Events.Enabled() {
 		d.Log.Warn("event consumers not started — no Kafka brokers configured; " +
@@ -172,6 +179,15 @@ func givingReceiptHandler(d *deps.Deps, notifications *notification.Service, chu
 // hammering MongoDB.
 const notificationSweepInterval = time.Minute
 
+// escalationSweepInterval is how often overdue follow-up is escalated.
+//
+// Far longer than the notification sweep because the SLAs are measured in days:
+// a first-timer's 48 hours does not need checking every minute, and a tighter
+// loop would only produce more queries for the same answer. Fifteen minutes
+// bounds the lateness of an escalation to a quarter of an hour on a two-day
+// deadline, which nobody will notice.
+const escalationSweepInterval = 15 * time.Minute
+
 // startNotificationSweeper re-attempts messages that are due.
 //
 // Two things queue a message and then depend entirely on this loop:
@@ -237,5 +253,76 @@ func sweepOnce(ctx context.Context, d *deps.Deps, notifications *notification.Se
 		d.Log.Info("deferred notifications sent",
 			slog.Int("sent", sent),
 			slog.Int("churches", len(churches)))
+	}
+}
+
+// startEscalationSweeper escalates follow-up nobody has touched (WP-34).
+//
+// Runs without a tenant, so it asks which churches have work before doing any
+// and re-enters each church's scope to act — the same shape as the notification
+// sweeper, and for the same reason: a timer has no request behind it, and
+// nothing should cross a tenant boundary just because a clock ticked.
+func startEscalationSweeper(ctx context.Context, d *deps.Deps) {
+	svc := discipleship.NewService(d.Mongo)
+	ticker := time.NewTicker(escalationSweepInterval)
+	defer ticker.Stop()
+
+	d.Log.Info("discipleship escalation sweeper started",
+		slog.Duration("interval", escalationSweepInterval))
+
+	// Once at start, then on the ticker. Without this a pod that restarts more
+	// often than the interval — a crash loop, a busy deploy day — never sweeps
+	// at all, and the symptom is silence rather than an error. Concurrent
+	// sweeps across replicas are already safe: the escalating update is
+	// conditional on the task still being open.
+	escalateOnce(ctx, d, svc)
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			escalateOnce(ctx, d, svc)
+		}
+	}
+}
+
+func escalateOnce(ctx context.Context, d *deps.Deps, svc *discipleship.Service) {
+	churches, err := svc.ChurchesWithOverdueTasks(ctx)
+	if err != nil {
+		d.Log.Error("could not find churches with overdue follow-up",
+			slog.String("error", err.Error()))
+		return
+	}
+	if len(churches) == 0 {
+		return
+	}
+
+	escalated := 0
+	for _, churchID := range churches {
+		scoped := tenancy.WithScope(ctx, tenancy.Scope{
+			ChurchID: churchID,
+			UserID:   "system:escalation-sweeper",
+			Role:     "SYSTEM",
+		})
+
+		// A nil escalator: who a task escalates TO is a church's org chart,
+		// which nothing models yet. The status still changes and the task
+		// still surfaces as escalated-and-untouched, which is the number a
+		// pastor needs — it simply does not change hands automatically.
+		res, err := svc.EscalateOverdue(scoped, nil)
+		if err != nil {
+			// One church's problem must not stop the others.
+			d.Log.Error("escalation failed for a church",
+				slog.String("church_id", churchID),
+				slog.String("error", err.Error()))
+			continue
+		}
+		escalated += res.Escalated
+	}
+
+	if escalated > 0 {
+		d.Log.Info("follow-up escalated",
+			slog.Int("tasks", escalated), slog.Int("churches", len(churches)))
 	}
 }

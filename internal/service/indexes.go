@@ -9,6 +9,7 @@ import (
 	"github.com/hayfordstanley/altar-os/internal/domain/church"
 	"github.com/hayfordstanley/altar-os/internal/domain/consent"
 	"github.com/hayfordstanley/altar-os/internal/domain/customdomain"
+	"github.com/hayfordstanley/altar-os/internal/domain/discipleship"
 	"github.com/hayfordstanley/altar-os/internal/domain/finance"
 	"github.com/hayfordstanley/altar-os/internal/domain/invitation"
 	"github.com/hayfordstanley/altar-os/internal/domain/member"
@@ -46,6 +47,7 @@ func EnsureIndexes(ctx context.Context, d *deps.Deps) error {
 		{"finance campaigns", finance.NewService(d.Mongo, nil, nil, nil).EnsureCampaignIndexes},
 		{"finance pledges", finance.NewService(d.Mongo, nil, nil, nil).EnsurePledgeIndexes},
 		{"social", social.NewService(d.Mongo).EnsureIndexes},
+		{"discipleship", discipleship.NewService(d.Mongo).EnsureIndexes},
 		{"notification", newNotificationService(d).EnsureIndexes},
 		{"rbac", rbac.NewService(d.Mongo).EnsureIndexes},
 		{"invitation", invitation.NewService(d.Mongo).EnsureIndexes},
