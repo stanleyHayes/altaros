@@ -103,7 +103,7 @@ func TestPostCommentLikeReportModerate(t *testing.T) {
 		Author{ID: kwame, Name: "Kwame"}, "Amen!"); err != nil {
 		t.Fatalf("Comment: %v", err)
 	}
-	comments, total, err := h.svc.Comments(h.ctx, id, 1, 20)
+	comments, total, err := h.svc.Comments(h.ctx, id, 1, 20, false)
 	if err != nil {
 		t.Fatalf("Comments: %v", err)
 	}
@@ -232,7 +232,7 @@ func TestNothingCrossesChurches(t *testing.T) {
 	if _, err := h.svc.PostByID(h.other, id, kwame); err == nil {
 		t.Error("church B read church A's post by id")
 	}
-	if _, _, err := h.svc.Comments(h.other, id, 1, 20); err == nil {
+	if _, _, err := h.svc.Comments(h.other, id, 1, 20, false); err == nil {
 		t.Error("church B read church A's comments")
 	}
 	queue, err := h.svc.Queue(h.other, true, 1, 20)
@@ -590,5 +590,177 @@ func TestAReportMustSayEnoughToActOn(t *testing.T) {
 		Detail: "It names a child.",
 	}); err != nil {
 		t.Errorf("an explained 'other' report was refused: %v", err)
+	}
+}
+
+// Hiding a post must hide the conversation under it.
+//
+// The first cut of this took the post off the feed and returned 404 by id
+// while still serving the whole thread to anybody holding that id — which is
+// everybody who saw the post before it was hidden. The dispute a moderator hid
+// stayed readable underneath. Moderation you can walk around is not
+// moderation.
+func TestHidingAPostHidesItsComments(t *testing.T) {
+	h := newHarness(t)
+	id := h.post(t, ama, "Something contested.").ID.Hex()
+	if _, err := h.svc.Comment(h.as(kwame), id,
+		Author{ID: kwame, Name: "Kwame"}, "This is where the argument starts."); err != nil {
+		t.Fatalf("Comment: %v", err)
+	}
+	if _, err := h.svc.Moderate(h.as(pastor), id, ActionHide, pastor, ""); err != nil {
+		t.Fatalf("Moderate: %v", err)
+	}
+
+	// An ordinary member holding the id gets nothing.
+	if _, _, err := h.svc.Comments(h.as(kwame), id, 1, 20, false); err == nil {
+		t.Fatal("a hidden post still served its comment thread to a member")
+	}
+
+	// A moderator still reads it, because deciding what to do about a thread
+	// means reading the thread.
+	comments, total, err := h.svc.Comments(h.as(pastor), id, 1, 20, true)
+	if err != nil {
+		t.Fatalf("a moderator could not read a hidden thread: %v", err)
+	}
+	if len(comments) != 1 || total != 1 {
+		t.Fatalf("moderator sees %d comments (total %d), want 1", len(comments), total)
+	}
+}
+
+// A removed post's thread is equally closed.
+func TestRemovingAPostHidesItsComments(t *testing.T) {
+	h := newHarness(t)
+	id := h.post(t, ama, "Removed.").ID.Hex()
+	if _, err := h.svc.Comment(h.as(kwame), id, Author{ID: kwame, Name: "K"}, "under it"); err != nil {
+		t.Fatalf("Comment: %v", err)
+	}
+	if _, err := h.svc.Moderate(h.as(pastor), id, ActionRemove, pastor, ""); err != nil {
+		t.Fatalf("Moderate: %v", err)
+	}
+	if _, _, err := h.svc.Comments(h.as(kwame), id, 1, 20, false); err == nil {
+		t.Fatal("a removed post still served its comment thread")
+	}
+}
+
+// A moderator can remove one comment without removing the post.
+//
+// The common case on a real church feed: the testimony is fine, the argument
+// underneath it is not. Without this a moderator has to delete somebody's
+// testimony to silence a reply to it.
+func TestAModeratorRemovesOneCommentWithoutTouchingThePost(t *testing.T) {
+	h := newHarness(t)
+	id := h.post(t, ama, "God has been good.").ID.Hex()
+
+	keep, err := h.svc.Comment(h.as(kwame), id, Author{ID: kwame, Name: "K"}, "Amen.")
+	if err != nil {
+		t.Fatalf("Comment: %v", err)
+	}
+	drop, err := h.svc.Comment(h.as(kwame), id, Author{ID: kwame, Name: "K"}, "Something abusive.")
+	if err != nil {
+		t.Fatalf("Comment: %v", err)
+	}
+
+	if err := h.svc.DeleteComment(h.as(pastor), drop.ID.Hex(), pastor, true); err != nil {
+		t.Fatalf("DeleteComment: %v", err)
+	}
+
+	comments, total, err := h.svc.Comments(h.ctx, id, 1, 20, false)
+	if err != nil {
+		t.Fatalf("Comments: %v", err)
+	}
+	if len(comments) != 1 || total != 1 {
+		t.Fatalf("thread has %d comments (total %d), want the 1 that stayed",
+			len(comments), total)
+	}
+	if comments[0].ID != keep.ID {
+		t.Errorf("the wrong comment survived")
+	}
+
+	// The post is untouched and its count followed.
+	post, err := h.svc.PostByID(h.ctx, id, ama)
+	if err != nil {
+		t.Fatalf("PostByID: %v", err)
+	}
+	if post.Status != StatusVisible {
+		t.Errorf("removing a comment changed the post to %s", post.Status)
+	}
+	if post.CommentsCount != 1 {
+		t.Errorf("commentsCount = %d after one removal, want 1", post.CommentsCount)
+	}
+}
+
+// A member removes their own comment; not anybody else's.
+func TestOnlyTheAuthorOrAModeratorRemovesAComment(t *testing.T) {
+	h := newHarness(t)
+	id := h.post(t, ama, "A post.").ID.Hex()
+	mine, err := h.svc.Comment(h.as(kwame), id, Author{ID: kwame, Name: "K"}, "My comment.")
+	if err != nil {
+		t.Fatalf("Comment: %v", err)
+	}
+
+	// Somebody else, holding nothing.
+	if err := h.svc.DeleteComment(h.as(ama), mine.ID.Hex(), ama, false); err == nil {
+		t.Fatal("another member removed somebody else's comment")
+	}
+	comments, _, err := h.svc.Comments(h.ctx, id, 1, 20, false)
+	if err != nil {
+		t.Fatalf("Comments: %v", err)
+	}
+	if len(comments) != 1 {
+		t.Fatal("the comment was removed by the failed attempt")
+	}
+
+	// The author may.
+	if err := h.svc.DeleteComment(h.as(kwame), mine.ID.Hex(), kwame, false); err != nil {
+		t.Fatalf("the author could not remove their own comment: %v", err)
+	}
+	comments, total, err := h.svc.Comments(h.ctx, id, 1, 20, false)
+	if err != nil {
+		t.Fatalf("Comments: %v", err)
+	}
+	if len(comments) != 0 || total != 0 {
+		t.Fatalf("the author's own comment survived removal (%d, total %d)",
+			len(comments), total)
+	}
+}
+
+// Removing twice must not decrement the count twice.
+func TestRemovingACommentTwiceCountsOnce(t *testing.T) {
+	h := newHarness(t)
+	id := h.post(t, ama, "A post.").ID.Hex()
+	c1, err := h.svc.Comment(h.as(kwame), id, Author{ID: kwame, Name: "K"}, "one")
+	if err != nil {
+		t.Fatalf("Comment: %v", err)
+	}
+	if _, err := h.svc.Comment(h.as(kwame), id, Author{ID: kwame, Name: "K"}, "two"); err != nil {
+		t.Fatalf("Comment: %v", err)
+	}
+
+	if err := h.svc.DeleteComment(h.as(pastor), c1.ID.Hex(), pastor, true); err != nil {
+		t.Fatalf("first removal: %v", err)
+	}
+	if err := h.svc.DeleteComment(h.as(pastor), c1.ID.Hex(), pastor, true); err == nil {
+		t.Error("removing an already-removed comment succeeded")
+	}
+
+	post, err := h.svc.PostByID(h.ctx, id, ama)
+	if err != nil {
+		t.Fatalf("PostByID: %v", err)
+	}
+	if post.CommentsCount != 1 {
+		t.Fatalf("commentsCount = %d after a repeated removal, want 1", post.CommentsCount)
+	}
+}
+
+// A comment cannot be removed across churches.
+func TestCommentsDoNotCrossChurchesOnRemoval(t *testing.T) {
+	h := newHarness(t)
+	id := h.post(t, ama, "Church A.").ID.Hex()
+	c, err := h.svc.Comment(h.ctx, id, Author{ID: ama, Name: "Ama"}, "mine")
+	if err != nil {
+		t.Fatalf("Comment: %v", err)
+	}
+	if err := h.svc.DeleteComment(h.other, c.ID.Hex(), kwame, true); err == nil {
+		t.Fatal("church B removed church A's comment")
 	}
 }

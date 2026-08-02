@@ -67,6 +67,9 @@ var (
 	// ErrPostNotFound means no such post in this church.
 	ErrPostNotFound = errors.New("social: post not found")
 	// ErrCommentNotFound means no such comment in this church.
+	//
+	// Also what somebody gets for a comment they may not remove, for the same
+	// reason as posts: a distinct "forbidden" confirms the comment exists.
 	ErrCommentNotFound = errors.New("social: comment not found")
 	// ErrReportNotFound means no such report in this church.
 	ErrReportNotFound = errors.New("social: report not found")
@@ -202,6 +205,19 @@ type Comment struct {
 	AuthorAvatarURL string     `bson:"authorAvatarUrl,omitempty" json:"authorAvatarUrl,omitempty"`
 
 	Content string `bson:"content" json:"content"`
+
+	// Status is the comment's moderation state, and it exists because the
+	// first cut of this package could moderate posts and NOT comments — which
+	// is backwards. People rarely post abuse to a church feed; they comment
+	// it, underneath something innocuous. A moderator who can only remove the
+	// whole post has to delete a testimony to silence an argument under it.
+	//
+	// Absent on rows written before this field, which is why every query
+	// filters on "not removed" rather than "is visible".
+	Status Status `bson:"status,omitempty" json:"status,omitempty"`
+
+	ModeratedBy mongodb.ID `bson:"moderatedBy,omitempty" json:"moderatedBy,omitempty"`
+	ModeratedAt *time.Time `bson:"moderatedAt,omitempty" json:"moderatedAt,omitempty"`
 
 	CreatedAt time.Time `bson:"createdAt" json:"createdAt"`
 	UpdatedAt time.Time `bson:"updatedAt" json:"updatedAt"`

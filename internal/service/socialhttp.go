@@ -7,6 +7,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/hayfordstanley/altar-os/internal/domain/member"
 	"github.com/hayfordstanley/altar-os/internal/domain/rbac"
 	"github.com/hayfordstanley/altar-os/internal/domain/social"
 	"github.com/hayfordstanley/altar-os/internal/platform/deps"
@@ -29,6 +30,7 @@ func buildSocial(d *deps.Deps) http.Handler { return standalone(socialRoutes(d))
 func socialRoutes(d *deps.Deps) routeSet {
 	svc := social.NewService(d.Mongo)
 	names := newMemberNames(d)
+	members := member.NewService(d.Mongo, d.Events, d.Config.DataRegion)
 
 	return func(r chi.Router) {
 		r.Group(func(r chi.Router) {
@@ -36,18 +38,19 @@ func socialRoutes(d *deps.Deps) routeSet {
 			r.Use(resolvePermissions(d))
 
 			// --- what a member does ---
-			r.Get("/social/feed", handleFeed(svc))
-			r.Get("/social/posts/{id}", handleGetPost(svc))
-			r.Post("/social/posts", handleCreatePost(svc, names))
-			r.Delete("/social/posts/{id}", handleDeletePost(svc))
+			r.Get("/social/feed", handleFeed(svc, members))
+			r.Get("/social/posts/{id}", handleGetPost(svc, members))
+			r.Post("/social/posts", handleCreatePost(svc, names, members))
+			r.Delete("/social/posts/{id}", handleDeletePost(svc, members))
 
-			r.Post("/social/posts/{id}/like", handleLike(svc))
-			r.Delete("/social/posts/{id}/like", handleUnlike(svc))
+			r.Post("/social/posts/{id}/like", handleLike(svc, members))
+			r.Delete("/social/posts/{id}/like", handleUnlike(svc, members))
 
 			r.Get("/social/posts/{id}/comments", handleComments(svc))
-			r.Post("/social/posts/{id}/comments", handleAddComment(svc, names))
+			r.Post("/social/posts/{id}/comments", handleAddComment(svc, names, members))
+			r.Delete("/social/posts/{id}/comments/{commentId}", handleDeleteComment(svc, members))
 
-			r.Post("/social/posts/{id}/report", handleReportPost(svc))
+			r.Post("/social/posts/{id}/report", handleReportPost(svc, members))
 
 			// --- what a moderator does ---
 			r.With(requirePermission(rbac.ResourceSocial, rbac.ActionRead)).
@@ -65,12 +68,16 @@ func socialRoutes(d *deps.Deps) routeSet {
 // The name is looked up rather than taken from the request, because a client
 // that supplies its own display name can post as somebody else — and on a
 // church feed, a post appearing under the pastor's name is the whole attack.
-func authorFrom(r *http.Request, names *memberNames) (social.Author, error) {
+func authorFrom(r *http.Request, names *memberNames, members memberAccountResolver) (social.Author, error) {
 	scope, err := callerScope(r)
 	if err != nil {
 		return social.Author{}, err
 	}
-	author := social.Author{ID: scope.UserID}
+	linked, err := members.ByUserID(r.Context(), scope.UserID)
+	if err != nil || linked == nil || linked.ID.IsZero() {
+		return social.Author{}, member.ErrNotFound
+	}
+	author := social.Author{ID: linked.ID.Hex(), Name: linked.FullName()}
 	if name, avatar := names.lookup(r.Context(), scope.UserID); name != "" {
 		author.Name, author.AvatarURL = name, avatar
 	}
@@ -84,7 +91,7 @@ func paging(r *http.Request) (page, limit int) {
 	return page, limit
 }
 
-func handleFeed(svc *social.Service) http.HandlerFunc {
+func handleFeed(svc *social.Service, members memberAccountResolver) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		scope, err := callerScope(r)
 		if err != nil {
@@ -92,7 +99,12 @@ func handleFeed(svc *social.Service) http.HandlerFunc {
 			return
 		}
 		page, limit := paging(r)
-		posts, total, err := svc.Feed(r.Context(), scope.UserID, page, limit)
+		memberID, err := memberIDForUser(r.Context(), members, scope.UserID)
+		if err != nil {
+			writeSocialError(w, err)
+			return
+		}
+		posts, total, err := svc.Feed(r.Context(), memberID, page, limit)
 		if err != nil {
 			writeSocialError(w, err)
 			return
@@ -105,14 +117,19 @@ func handleFeed(svc *social.Service) http.HandlerFunc {
 	}
 }
 
-func handleGetPost(svc *social.Service) http.HandlerFunc {
+func handleGetPost(svc *social.Service, members memberAccountResolver) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		scope, err := callerScope(r)
 		if err != nil {
 			writeSocialError(w, err)
 			return
 		}
-		post, err := svc.PostByID(r.Context(), chi.URLParam(r, "id"), scope.UserID)
+		memberID, err := memberIDForUser(r.Context(), members, scope.UserID)
+		if err != nil {
+			writeSocialError(w, err)
+			return
+		}
+		post, err := svc.PostByID(r.Context(), chi.URLParam(r, "id"), memberID)
 		if err != nil {
 			writeSocialError(w, err)
 			return
@@ -127,7 +144,7 @@ func handleGetPost(svc *social.Service) http.HandlerFunc {
 	}
 }
 
-func handleCreatePost(svc *social.Service, names *memberNames) http.HandlerFunc {
+func handleCreatePost(svc *social.Service, names *memberNames, members memberAccountResolver) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
 			Content  string `json:"content"`
@@ -138,7 +155,7 @@ func handleCreatePost(svc *social.Service, names *memberNames) http.HandlerFunc 
 			httpx.Error(w, http.StatusBadRequest, "Malformed request body")
 			return
 		}
-		author, err := authorFrom(r, names)
+		author, err := authorFrom(r, names, members)
 		if err != nil {
 			writeSocialError(w, err)
 			return
@@ -158,14 +175,19 @@ func handleCreatePost(svc *social.Service, names *memberNames) http.HandlerFunc 
 	}
 }
 
-func handleDeletePost(svc *social.Service) http.HandlerFunc {
+func handleDeletePost(svc *social.Service, members memberAccountResolver) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		scope, err := callerScope(r)
 		if err != nil {
 			writeSocialError(w, err)
 			return
 		}
-		err = svc.DeletePost(r.Context(), chi.URLParam(r, "id"), scope.UserID,
+		memberID, err := memberIDForUser(r.Context(), members, scope.UserID)
+		if err != nil {
+			writeSocialError(w, err)
+			return
+		}
+		err = svc.DeletePost(r.Context(), chi.URLParam(r, "id"), memberID,
 			Can(r, rbac.ResourceSocial, rbac.ActionUpdate))
 		if err != nil {
 			writeSocialError(w, err)
@@ -175,14 +197,19 @@ func handleDeletePost(svc *social.Service) http.HandlerFunc {
 	}
 }
 
-func handleLike(svc *social.Service) http.HandlerFunc {
+func handleLike(svc *social.Service, members memberAccountResolver) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		scope, err := callerScope(r)
 		if err != nil {
 			writeSocialError(w, err)
 			return
 		}
-		count, err := svc.Like(r.Context(), chi.URLParam(r, "id"), scope.UserID)
+		memberID, err := memberIDForUser(r.Context(), members, scope.UserID)
+		if err != nil {
+			writeSocialError(w, err)
+			return
+		}
+		count, err := svc.Like(r.Context(), chi.URLParam(r, "id"), memberID)
 		if err != nil {
 			writeSocialError(w, err)
 			return
@@ -191,14 +218,19 @@ func handleLike(svc *social.Service) http.HandlerFunc {
 	}
 }
 
-func handleUnlike(svc *social.Service) http.HandlerFunc {
+func handleUnlike(svc *social.Service, members memberAccountResolver) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		scope, err := callerScope(r)
 		if err != nil {
 			writeSocialError(w, err)
 			return
 		}
-		count, err := svc.Unlike(r.Context(), chi.URLParam(r, "id"), scope.UserID)
+		memberID, err := memberIDForUser(r.Context(), members, scope.UserID)
+		if err != nil {
+			writeSocialError(w, err)
+			return
+		}
+		count, err := svc.Unlike(r.Context(), chi.URLParam(r, "id"), memberID)
 		if err != nil {
 			writeSocialError(w, err)
 			return
@@ -210,7 +242,8 @@ func handleUnlike(svc *social.Service) http.HandlerFunc {
 func handleComments(svc *social.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		page, limit := paging(r)
-		comments, total, err := svc.Comments(r.Context(), chi.URLParam(r, "id"), page, limit)
+		comments, total, err := svc.Comments(r.Context(), chi.URLParam(r, "id"), page, limit,
+			Can(r, rbac.ResourceSocial, rbac.ActionRead))
 		if err != nil {
 			writeSocialError(w, err)
 			return
@@ -219,7 +252,7 @@ func handleComments(svc *social.Service) http.HandlerFunc {
 	}
 }
 
-func handleAddComment(svc *social.Service, names *memberNames) http.HandlerFunc {
+func handleAddComment(svc *social.Service, names *memberNames, members memberAccountResolver) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
 			Content string `json:"content"`
@@ -228,7 +261,7 @@ func handleAddComment(svc *social.Service, names *memberNames) http.HandlerFunc 
 			httpx.Error(w, http.StatusBadRequest, "Malformed request body")
 			return
 		}
-		author, err := authorFrom(r, names)
+		author, err := authorFrom(r, names, members)
 		if err != nil {
 			writeSocialError(w, err)
 			return
@@ -242,7 +275,28 @@ func handleAddComment(svc *social.Service, names *memberNames) http.HandlerFunc 
 	}
 }
 
-func handleReportPost(svc *social.Service) http.HandlerFunc {
+func handleDeleteComment(svc *social.Service, members memberAccountResolver) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		scope, err := callerScope(r)
+		if err != nil {
+			writeSocialError(w, err)
+			return
+		}
+		memberID, err := memberIDForUser(r.Context(), members, scope.UserID)
+		if err != nil {
+			writeSocialError(w, err)
+			return
+		}
+		if err := svc.DeleteComment(r.Context(), chi.URLParam(r, "commentId"), memberID,
+			Can(r, rbac.ResourceSocial, rbac.ActionUpdate)); err != nil {
+			writeSocialError(w, err)
+			return
+		}
+		httpx.JSON(w, http.StatusOK, map[string]any{"deleted": true})
+	}
+}
+
+func handleReportPost(svc *social.Service, members memberAccountResolver) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
 			Reason string `json:"reason"`
@@ -257,10 +311,15 @@ func handleReportPost(svc *social.Service) http.HandlerFunc {
 			writeSocialError(w, err)
 			return
 		}
+		memberID, err := memberIDForUser(r.Context(), members, scope.UserID)
+		if err != nil {
+			writeSocialError(w, err)
+			return
+		}
 
 		report, err := svc.Report(r.Context(), social.ReportInput{
 			PostID:     chi.URLParam(r, "id"),
-			ReporterID: scope.UserID,
+			ReporterID: memberID,
 			Reason:     social.ReportReason(body.Reason),
 			Detail:     body.Detail,
 		})
@@ -330,6 +389,8 @@ func handleModerate(svc *social.Service) http.HandlerFunc {
 // writeSocialError maps a domain error onto a status and a sentence.
 func writeSocialError(w http.ResponseWriter, err error) {
 	switch {
+	case errors.Is(err, member.ErrNotFound):
+		httpx.Error(w, http.StatusConflict, "Your account is not linked to a member record yet.")
 	case errors.Is(err, social.ErrPostNotFound):
 		httpx.Error(w, http.StatusNotFound, "That post does not exist.")
 	case errors.Is(err, social.ErrCommentNotFound):

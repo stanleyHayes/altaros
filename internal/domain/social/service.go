@@ -390,15 +390,33 @@ func (s *Service) Comment(ctx context.Context, postID string, author Author, bod
 
 // Comments returns a post's replies, oldest first — the order a conversation
 // reads in.
-func (s *Service) Comments(ctx context.Context, postID string, page, limit int) ([]Comment, int64, error) {
-	oid, _, err := s.readablePost(ctx, postID)
+//
+// # Gated on the POST's visibility, which the first cut of this was not
+//
+// Hiding a post used to take it off the feed and return 404 by id while
+// leaving this endpoint serving the entire thread to anybody holding the id —
+// which everybody who saw the post before it was hidden does. So the dispute a
+// moderator hid stayed readable underneath it. Moderation you can walk around
+// is not moderation.
+//
+// A moderator still reads it, because deciding what to do about a thread
+// requires reading the thread.
+func (s *Service) Comments(ctx context.Context, postID string, page, limit int, canModerate bool) ([]Comment, int64, error) {
+	oid, post, err := s.readablePost(ctx, postID)
 	if err != nil {
 		return nil, 0, err
 	}
+	if !post.Status.OnFeed() && !canModerate {
+		return nil, 0, ErrPostNotFound
+	}
 	skip, take := pageOf(page, limit)
 
+	// Not "status is visible": comments written before the field existed have
+	// no status at all, and $ne matches a missing field.
+	filter := bson.M{"postId": oid, "status": bson.M{"$ne": string(StatusRemoved)}}
+
 	var out []Comment
-	err = s.comments.Find(ctx, bson.M{"postId": oid}, &out,
+	err = s.comments.Find(ctx, filter, &out,
 		options.Find().
 			SetSort(bson.D{{Key: "createdAt", Value: 1}}).
 			SetSkip(int64(skip)).SetLimit(int64(take)))
@@ -406,7 +424,7 @@ func (s *Service) Comments(ctx context.Context, postID string, page, limit int) 
 		return nil, 0, fmt.Errorf("social: read comments: %w", err)
 	}
 
-	total, err := s.comments.CountDocuments(ctx, bson.M{"postId": oid})
+	total, err := s.comments.CountDocuments(ctx, filter)
 	if err != nil {
 		return nil, 0, fmt.Errorf("social: count comments: %w", err)
 	}
@@ -414,6 +432,69 @@ func (s *Service) Comments(ctx context.Context, postID string, page, limit int) 
 		out = []Comment{}
 	}
 	return out, total, nil
+}
+
+// DeleteComment removes one reply.
+//
+// The author's own, or anybody's for a moderator — the same rule as posts.
+// Marked removed rather than deleted, again for the same reason: a church that
+// took something down needs to be able to say what it took down and who
+// decided, and deleting the evidence of a moderation decision is how a church
+// loses the argument about whether it was fair.
+func (s *Service) DeleteComment(ctx context.Context, commentID, actorID string, canModerate bool) error {
+	oid, err := bson.ObjectIDFromHex(strings.TrimSpace(commentID))
+	if err != nil {
+		return ErrCommentNotFound
+	}
+
+	var comment Comment
+	err = s.comments.FindOne(ctx, bson.M{"_id": oid}, &comment)
+	if errors.Is(err, mongo.ErrNoDocuments) {
+		return ErrCommentNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("social: read comment: %w", err)
+	}
+	if comment.Status == StatusRemoved {
+		return ErrCommentNotFound
+	}
+	if !canModerate && comment.AuthorID.String() != actorID {
+		// Same error as "no such comment" — see ErrCommentNotFound.
+		return ErrCommentNotFound
+	}
+
+	now := s.now()
+	// Conditional on it still being present, so two taps decrement once.
+	res, err := s.comments.UpdateOne(ctx,
+		bson.M{"_id": oid, "status": bson.M{"$ne": string(StatusRemoved)}},
+		bson.M{"$set": bson.M{
+			"status":      string(StatusRemoved),
+			"moderatedBy": mongodb.ID(actorID),
+			"moderatedAt": now,
+			"updatedAt":   now,
+		}})
+	if err != nil {
+		return fmt.Errorf("social: remove comment: %w", err)
+	}
+	if res.ModifiedCount == 0 {
+		return ErrCommentNotFound
+	}
+
+	postOID, err := comment.PostID.ObjectID()
+	if err != nil {
+		// The comment is removed either way; a post id that will not parse is
+		// a data problem, not a reason to leave the comment standing.
+		return nil
+	}
+	// The count is what the feed renders, so it has to follow. Guarded against
+	// going negative by the $gt: it only runs on a real removal.
+	if _, err := s.posts.UpdateOne(ctx,
+		bson.M{"_id": postOID, "commentsCount": bson.M{"$gt": 0}},
+		bson.M{"$inc": bson.M{"commentsCount": -1}, "$set": bson.M{"updatedAt": now}},
+	); err != nil {
+		return fmt.Errorf("social: decrement comments: %w", err)
+	}
+	return nil
 }
 
 // DeletePost removes a member's own post.
