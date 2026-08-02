@@ -467,7 +467,7 @@ func (s *Service) RSVPs(ctx context.Context, eventID string) ([]RSVP, error) {
 	if err != nil {
 		return nil, err
 	}
-	var out []RSVP
+	out := []RSVP{}
 	err = s.rsvps.Find(ctx, bson.M{"eventId": found.ID}, &out,
 		options.Find().SetSort(bson.D{{Key: "respondedAt", Value: 1}}))
 	if err != nil {
@@ -475,6 +475,33 @@ func (s *Service) RSVPs(ctx context.Context, eventID string) ([]RSVP, error) {
 	}
 	if out == nil {
 		out = []RSVP{}
+	}
+	return out, nil
+}
+
+// MemberRSVPs returns one member's answers for a bounded set of events. This
+// powers the mobile calendar without exposing the full attendee list.
+func (s *Service) MemberRSVPs(ctx context.Context, memberID string, eventIDs []string) ([]RSVP, error) {
+	if strings.TrimSpace(memberID) == "" {
+		return nil, ErrMemberRequired
+	}
+	if len(eventIDs) == 0 {
+		return []RSVP{}, nil
+	}
+	if len(eventIDs) > 50 {
+		return nil, ErrNotFound
+	}
+	oids := make([]bson.ObjectID, 0, len(eventIDs))
+	for _, id := range eventIDs {
+		oid, err := bson.ObjectIDFromHex(id)
+		if err != nil {
+			return nil, ErrNotFound
+		}
+		oids = append(oids, oid)
+	}
+	out := []RSVP{}
+	if err := s.rsvps.Find(ctx, bson.M{"memberId": memberID, "eventId": bson.M{"$in": oids}}, &out); err != nil {
+		return nil, fmt.Errorf("event: list member rsvps: %w", err)
 	}
 	return out, nil
 }
@@ -868,6 +895,43 @@ func (s *Service) Upcoming(ctx context.Context, limit int) ([]Occurrence, error)
 		out = out[:limit]
 	}
 	return out, nil
+}
+
+// Occurs reports whether an event actually happens at a given moment.
+//
+// Exported because a rota assignment, a check-in and anything else that hangs
+// off a specific staging of a service needs to be able to ask. Without it a
+// mistyped date creates a record for a service that does not exist — a rota for
+// "Sunday Service at Wednesday 18:30" — and nobody finds out until the morning
+// nobody turns up.
+//
+// A tolerance is allowed because a caller may have the occurrence from a
+// listing that rounded it, and refusing a rota over a few seconds of drift
+// would be worse than the problem being solved.
+func (e *Event) Occurs(at time.Time) bool {
+	if e == nil {
+		return false
+	}
+	const tolerance = time.Minute
+
+	at = at.UTC()
+	if !e.IsRecurring || e.RecurrenceRule == "" {
+		return absDuration(at.Sub(e.StartDate.UTC())) <= tolerance
+	}
+	rule, err := ParseRecurrence(e.RecurrenceRule)
+	if err != nil {
+		// A rule that cannot be parsed cannot be checked against. Allowing the
+		// assignment is the safer failure: the alternative refuses every rota
+		// for an event whose rule predates the validation.
+		return true
+	}
+	for _, candidate := range rule.Occurrences(e.StartDate.UTC(),
+		at.Add(-tolerance), at.Add(tolerance), 4) {
+		if absDuration(at.Sub(candidate)) <= tolerance {
+			return true
+		}
+	}
+	return false
 }
 
 // occurrencesOf expands one event within a window.
