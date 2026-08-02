@@ -1350,9 +1350,20 @@ Service-team scheduling, availability, swap requests, reminders. This is Plannin
 
 **A note on method.** One mutation in this package appeared to pass and did not: the harness silently failed to apply the edit. A mutation that changes nothing proves nothing, which is the same trap as a fixture agreeing with a bug (R-27, R-29). Re-applied properly, removing the swap guard produces "6 volunteers took the same slot".
 
-**WP-34 · Discipleship / follow-up pipeline** ⬜ (§8.8, **not in PDF**) — Depends on: WP-12, WP-30
+**WP-34 · Discipleship / follow-up pipeline** 🟡 (§8.8, **not in PDF**) — Depends on: WP-12, WP-30
 First-timer → new convert → member journey with stages, assigned follow-up owners, and AI-suggested actions from WP-30.
 **Done when:** a first-timer recorded on Sunday generates an assigned follow-up task with an SLA and escalates if untouched.
+**Status — 2 Aug 2026.** `internal/domain/discipleship`, mounted at `/discipleship`, with an escalation sweeper in the gateway. The criterion is met and verified over HTTP: a first-timer backdated to last Sunday produced "Call this week's first-time visitor", assigned to the named leader, due 48 hours later; the sweeper escalated it on boot (`follow-up escalated tasks=1 churches=1`); touching it stopped further escalation; closing with an empty outcome returned 400. **🟡 rather than ✅ because the AI-suggested actions are absent** — WP-30 is not built, and that half is an addition to this pipeline rather than a prerequisite: a church whose follow-up is assigned, timed and escalated is doing follow-up with or without a model suggesting what to say.
+
+**Recording the stage and creating the task are ONE operation.** A design where the task is a separate call somebody has to remember IS the drawer the visitor card goes into — which is the failure this exists to prevent, and the one every church knows happens and cannot quantify.
+
+**"Untouched" is deliberately weaker than "unfinished".** A volunteer who rang on Tuesday and got no answer has done their part; escalating over their head teaches them the system is noise. Escalation happens exactly once — a fresh alert every sweep until somebody mutes it is worse than no alert — and the escalating update is conditional on the task still being open, so replicas sweeping together cannot double it.
+
+**Nine mutants, all caught. The one that survived the first pass was the interesting one.** Dropping the status filter from the escalation query changes no outcome, because a closed task always carries `firstTouchedAt` and is excluded anyway. What it changes is that every ALREADY-ESCALATED task is rescanned every sweep — they keep a past deadline and stay untouched — so a church accumulating them spends its whole bounded per-sweep budget on work it has already actioned and never reaches the visitor recorded this morning. Silent starvation: nothing errors, the sweeper just stops getting to new people. The test now sweeps twice and asserts the second finds nothing to examine.
+
+**The sweeper runs once at startup, not only on the ticker.** At a 15-minute interval a pod restarting more often than that never swept at all, and the symptom would have been silence rather than an error.
+
+**A closing outcome is required, and "unreachable" is one of them.** A closed task with no outcome is a tick somebody made to clear their list and tells the next person nothing; without an unreachable status a church either marks a wrong number "done" (a lie) or leaves it open forever (noise that buries the real work).
 
 ### Phase 4 — Hardening & launch
 >
