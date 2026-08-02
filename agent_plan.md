@@ -1244,9 +1244,20 @@ What made it fast was a **covering index** (`church_giving_covering`), not a rol
 - A **partial final bucket** compared against whole ones reported a **48% collapse in giving** in the first week of a month. The last bucket is now flagged `partial` and excluded from the change figure.
 - **Attendance was counted over a different population than members**, reporting "200 of 192 attended". Every engagement figure is now restricted to the same countable congregation, and `drifting` is computed over a union rather than by adding two counts — somebody who both attended and gave is one person.
 
-**WP-26 · Campaigns & project management** ⬜ (PDF §6.5) — Depends on: WP-14
+**WP-26 · Campaigns & project management** ✅ (PDF §6.5) — Depends on: WP-14
 Fundraising campaigns, donation tracking, progress, **pledges** (pledge → schedule → fulfilment tracking; §8.2).
 **Done when:** a pledge of GHS 1,000 over 10 months tracks partial fulfilment and flags arrears.
+**Status — 2 Aug 2026.** `internal/domain/finance/pledge.go`, mounted at `/finance/pledges`. Verified over HTTP against the criterion exactly: GHS 1,000 over 10 monthly instalments from a start date six months back reads `due 70000 / paid 0 / arrears 70000 / behind true`; after three instalments through the real giving path, `paid 30000 / arrears 40000 / percent 30`; the behind-list returns that member and no one else.
+
+**Fulfilment is derived, never stored** — the same rule as campaign totals and attendance counts, and for the same reason: a stored "paid so far" drifts the moment a gift is refunded or a webhook replays, and a member told they are behind when they are not is the version of that bug that actually costs something. Three stored counters were removed earlier this build for exactly this.
+
+**A pledge is not a debt, and the model says so.** Arrears are computed for the CHURCH to follow up pastorally; nothing here sends a demand. The flag is `behind`, not "overdue" — the word a product uses shapes how a church treats the person. `ArrearsMinor` and `AheadMinor` are separate fields rather than one signed balance, because a church scanning a list needs to see at a glance which it is, and a completed pledge is never behind however late the last instalment arrived.
+
+**The schedule had a real defect, found by reading `nextDueAt` during the HTTP walkthrough rather than by a test.** Go's `AddDate` normalises rather than clamps: 31 January plus one month is 31 February, which becomes **3 March**. February was skipped outright, so a member who missed it still read as up to date on the 1st, and the schedule drifted a day forward every short month. People pledge on the last Sunday of the month, so this was the common case, not an exotic one. `addMonthsClamped` holds the day where the target month is long enough and falls back to its last day where it is not.
+
+**Twelve mutants, all caught — but two survived the first pass, and both were real gaps rather than test artefacts.** Every fixture used a non-hex member id, so the ADR-005 branch matching the ObjectId storage form never executed — precisely the shape of the consent bug (R-27), and left alone it would have halved a real member's recorded giving and reported a faithful giver as being in arrears. And no fixture recorded an expense against a member, so dropping the `direction` filter went unnoticed: a welfare disbursement paid TO somebody would have counted as their giving. Both now have tests, and both mutants die.
+
+**Stated limitation, not hidden:** giving is matched to a pledge by member and campaign, because people do not tag their gifts with a pledge id. A member holding two pledges against the same campaign therefore has their giving counted towards both. The alternative — requiring a reference — produces a tracker that shows every faithful giver in arrears, which is worse.
 
 **WP-27 · Welfare system** ✅ (PDF §5.7) — Depends on: WP-12, WP-08
 Assistance requests, emergency alerts, volunteer matching. **Encrypted at rest, separate key, strict pastoral ACL, excluded from analytics** (§3.4(3)).
