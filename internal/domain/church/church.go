@@ -122,6 +122,20 @@ type Church struct {
 	// A plain int64 would make the two identical and quietly bill the partner.
 	CommissionBasisPoints *int64 `bson:"commissionBasisPoints,omitempty" json:"commissionBasisPoints,omitempty"`
 
+	// SelfSignupEnabled controls whether people may create their own account
+	// in this church's workspace (Q-10, answered 2 Aug 2026: allowed).
+	//
+	// A POINTER, because absent and false are different answers and the
+	// default is TRUE. Every church that predates this field has it absent, and
+	// a plain bool would read those as false and close registration for the
+	// whole platform in one deploy.
+	//
+	// This is R-17's kill switch. Open signup on a subdomain means anyone can
+	// create an account inside a church's workspace; the blast radius is
+	// bounded by ADR-008 — a new account gets the `member` role and nothing
+	// else — but a church being targeted needs a door it can close.
+	SelfSignupEnabled *bool `bson:"selfSignupEnabled,omitempty" json:"selfSignupEnabled,omitempty"`
+
 	IsActive  bool      `bson:"isActive"                 json:"isActive"`
 	CreatedAt time.Time `bson:"createdAt"                json:"createdAt"`
 	UpdatedAt time.Time `bson:"updatedAt"                json:"updatedAt"`
@@ -311,6 +325,48 @@ func (s *Service) CanAccessChurch(ctx context.Context, churchID string) error {
 		}
 	}
 	return ErrForbidden
+}
+
+// SelfSignupOpen reports whether people may register themselves here.
+//
+// Absent means open: self-signup is allowed by default (Q-10), and the setting
+// exists to close it rather than to open it.
+func (c *Church) SelfSignupOpen() bool {
+	return c == nil || c.SelfSignupEnabled == nil || *c.SelfSignupEnabled
+}
+
+// RegistrationSettings controls who may create an account in this workspace.
+type RegistrationSettings struct {
+	// SelfSignupEnabled turns self-registration on or off. Nil leaves it.
+	SelfSignupEnabled *bool
+}
+
+// SetRegistrationSettings updates who may join this church.
+func (s *Service) SetRegistrationSettings(ctx context.Context, churchID string, in RegistrationSettings) (*Church, error) {
+	if err := s.CanAccessChurch(ctx, churchID); err != nil {
+		return nil, err
+	}
+	oid, err := bson.ObjectIDFromHex(churchID)
+	if err != nil {
+		return nil, ErrNotFound
+	}
+	if in.SelfSignupEnabled == nil {
+		return s.ByID(ctx, churchID)
+	}
+
+	// Written explicitly in BOTH directions rather than unset-when-true. The
+	// difference between "never chose" and "chose the default" is invisible in
+	// the data otherwise, and a church that deliberately turned signup back on
+	// should stay on if the platform default ever changes.
+	if _, err := s.churches.UpdateOne(ctx, bson.M{"_id": oid}, bson.M{
+		"$set": bson.M{
+			"selfSignupEnabled": *in.SelfSignupEnabled,
+			"updatedAt":         time.Now().UTC(),
+		},
+	}); err != nil {
+		return nil, fmt.Errorf("church: update registration settings: %w", err)
+	}
+	return s.ByID(ctx, churchID)
 }
 
 // GivingSettings is the part of a church's configuration that decides what a

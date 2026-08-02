@@ -353,6 +353,14 @@ func writeAuthError(w http.ResponseWriter, err error) {
 	case errors.Is(err, auth.ErrChurchUnavailable):
 		httpx.Error(w, http.StatusNotFound, "That church is not available for registration.")
 
+	case errors.Is(err, auth.ErrSelfSignupClosed):
+		// 403, not 404. The church exists and can be found — it simply is not
+		// taking self-registrations, and the person needs to be told what to do
+		// instead rather than left thinking they have the wrong address.
+		httpx.Error(w, http.StatusForbidden,
+			"This church adds members by invitation. Ask your church office to "+
+				"send you one.")
+
 	case errors.Is(err, auth.ErrAccountExists):
 		httpx.Error(w, http.StatusConflict, "An account with those details already exists.")
 

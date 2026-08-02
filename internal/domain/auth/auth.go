@@ -63,6 +63,10 @@ var (
 	ErrAccountExists       = errors.New("auth: account already exists")
 	ErrRegistrationInvalid = errors.New("auth: registration details are invalid")
 	ErrChurchUnavailable   = errors.New("auth: church is unavailable")
+	// ErrSelfSignupClosed means the church has turned off self-registration
+	// (Q-10 / R-17). Distinct from ErrChurchUnavailable so the person is told
+	// to ask for an invitation rather than that the church does not exist.
+	ErrSelfSignupClosed = errors.New("auth: this church is not accepting self-registration")
 )
 
 // User is an account. Users are global rather than tenant-scoped: the church
@@ -83,7 +87,15 @@ type User struct {
 	IsActive                  bool       `bson:"isActive"         json:"isActive"`
 	PhoneVerified             bool       `bson:"phoneVerified"    json:"phoneVerified"`
 	PhoneVerificationRequired bool       `bson:"phoneVerificationRequired,omitempty" json:"phoneVerificationRequired,omitempty"`
-	CreatedAt                 time.Time  `bson:"createdAt"        json:"createdAt"`
+	// SelfRegistered marks an account somebody created for themselves rather
+	// than one the church added or invited (Q-10, R-17).
+	//
+	// Recorded because the two are otherwise indistinguishable, and a church
+	// looking at a name it does not recognise needs to know which it is
+	// looking at. It grants nothing and withholds nothing — the role does that
+	// — but it is the difference between "who is this" and "who let them in".
+	SelfRegistered bool      `bson:"selfRegistered,omitempty" json:"selfRegistered,omitempty"`
+	CreatedAt      time.Time `bson:"createdAt"        json:"createdAt"`
 	UpdatedAt                 time.Time  `bson:"updatedAt"        json:"updatedAt"`
 }
 
@@ -203,12 +215,23 @@ func (s *Service) Register(ctx context.Context, req RegisterRequest) (*User, err
 	}
 	var church struct {
 		IsActive bool `bson:"isActive"`
+		// A POINTER, because absent and false are different answers. Q-10
+		// makes self-signup allowed by DEFAULT, so a church that predates the
+		// setting — every church today — must read as open rather than closed.
+		// A plain bool would close registration for all of them at once.
+		SelfSignupEnabled *bool `bson:"selfSignupEnabled"`
 	}
 	if err := s.churches.FindOne(ctx, bson.M{"_id": churchID, "isActive": true}).Decode(&church); err != nil {
 		if errors.Is(err, mongo.ErrNoDocuments) {
 			return nil, ErrChurchUnavailable
 		}
 		return nil, fmt.Errorf("auth: lookup registration church: %w", err)
+	}
+	// The kill switch (R-17). Self-signup is open by default, but a church
+	// being targeted — or one that simply wants an invitation-only workspace —
+	// can close it, and then this is the only door.
+	if church.SelfSignupEnabled != nil && !*church.SelfSignupEnabled {
+		return nil, ErrSelfSignupClosed
 	}
 
 	// Scoped to the church being joined (WP-35). A global check here is what
@@ -246,6 +269,7 @@ func (s *Service) Register(ctx context.Context, req RegisterRequest) (*User, err
 		IsActive:                  true,
 		PhoneVerified:             false,
 		PhoneVerificationRequired: true,
+		SelfRegistered:            true,
 		CreatedAt:                 now,
 		UpdatedAt:                 now,
 	}

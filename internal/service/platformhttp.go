@@ -35,6 +35,10 @@ func buildPlatform(d *deps.Deps) http.Handler { return standalone(platformRoutes
 func platformRoutes(d *deps.Deps) routeSet {
 	settings := platformsetting.NewService(d.Mongo)
 	churches := church.NewService(d.Mongo)
+	baseDomain := ""
+	if d.Config != nil {
+		baseDomain = d.Config.PublicBaseDomain
+	}
 
 	return func(r chi.Router) {
 		r.Group(func(r chi.Router) {
@@ -52,6 +56,11 @@ func platformRoutes(d *deps.Deps) routeSet {
 				Get("/church/giving-settings", handleGetGivingSettings(churches, settings))
 			r.With(requirePermission(rbac.ResourceSettings, rbac.ActionUpdate)).
 				Put("/church/giving-settings", handleSetGivingSettings(churches, settings))
+
+			r.With(requirePermission(rbac.ResourceSettings, rbac.ActionRead)).
+				Get("/church/registration-settings", handleGetRegistrationSettings(churches, baseDomain))
+			r.With(requirePermission(rbac.ResourceSettings, rbac.ActionUpdate)).
+				Put("/church/registration-settings", handleSetRegistrationSettings(churches, baseDomain))
 		})
 	}
 }
@@ -253,6 +262,83 @@ func handleSetGivingSettings(churches *church.Service, settings *platformsetting
 			return
 		}
 		httpx.JSON(w, http.StatusOK, givingSettingsFor(updated, current))
+	}
+}
+
+// registrationSettingsView is what a church sees about who may join it.
+//
+// It states the RISK alongside the setting rather than leaving it to
+// documentation, because the person deciding is a church administrator and the
+// question — "should anyone be able to make an account here?" — has a
+// non-obvious answer that depends on what an account actually grants.
+type registrationSettingsView struct {
+	SelfSignupEnabled bool   `json:"selfSignupEnabled"`
+	Explanation       string `json:"explanation"`
+	// JoinURL is where a self-registering member goes. Returned because the
+	// first thing a church asks after turning this on is where to send people.
+	JoinURL string `json:"joinUrl,omitempty"`
+}
+
+func registrationSettingsFor(ch *church.Church, baseDomain string) registrationSettingsView {
+	view := registrationSettingsView{SelfSignupEnabled: ch.SelfSignupOpen()}
+
+	if view.SelfSignupEnabled {
+		view.Explanation = "Anyone with your church's address can create an " +
+			"account. New accounts can see your events and prayer wall — nothing " +
+			"about members, giving or settings — and must confirm their phone " +
+			"number before they can sign in. Turn this off to add people by " +
+			"invitation only."
+		if baseDomain != "" && ch.Slug != "" {
+			view.JoinURL = "https://" + ch.Slug + "." + baseDomain + "/register"
+		}
+	} else {
+		view.Explanation = "Only people you invite can create an account. " +
+			"Anyone else trying to register is told to ask your office for an " +
+			"invitation."
+	}
+	return view
+}
+
+func handleGetRegistrationSettings(churches *church.Service, baseDomain string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		scope, err := callerScope(r)
+		if err != nil {
+			httpx.Error(w, http.StatusUnauthorized, "Sign in to continue.")
+			return
+		}
+		ch, err := churches.ByID(r.Context(), scope.ChurchID)
+		if err != nil {
+			writePlatformError(w, err)
+			return
+		}
+		httpx.JSON(w, http.StatusOK, registrationSettingsFor(ch, baseDomain))
+	}
+}
+
+func handleSetRegistrationSettings(churches *church.Service, baseDomain string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			// A pointer so an omitted field leaves the setting alone rather
+			// than silently closing registration.
+			SelfSignupEnabled *bool `json:"selfSignupEnabled"`
+		}
+		if err := decode(r, &body); err != nil {
+			httpx.Error(w, http.StatusBadRequest, "Malformed request body")
+			return
+		}
+		scope, err := callerScope(r)
+		if err != nil {
+			httpx.Error(w, http.StatusUnauthorized, "Sign in to continue.")
+			return
+		}
+
+		updated, err := churches.SetRegistrationSettings(r.Context(), scope.ChurchID,
+			church.RegistrationSettings{SelfSignupEnabled: body.SelfSignupEnabled})
+		if err != nil {
+			writePlatformError(w, err)
+			return
+		}
+		httpx.JSON(w, http.StatusOK, registrationSettingsFor(updated, baseDomain))
 	}
 }
 
