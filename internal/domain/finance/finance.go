@@ -130,6 +130,14 @@ func (s *Service) EnsureIndexes(ctx context.Context) error {
 			},
 			Options: options.Index().SetName("church_member_occurred"),
 		},
+		{
+			Keys: bson.D{
+				{Key: mongodb.TenantField, Value: 1},
+				{Key: "initiatedBy", Value: 1},
+				{Key: "occurredAt", Value: -1},
+			},
+			Options: options.Index().SetName("church_initiator_occurred"),
+		},
 	})
 	if err != nil {
 		return fmt.Errorf("finance: create indexes: %w", err)
@@ -141,9 +149,12 @@ func (s *Service) EnsureIndexes(ctx context.Context) error {
 type GiveRequest struct {
 	// MemberID is optional. Anonymous giving must stay possible.
 	MemberID string
-	Type     Type
-	Amount   money.Amount
-	Channel  string
+	// InitiatorID is the authenticated account starting the checkout. It stays
+	// private even when MemberID is omitted for an anonymous church record.
+	InitiatorID string
+	Type        Type
+	Amount      money.Amount
+	Channel     string
 	// Email receives the provider's receipt.
 	Email string
 	// PriorTodayMinor is what this giver has already transferred today, used
@@ -243,6 +254,9 @@ func (s *Service) StartGiving(ctx context.Context, req GiveRequest) (*GiveResult
 	}
 	if req.MemberID != "" {
 		doc["memberId"] = req.MemberID
+	}
+	if req.InitiatorID != "" {
+		doc["initiatedBy"] = req.InitiatorID
 	}
 	if req.CampaignID != "" {
 		doc["campaignId"] = req.CampaignID
@@ -435,7 +449,7 @@ func (s *Service) settle(ctx context.Context, stored *Transaction) (*Transaction
 		_ = s.pub.Publish(ctx, TopicGivingCompleted, settled.ID.Hex(), map[string]any{
 			"transactionId": settled.ID.Hex(),
 			"churchId":      settled.ChurchID.String(),
-			"memberId":      settled.MemberID.String(),
+			"memberId":      receiptMemberID(settled),
 			"type":          string(settled.Type),
 			"channel":       settled.Channel,
 			"grossMinor":    settled.GrossMinor,
@@ -471,11 +485,18 @@ func (s *Service) markFailed(ctx context.Context, stored *Transaction, reason st
 		_ = s.pub.Publish(ctx, TopicGivingFailed, failed.ID.Hex(), map[string]any{
 			"transactionId": failed.ID.Hex(),
 			"churchId":      failed.ChurchID.String(),
-			"memberId":      failed.MemberID.String(),
+			"memberId":      receiptMemberID(failed),
 			"reason":        reason,
 		})
 	}
 	return failed, nil
+}
+
+func receiptMemberID(tx *Transaction) string {
+	if tx.InitiatedBy.String() != "" {
+		return tx.InitiatedBy.String()
+	}
+	return tx.MemberID.String()
 }
 
 // markFailedBestEffort is used on the initialise path, where the caller is

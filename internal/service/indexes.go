@@ -14,6 +14,7 @@ import (
 	"github.com/hayfordstanley/altar-os/internal/domain/member"
 	"github.com/hayfordstanley/altar-os/internal/domain/rbac"
 	"github.com/hayfordstanley/altar-os/internal/domain/site"
+	"github.com/hayfordstanley/altar-os/internal/domain/spiritual"
 	"github.com/hayfordstanley/altar-os/internal/platform/deps"
 )
 
@@ -44,6 +45,8 @@ func EnsureIndexes(ctx context.Context, d *deps.Deps) error {
 		{"notification", newNotificationService(d).EnsureIndexes},
 		{"rbac", rbac.NewService(d.Mongo).EnsureIndexes},
 		{"invitation", invitation.NewService(d.Mongo).EnsureIndexes},
+		{"event", newEventService(d).EnsureIndexes},
+		{"spiritual", spiritual.NewService(d.Mongo).EnsureIndexes},
 		{"site", site.NewService(d.Mongo).EnsureIndexes},
 		{"customdomain", customdomain.NewService(d.Mongo).EnsureIndexes},
 	}

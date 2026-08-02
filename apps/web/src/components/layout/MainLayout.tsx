@@ -32,6 +32,7 @@ export default function MainLayout() {
       <TopBar />
       <Box
         component="main"
+        data-route-scroll-container
         sx={{
           flexGrow: 1,
           pt: "64px",

@@ -8,12 +8,14 @@ import {
   updateEvent,
   deleteEvent,
   rsvp,
+  getMyRsvps,
   checkIn,
   getAttendance,
   createEventSchema,
   updateEventSchema,
   rsvpSchema,
   attendanceSchema,
+  eventQuerySchema,
 } from "../controllers/event.controller.js";
 
 const router = Router();
@@ -24,7 +26,16 @@ router.post(
   validate({ body: createEventSchema }),
   createEvent,
 );
-router.get("/church/:churchId", authenticate, getEventsByChurch);
+router.get(
+  "/church/:churchId",
+  authenticate,
+  validate({ query: eventQuerySchema }),
+  getEventsByChurch,
+);
+// Register the fixed two-segment member route before `/:id`. Express matches
+// in declaration order; placing this below `/:id` turns `rsvps` into an event
+// identifier and silently prevents mobile from restoring RSVP state.
+router.get("/rsvps/me", authenticate, getMyRsvps);
 router.get("/:id", authenticate, getEvent);
 router.put(
   "/:id",

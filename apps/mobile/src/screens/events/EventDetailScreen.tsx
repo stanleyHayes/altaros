@@ -1,59 +1,187 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   View,
   Text,
   ScrollView,
   StyleSheet,
-  ActivityIndicator,
   Alert,
+  Linking,
+  TouchableOpacity,
 } from 'react-native';
 import { RouteProp, useRoute } from '@react-navigation/native';
 import { Card } from '../../components/common/Card';
 import { Button } from '../../components/common/Button';
-import { Avatar } from '../../components/common/Avatar';
 import { colors, typography, spacing, borderRadius } from '../../theme';
 import type { RootStackParamList } from '../../components/navigation/AppNavigator';
 import type { ChurchEvent } from '../../services/event.service';
-import eventService from '../../services/event.service';
+import eventService, { eventMapAction, eventRsvpAvailability } from '../../services/event.service';
+import { useAuth } from '../../hooks/useAuth';
+import { ScreenSkeleton } from '../../components/common/ScreenSkeleton';
+import { httpStatus } from '../../services/api-error';
+import { createSubmissionLock } from '../../services/submission-lock';
+import { useKnownOffline } from '../../hooks/useKnownOffline';
+import { createLatestRequestGate } from '../../services/latest-request';
+import { reconcileToggleCount } from '../../services/list-reconciliation';
+import {
+  eventActionCompletionBelongsToContext,
+  eventDetailBelongsToContext,
+  type EventDetailContext,
+} from './event-screen-state';
+import { Ionicons } from '@expo/vector-icons';
+import { StatePanel } from '../../components/common/StatePanel';
 
 type EventDetailRoute = RouteProp<RootStackParamList, 'EventDetail'>;
 
 export function EventDetailScreen() {
   const route = useRoute<EventDetailRoute>();
   const { eventId } = route.params;
+  const { user } = useAuth();
+  const offline = useKnownOffline();
 
   const [event, setEvent] = useState<ChurchEvent | null>(null);
-  const [attendees, setAttendees] = useState<{ id: string; name: string; avatar?: string }[]>([]);
+  const [eventOwner, setEventOwner] = useState<EventDetailContext | null>(() => ({
+    eventId,
+    churchId: user?.churchId,
+    memberId: user?.id,
+  }));
   const [isLoading, setIsLoading] = useState(true);
+  const [isUpdating, setIsUpdating] = useState(false);
+  const [isOpeningMap, setIsOpeningMap] = useState(false);
+  const [loadError, setLoadError] = useState<'not_found' | 'unavailable' | null>(null);
+  const rsvpLock = useRef(createSubmissionLock());
+  const mapLock = useRef(createSubmissionLock());
+  const loadGate = useRef(createLatestRequestGate());
+  const mountedRef = useRef(true);
+  const activeContextRef = useRef<EventDetailContext>({ eventId, churchId: user?.churchId, memberId: user?.id });
+  const offlineRef = useRef(offline);
+  activeContextRef.current = { eventId, churchId: user?.churchId, memberId: user?.id };
+  offlineRef.current = offline;
+
+  const loadEvent = useCallback(async () => {
+    const request = loadGate.current.begin();
+    const startedContext = { eventId, churchId: user?.churchId, memberId: user?.id };
+    setEventOwner(startedContext);
+    setEvent(null);
+    setIsUpdating(false);
+    setIsOpeningMap(false);
+    // Route reuse gets fresh locks. In-flight handlers retain and release only
+    // their captured lock, so an old finalizer cannot unlock a replacement
+    // event action.
+    rsvpLock.current = createSubmissionLock();
+    mapLock.current = createSubmissionLock();
+    setIsLoading(true);
+    setLoadError(null);
+    try {
+      if (!user?.churchId || !user.id) throw new Error('Member identity is incomplete');
+      const eventResult = await eventService.getEvent(eventId, user.churchId, user.id);
+      if (loadGate.current.isLatest(request)) {
+        setEventOwner(startedContext);
+        setEvent(eventResult);
+      }
+    } catch (error) {
+      if (loadGate.current.isLatest(request)) {
+        setEvent(null);
+        setLoadError(httpStatus(error) === 404 ? 'not_found' : 'unavailable');
+      }
+    } finally {
+      if (loadGate.current.isLatest(request)) setIsLoading(false);
+    }
+  }, [eventId, user?.churchId, user?.id]);
 
   useEffect(() => {
-    const loadEvent = async () => {
-      try {
-        const [eventResult, attendeeResult] = await Promise.all([
-          eventService.getEvent(eventId),
-          eventService.getAttendees(eventId).catch(() => []),
-        ]);
-        setEvent(eventResult);
-        setAttendees(attendeeResult);
-      } catch {
-        setEvent(null);
-      } finally {
-        setIsLoading(false);
-      }
+    mountedRef.current = true;
+    const gate = loadGate.current;
+    void loadEvent();
+    return () => {
+      mountedRef.current = false;
+      gate.invalidate();
     };
-    loadEvent();
-  }, [eventId]);
+  }, [loadEvent]);
 
   const handleRsvp = async () => {
-    if (!event) return;
+    const actionLock = rsvpLock.current;
+    if (offline || !event || !event.rsvpStatusKnown || !user?.id || !user.churchId || !actionLock.acquire()) return;
+    const startedContext = { eventId: event.id, churchId: user.churchId, memberId: user.id };
+    if (!eventDetailBelongsToContext(eventOwner, startedContext)
+      || !eventDetailBelongsToContext(activeContextRef.current, startedContext)) {
+      actionLock.release();
+      return;
+    }
     try {
+      setIsUpdating(true);
       const response = event.isRsvped
-        ? await eventService.cancelRsvp(event.id)
-        : await eventService.rsvp(event.id);
-      setEvent({ ...event, isRsvped: response.status === 'confirmed', attendeeCount: response.attendeeCount });
+        ? await eventService.cancelRsvp(event.id, user.id)
+        : await eventService.rsvp(event.id, user.id);
+      if (!eventActionCompletionBelongsToContext(
+        mountedRef.current,
+        activeContextRef.current,
+        startedContext,
+      )) return;
+      setEvent((current) => {
+        if (!current || current.id !== event.id) return current;
+        const reconciled = reconcileToggleCount(
+          { selected: current.isRsvped, count: current.attendeeCount },
+          response.status === 'confirmed',
+          response.attendeeCount,
+        );
+        return {
+          ...current,
+          isRsvped: reconciled.selected,
+          rsvpStatusKnown: true,
+          attendeeCount: reconciled.count,
+        };
+      });
       Alert.alert(response.status === 'confirmed' ? 'You are going' : 'RSVP cancelled', response.status === 'confirmed' ? 'This event is now on your list.' : 'You are no longer marked as attending.');
     } catch {
-      Alert.alert('RSVP not updated', 'Check your connection and try again.');
+      if (eventActionCompletionBelongsToContext(
+        mountedRef.current,
+        activeContextRef.current,
+        startedContext,
+      )) {
+        Alert.alert('RSVP not updated', 'Check your connection and try again.');
+      }
+    } finally {
+      actionLock.release();
+      if (eventActionCompletionBelongsToContext(
+        mountedRef.current,
+        activeContextRef.current,
+        startedContext,
+      )) setIsUpdating(false);
+    }
+  };
+
+  const openMaps = async () => {
+    if (!event || !user?.churchId || !user.id) return;
+    const startedContext = { eventId: event.id, churchId: user.churchId, memberId: user.id };
+    if (!eventDetailBelongsToContext(eventOwner, startedContext)
+      || !eventDetailBelongsToContext(activeContextRef.current, startedContext)) return;
+    const action = eventMapAction(event.location, offline, isOpeningMap);
+    const actionLock = mapLock.current;
+    if (!action.url || action.disabled || !actionLock.acquire()) return;
+    setIsOpeningMap(true);
+    try {
+      if (!(await Linking.canOpenURL(action.url))) throw new Error('unsupported map URL');
+      if (!eventActionCompletionBelongsToContext(
+        mountedRef.current,
+        activeContextRef.current,
+        startedContext,
+      ) || offlineRef.current) return;
+      await Linking.openURL(action.url);
+    } catch {
+      if (eventActionCompletionBelongsToContext(
+        mountedRef.current,
+        activeContextRef.current,
+        startedContext,
+      )) {
+        Alert.alert('Maps unavailable', 'We could not open this location on your device.');
+      }
+    } finally {
+      actionLock.release();
+      if (eventActionCompletionBelongsToContext(
+        mountedRef.current,
+        activeContextRef.current,
+        startedContext,
+      )) setIsOpeningMap(false);
     }
   };
 
@@ -73,41 +201,50 @@ export function EventDetailScreen() {
     };
   };
 
-  if (isLoading) {
-    return (
-      <View style={styles.loading}>
-        <ActivityIndicator size="large" color={colors.primary} />
-      </View>
-    );
+  const ownsEvent = eventDetailBelongsToContext(eventOwner, activeContextRef.current);
+
+  if (isLoading || !ownsEvent) {
+    return <ScreenSkeleton cards={3} />;
   }
 
   if (!event) {
     return (
       <View style={styles.loading}>
-        <Text style={styles.emptyText}>Event not found.</Text>
+        <StatePanel
+          icon={loadError === 'not_found' ? 'calendar-clear-outline' : offline ? 'cloud-offline-outline' : 'calendar-outline'}
+          tone={loadError === 'not_found' ? 'quiet' : offline ? 'offline' : 'error'}
+          title={loadError === 'not_found' ? 'This event has moved on' : offline ? 'Event details are offline' : 'Could not load this event'}
+          message={loadError === 'not_found' ? 'Your church may have removed or rescheduled it.' : offline ? 'Reconnect to load the latest date, location, and RSVP status.' : 'Check your connection and try again.'}
+          actionLabel={loadError === 'unavailable' ? (offline ? 'Reconnect to retry' : 'Try again') : undefined}
+          actionHint={offline ? 'Reconnect to load this event.' : 'Loads this event again.'}
+          actionDisabled={offline}
+          onAction={loadError === 'unavailable' ? () => void loadEvent() : undefined}
+        />
       </View>
     );
   }
 
   const start = formatDateTime(event.startDate);
   const end = formatDateTime(event.endDate);
+  const availability = eventRsvpAvailability(event);
+  const mapAction = eventMapAction(event.location, offline, isOpeningMap);
 
   return (
     <ScrollView style={styles.container} showsVerticalScrollIndicator={false}>
       {/* Header */}
       <View style={styles.header}>
-        <View style={styles.categoryBadge}>
-          <Text style={styles.categoryText}>{event.category}</Text>
-        </View>
+        <View style={styles.headerOrb} accessible={false} />
+        <View style={styles.headerRing} accessible={false} />
+        <Text style={styles.headerEyebrow}>GATHER WITH YOUR CHURCH</Text>
         <Text style={styles.title}>{event.title}</Text>
-        <Text style={styles.organizer}>Organized by {event.organizer}</Text>
+        <Text style={styles.headerMeta}>{start.date} · {start.time}</Text>
       </View>
 
       {/* Details */}
       <View style={styles.details}>
         <Card style={styles.detailCard}>
           <View style={styles.detailRow}>
-            <Text style={styles.detailIcon}>{'\u2315'}</Text>
+            <View style={styles.detailIcon}><Ionicons name="calendar-outline" size={20} color={colors.primaryDark} /></View>
             <View style={styles.detailInfo}>
               <Text style={styles.detailLabel}>Date & Time</Text>
               <Text style={styles.detailValue}>{start.date}</Text>
@@ -120,31 +257,34 @@ export function EventDetailScreen() {
 
         <Card style={styles.detailCard}>
           <View style={styles.detailRow}>
-            <Text style={styles.detailIcon}>{'\u2302'}</Text>
+            <View style={styles.detailIcon}><Ionicons name="location-outline" size={20} color={colors.primaryDark} /></View>
             <View style={styles.detailInfo}>
               <Text style={styles.detailLabel}>Location</Text>
               <Text style={styles.detailValue}>{event.location}</Text>
-              {event.address && (
-                <Text style={styles.detailSub}>{event.address}</Text>
-              )}
             </View>
           </View>
         </Card>
 
-        {/* Map Placeholder */}
-        <View style={styles.mapPlaceholder}>
-          <Text style={styles.mapPlaceholderText}>Map View</Text>
-          <Text style={styles.mapPlaceholderSub}>
-            {/* TODO: Integrate with react-native-maps */}
-            Map will be displayed here
-          </Text>
-        </View>
+        {mapAction.url ? (
+          <TouchableOpacity
+            style={[styles.mapAction, mapAction.disabled && styles.actionDisabled]}
+            onPress={() => void openMaps()}
+            disabled={mapAction.disabled}
+            accessibilityRole="link"
+            accessibilityLabel={mapAction.label}
+            accessibilityHint={mapAction.hint}
+            accessibilityState={{ disabled: mapAction.disabled, busy: mapAction.busy }}
+          >
+            <Text style={styles.mapActionTitle}>Open location in Maps</Text>
+            <Text style={styles.mapActionSub}>{offline ? 'Reconnect to view this location' : isOpeningMap ? 'Opening Google Maps…' : 'View this location with Google Maps →'}</Text>
+          </TouchableOpacity>
+        ) : null}
       </View>
 
       {/* Description */}
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>About This Event</Text>
-        <Text style={styles.description}>{event.description}</Text>
+        <Text style={styles.description}>{event.description || 'Your church has not added more details for this event.'}</Text>
       </View>
 
       {/* Attendees */}
@@ -152,30 +292,27 @@ export function EventDetailScreen() {
         <Text style={styles.sectionTitle}>
           Attendees ({event.attendeeCount})
         </Text>
-        <View style={styles.attendeesList}>
-          {attendees.map((attendee) => (
-            <View key={attendee.id} style={styles.attendeeItem}>
-              <Avatar name={attendee.name} uri={attendee.avatar} size="sm" />
-              <Text style={styles.attendeeName}>{attendee.name}</Text>
-            </View>
-          ))}
-          {event.attendeeCount > attendees.length && (
-            <Text style={styles.moreAttendees}>
-              +{event.attendeeCount - attendees.length} more
-            </Text>
-          )}
-        </View>
+        <Text style={styles.attendeePrivacy}>
+          {event.attendeeCount === 0
+            ? 'Be the first to let your church know you are coming.'
+            : 'Attendee names stay private. Your church can use the count to prepare.'}
+        </Text>
       </View>
 
       {/* RSVP Button */}
       <View style={styles.rsvpSection}>
         <Button
-          title={event.isRsvped ? 'Cancel RSVP' : 'RSVP to This Event'}
+          title={availability.allowed && !event.isRsvped ? 'RSVP to This Event' : availability.label}
           variant={event.isRsvped ? 'outline' : 'primary'}
           onPress={() => void handleRsvp()}
           fullWidth
           size="lg"
+          loading={isUpdating}
+          disabled={offline || !availability.allowed}
+          accessibilityHint={offline ? 'Reconnect to update your RSVP.' : availability.reason}
         />
+        {offline ? <Text style={styles.rsvpReason}>Reconnect to update your RSVP.</Text>
+          : availability.reason ? <Text style={styles.rsvpReason}>{availability.reason}</Text> : null}
       </View>
     </ScrollView>
   );
@@ -191,41 +328,30 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     backgroundColor: colors.background,
-  },
-  emptyText: {
-    fontSize: typography.sizes.base,
-    color: colors.muted,
+    padding: spacing.xl,
   },
   header: {
-    backgroundColor: colors.primary,
+    backgroundColor: colors.text,
     paddingHorizontal: spacing.xl,
-    paddingVertical: spacing['2xl'],
+    paddingTop: spacing.xl,
+    paddingBottom: spacing['2xl'],
+    overflow: 'hidden',
   },
-  categoryBadge: {
-    backgroundColor: 'rgba(255,255,255,0.2)',
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.xs,
-    borderRadius: borderRadius.full,
-    alignSelf: 'flex-start',
-    marginBottom: spacing.md,
-  },
-  categoryText: {
-    fontSize: typography.sizes.sm,
-    color: '#FFFFFF',
-    fontWeight: typography.weights.medium,
-    textTransform: 'capitalize',
-  },
+  headerOrb: { position: 'absolute', width: 210, height: 210, borderRadius: 105, backgroundColor: '#174C45', top: -118, right: -50 },
+  headerRing: { position: 'absolute', width: 124, height: 124, borderRadius: 62, borderWidth: 1, borderColor: 'rgba(109,213,196,.28)', top: -62, right: 20 },
+  headerEyebrow: { color: colors.primaryLight, fontFamily: typography.families.bold, fontSize: typography.sizes.xs, letterSpacing: 1.35 },
   title: {
-    fontSize: typography.sizes['2xl'],
-    fontWeight: typography.weights.bold,
+    fontSize: typography.sizes['3xl'],
+    fontFamily: typography.families.bold,
     color: '#FFFFFF',
-    marginBottom: spacing.sm,
+    letterSpacing: -.8,
+    marginTop: spacing.lg,
   },
-  organizer: {
-    fontSize: typography.sizes.md,
-    color: 'rgba(255,255,255,0.8)',
-  },
+  headerMeta: { color: 'rgba(255,255,255,.65)', fontFamily: typography.families.medium, fontSize: typography.sizes.sm, marginTop: spacing.sm },
   details: {
+    width: '100%',
+    maxWidth: 680,
+    alignSelf: 'center',
     padding: spacing.xl,
   },
   detailCard: {
@@ -236,10 +362,13 @@ const styles = StyleSheet.create({
     alignItems: 'flex-start',
   },
   detailIcon: {
-    fontSize: 20,
-    color: colors.primary,
+    width: 42,
+    height: 42,
+    borderRadius: borderRadius.md,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.secondaryLight,
     marginRight: spacing.md,
-    marginTop: 2,
   },
   detailInfo: {
     flex: 1,
@@ -251,7 +380,7 @@ const styles = StyleSheet.create({
   },
   detailValue: {
     fontSize: typography.sizes.base,
-    fontWeight: typography.weights.semibold,
+    fontFamily: typography.families.semibold,
     color: colors.text,
   },
   detailSub: {
@@ -259,30 +388,32 @@ const styles = StyleSheet.create({
     color: colors.textSecondary,
     marginTop: 2,
   },
-  mapPlaceholder: {
-    height: 160,
-    backgroundColor: colors.divider,
+  mapAction: {
+    backgroundColor: colors.secondaryLight,
     borderRadius: borderRadius.lg,
-    alignItems: 'center',
-    justifyContent: 'center',
+    padding: spacing.base,
   },
-  mapPlaceholderText: {
+  actionDisabled: { opacity: 0.5 },
+  mapActionTitle: {
     fontSize: typography.sizes.base,
-    color: colors.muted,
-    fontWeight: typography.weights.medium,
+    color: colors.primaryDark,
+    fontFamily: typography.families.semibold,
   },
-  mapPlaceholderSub: {
+  mapActionSub: {
     fontSize: typography.sizes.sm,
-    color: colors.muted,
+    color: colors.textSecondary,
     marginTop: spacing.xs,
   },
   section: {
+    width: '100%',
+    maxWidth: 680,
+    alignSelf: 'center',
     paddingHorizontal: spacing.xl,
     marginBottom: spacing.xl,
   },
   sectionTitle: {
     fontSize: typography.sizes.lg,
-    fontWeight: typography.weights.bold,
+    fontFamily: typography.families.bold,
     color: colors.text,
     marginBottom: spacing.md,
   },
@@ -291,26 +422,17 @@ const styles = StyleSheet.create({
     color: colors.textSecondary,
     lineHeight: 24,
   },
-  attendeesList: {
-    gap: spacing.md,
-  },
-  attendeeItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.md,
-  },
-  attendeeName: {
+  attendeePrivacy: {
     fontSize: typography.sizes.md,
-    color: colors.text,
-  },
-  moreAttendees: {
-    fontSize: typography.sizes.md,
-    color: colors.primary,
-    fontWeight: typography.weights.medium,
-    marginTop: spacing.xs,
+    color: colors.textSecondary,
+    lineHeight: 22,
   },
   rsvpSection: {
+    width: '100%',
+    maxWidth: 680,
+    alignSelf: 'center',
     padding: spacing.xl,
     paddingBottom: spacing['3xl'],
   },
+  rsvpReason: { color: colors.muted, fontSize: typography.sizes.sm, textAlign: 'center', marginTop: spacing.sm },
 });

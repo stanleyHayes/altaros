@@ -28,6 +28,7 @@ import (
 const (
 	Collection            = "notifications"
 	PreferenceCollection  = "notification_preferences"
+	DeviceCollection      = "notification_devices"
 	DefaultQuietHoursFrom = 21 // 21:00
 	DefaultQuietHoursTo   = 7  // 07:00
 )
@@ -125,6 +126,11 @@ var (
 	ErrNoBody = errors.New("notification: body is required")
 	// ErrNoRecipient means no member to send to.
 	ErrNoRecipient = errors.New("notification: recipient is required")
+	// ErrInvalidDevice means a native push registration is malformed.
+	ErrInvalidDevice = errors.New("notification: invalid device registration")
+	// ErrUnregisteredDevice means the push provider has authoritatively retired
+	// a native token. It is permanent and the registration must be pruned.
+	ErrUnregisteredDevice = errors.New("notification: device is no longer registered")
 	// ErrNoTransport means no adapter is registered for the channel.
 	ErrNoTransport = errors.New("notification: no transport registered for channel")
 )
@@ -160,6 +166,21 @@ type Notification struct {
 	SentAt        *time.Time `bson:"sentAt,omitempty"        json:"sentAt,omitempty"`
 	CreatedAt     time.Time  `bson:"createdAt"               json:"createdAt"`
 	UpdatedAt     time.Time  `bson:"updatedAt"               json:"updatedAt"`
+	ReadAt        *time.Time `bson:"readAt,omitempty"        json:"readAt,omitempty"`
+}
+
+// DeviceRegistration binds one native APNs/FCM token to one signed-in session
+// family and platform. That slot is updated when the operating system rotates
+// its token, so stale addresses cannot accumulate.
+type DeviceRegistration struct {
+	ID        bson.ObjectID `bson:"_id,omitempty" json:"id"`
+	ChurchID  mongodb.ID    `bson:"churchId"      json:"churchId"`
+	MemberID  string        `bson:"memberId"      json:"memberId"`
+	Family    string        `bson:"family"        json:"-"`
+	Token     string        `bson:"token"         json:"token"`
+	Platform  string        `bson:"platform"      json:"platform"`
+	CreatedAt time.Time     `bson:"createdAt"     json:"createdAt"`
+	UpdatedAt time.Time     `bson:"updatedAt"     json:"updatedAt"`
 }
 
 // Preference is a member's per-channel opt-in state and quiet hours.

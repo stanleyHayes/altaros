@@ -1,11 +1,13 @@
 package service
 
 import (
+	"context"
 	"errors"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/hayfordstanley/altar-os/internal/domain/event"
 	"github.com/hayfordstanley/altar-os/internal/domain/rbac"
 	"github.com/hayfordstanley/altar-os/internal/domain/site"
 	"github.com/hayfordstanley/altar-os/internal/platform/deps"
@@ -29,6 +31,7 @@ func buildSite(d *deps.Deps) http.Handler { return standalone(siteRoutes(d)) }
 //     make them return a draft.
 func siteRoutes(d *deps.Deps) routeSet {
 	svc := site.NewService(d.Mongo)
+	events := newEventService(d)
 
 	return func(r chi.Router) {
 		// --- the public site ---
@@ -39,9 +42,9 @@ func siteRoutes(d *deps.Deps) routeSet {
 		r.With(throttle(d, ratelimit.PublicSite)).
 			Get("/site/pages", handlePublicPages(svc))
 		r.With(throttle(d, ratelimit.PublicSite)).
-			Get("/site/pages/{slug}", handlePublicPage(svc))
+			Get("/site/pages/{slug}", handlePublicPage(svc, events))
 		r.With(throttle(d, ratelimit.PublicSite)).
-			Get("/site/home", handlePublicHome(svc))
+			Get("/site/home", handlePublicHome(svc, events))
 
 		// --- the editor ---
 		r.Group(func(r chi.Router) {
@@ -112,7 +115,7 @@ func publicScope(r *http.Request) (*http.Request, bool) {
 	return r.WithContext(tenancy.WithScope(r.Context(), scope)), true
 }
 
-func handlePublicPage(svc *site.Service) http.HandlerFunc {
+func handlePublicPage(svc *site.Service, events *event.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		scoped, ok := publicScope(r)
 		if !ok {
@@ -124,11 +127,12 @@ func handlePublicPage(svc *site.Service) http.HandlerFunc {
 			writeSiteError(w, err)
 			return
 		}
+		fillEventFeeds(scoped.Context(), page, events)
 		writePublicPage(w, page)
 	}
 }
 
-func handlePublicHome(svc *site.Service) http.HandlerFunc {
+func handlePublicHome(svc *site.Service, events *event.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		scoped, ok := publicScope(r)
 		if !ok {
@@ -140,8 +144,70 @@ func handlePublicHome(svc *site.Service) http.HandlerFunc {
 			writeSiteError(w, err)
 			return
 		}
+		fillEventFeeds(scoped.Context(), page, events)
 		writePublicPage(w, page)
 	}
+}
+
+// fillEventFeeds resolves the events block against the church's real calendar.
+//
+// The block library advertises this section as "pulled from your events — never
+// re-typed", and until now that promise had nothing behind it: the block stored
+// only a heading and a limit, so a published page showed an empty section. This
+// is where the claim becomes true.
+//
+// Composed HERE rather than inside the site service, so the CMS keeps knowing
+// nothing about events. The join belongs at the edge that already owns both.
+//
+// A failure fills nothing and does NOT fail the page. A church's homepage
+// losing its events strip is bad; a church's homepage returning 500 because the
+// events query timed out is worse.
+func fillEventFeeds(ctx context.Context, page *site.RenderedPage, events *event.Service) {
+	if page == nil || events == nil {
+		return
+	}
+	for i := range page.Blocks {
+		if page.Blocks[i].Type != site.BlockEvents {
+			continue
+		}
+		limit := 3
+		if raw, ok := page.Blocks[i].Data["limit"]; ok {
+			if n, ok := asInt(raw); ok && n > 0 {
+				limit = n
+			}
+		}
+		upcoming, err := events.Upcoming(ctx, limit)
+		if err != nil {
+			continue
+		}
+		// Written into a copy of the map rather than the block's own, because
+		// the same Data map is what the CMS validated and stores; mutating it
+		// in place would put derived content into a saved draft on the next
+		// write path that reuses it.
+		filled := make(map[string]any, len(page.Blocks[i].Data)+1)
+		for k, v := range page.Blocks[i].Data {
+			filled[k] = v
+		}
+		filled["items"] = upcoming
+		page.Blocks[i].Data = filled
+	}
+}
+
+// asInt reads a number that arrived through BSON or JSON, where the same
+// integer can be an int32, an int64 or a float64 depending on which writer put
+// it there.
+func asInt(v any) (int, bool) {
+	switch n := v.(type) {
+	case int:
+		return n, true
+	case int32:
+		return int(n), true
+	case int64:
+		return int(n), true
+	case float64:
+		return int(n), true
+	}
+	return 0, false
 }
 
 // writePublicPage answers with caching a church site actually benefits from.

@@ -174,6 +174,32 @@ func (s *Service) EnsureIndexes(ctx context.Context) error {
 					"householdId": bson.M{"$exists": true},
 				}),
 		},
+		{
+			// The login-account link, read on every request that asks "who am
+			// I as a member" — RSVP, my giving, my attendance.
+			//
+			// UNIQUE, and PARTIAL rather than sparse. Partial because the
+			// condition is on one field of a compound key and a sparse index
+			// only skips a document when EVERY key field is missing — churchId
+			// is always present, so a sparse index here would index every
+			// member and make the second login-less record in a church collide
+			// with the first.
+			//
+			// The filter is $type rather than $exists for the same family of
+			// reason: `userId: null` EXISTS, so an $exists filter would index
+			// every unlinked member as the value null and let exactly one of
+			// them be stored.
+			Keys: bson.D{
+				{Key: mongodb.TenantField, Value: 1},
+				{Key: "userId", Value: 1},
+			},
+			Options: options.Index().
+				SetName("uq_church_user").
+				SetUnique(true).
+				SetPartialFilterExpression(bson.M{
+					"userId": bson.M{"$type": "objectId"},
+				}),
+		},
 	})
 	if err != nil {
 		return fmt.Errorf("member: create indexes: %w", err)
@@ -278,6 +304,68 @@ func (s *Service) ByID(ctx context.Context, id string) (*Member, error) {
 		return nil, fmt.Errorf("member: lookup: %w", err)
 	}
 	return &m, nil
+}
+
+// ByUserID finds the member record belonging to a login account.
+//
+// The two ids are genuinely different things and conflating them is a bug
+// waiting to happen: most of a congregation has a member record and no login,
+// and a handful of staff have a login and no member record. A caller that
+// wants "the person signed in" has to cross that gap explicitly, here.
+func (s *Service) ByUserID(ctx context.Context, userID string) (*Member, error) {
+	if strings.TrimSpace(userID) == "" {
+		return nil, ErrNotFound
+	}
+	var m Member
+	if err := s.coll.FindOne(ctx, bson.M{"userId": mongodb.ID(userID)}, &m); err != nil {
+		if errors.Is(err, mongo.ErrNoDocuments) {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("member: lookup by user: %w", err)
+	}
+	return &m, nil
+}
+
+// Exist reports which of the given ids are members of the caller's church.
+//
+// One query for a whole list, because the caller is an offline check-in queue
+// landing two hundred rows at once and a lookup per row is two hundred round
+// trips at the moment the church's wifi has just come back.
+//
+// An id belonging to another church is simply absent from the answer — the
+// collection is tenant-scoped, so this is the check that attendance cannot be
+// recorded across a tenant boundary, and it costs nothing extra.
+func (s *Service) Exist(ctx context.Context, ids []string) (map[string]bool, error) {
+	out := make(map[string]bool, len(ids))
+	oids := make([]bson.ObjectID, 0, len(ids))
+	for _, id := range ids {
+		oid, err := bson.ObjectIDFromHex(id)
+		if err != nil {
+			// Not an id this database could hold. Absent rather than an error:
+			// the caller reports it per row alongside the ids that were simply
+			// unknown, which is the same thing from the usher's side.
+			continue
+		}
+		oids = append(oids, oid)
+	}
+	if len(oids) == 0 {
+		return out, nil
+	}
+
+	var found []struct {
+		ID bson.ObjectID `bson:"_id"`
+	}
+	err := s.coll.Find(ctx, bson.M{"_id": bson.M{"$in": oids}}, &found,
+		// Ids only. The caller is asking an existence question and has no
+		// business receiving phone numbers to answer it.
+		options.Find().SetProjection(bson.M{"_id": 1}))
+	if err != nil {
+		return nil, fmt.Errorf("member: existence check: %w", err)
+	}
+	for _, row := range found {
+		out[row.ID.Hex()] = true
+	}
+	return out, nil
 }
 
 // ByPhone finds a member by any spelling of their number.

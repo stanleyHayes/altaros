@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   View,
   Text,
@@ -34,23 +34,52 @@ const fontSizeMap: Record<AvatarSize, number> = {
   xl: 36,
 };
 
-function getInitials(name: string): string {
-  return name
-    .split(' ')
+export function getInitials(name: string): string {
+  const initials = name
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
     .map((part) => part.charAt(0))
     .join('')
     .toUpperCase()
     .slice(0, 2);
+  return initials || 'M';
+}
+
+export function isSafeAvatarUri(value: unknown): value is string {
+  if (typeof value !== 'string' || value.length > 2_048 || /[\u0000-\u001F\u007F]/.test(value)) {
+    return false;
+  }
+  try {
+    const parsed = new URL(value);
+    return (parsed.protocol === 'https:' || parsed.protocol === 'http:')
+      && !parsed.username
+      && !parsed.password
+      && Boolean(parsed.hostname);
+  } catch {
+    return false;
+  }
 }
 
 export function Avatar({ uri, name, size = 'md', style }: AvatarProps) {
   const dimension = sizeMap[size];
   const fontSize = fontSizeMap[size];
+  const [imageFailed, setImageFailed] = useState(false);
+  const displayName = name.trim() || 'Member';
+  const accessibilityLabel = `${displayName} profile photo`;
 
-  if (uri) {
+  useEffect(() => {
+    setImageFailed(false);
+  }, [uri]);
+
+  if (isSafeAvatarUri(uri) && !imageFailed) {
     return (
       <Image
         source={{ uri }}
+        onError={() => setImageFailed(true)}
+        accessible
+        accessibilityRole="image"
+        accessibilityLabel={accessibilityLabel}
         style={[
           styles.image,
           { width: dimension, height: dimension, borderRadius: dimension / 2 },
@@ -62,13 +91,16 @@ export function Avatar({ uri, name, size = 'md', style }: AvatarProps) {
 
   return (
     <View
+      accessible
+      accessibilityRole="image"
+      accessibilityLabel={accessibilityLabel}
       style={[
         styles.fallback,
         { width: dimension, height: dimension, borderRadius: dimension / 2 },
         style,
       ]}
     >
-      <Text style={[styles.initials, { fontSize }]}>{getInitials(name)}</Text>
+      <Text accessibilityElementsHidden importantForAccessibility="no-hide-descendants" style={[styles.initials, { fontSize }]}>{getInitials(name)}</Text>
     </View>
   );
 }
@@ -84,6 +116,6 @@ const styles = StyleSheet.create({
   },
   initials: {
     color: '#FFFFFF',
-    fontWeight: typography.weights.bold,
+    fontFamily: typography.families.bold,
   },
 });

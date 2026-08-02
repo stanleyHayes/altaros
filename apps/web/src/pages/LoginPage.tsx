@@ -22,15 +22,15 @@ import AuthLayout from "@/components/auth/AuthLayout";
 const fieldSx = {
   "& .MuiOutlinedInput-root": {
     backgroundColor: "#fff",
-    borderRadius: "12px",
-    "& fieldset": { borderColor: "#E0E0E0" },
-    "&:hover fieldset": { borderColor: "#BDBDBD" },
+    borderRadius: "14px",
+    "& fieldset": { borderColor: "#CBD3CF" },
+    "&:hover fieldset": { borderColor: "#869690" },
     "&.Mui-focused fieldset": {
-      borderColor: "#6B4C9A",
-      boxShadow: "0 0 0 3px rgba(107,76,154,0.1)",
+      borderColor: "#176B5D",
+      boxShadow: "0 0 0 3px rgba(23,107,93,0.1)",
     },
   },
-  "& .MuiInputLabel-root.Mui-focused": { color: "#6B4C9A" },
+  "& .MuiInputLabel-root.Mui-focused": { color: "#176B5D" },
 } as const;
 
 const loginSchema = z.object({
@@ -52,7 +52,7 @@ export default function LoginPage() {
   const navigate = useNavigate();
   const { login } = useAuth();
   const [error, setError] = useState<string | null>(null);
-  const [mode, setMode] = useState<"email" | "phone">("email");
+  const [mode, setMode] = useState<"email" | "phone">("phone");
   const [showPassword, setShowPassword] = useState(false);
 
   const {
@@ -97,7 +97,7 @@ export default function LoginPage() {
   };
 
   return (
-    <AuthLayout title="Welcome Back" subtitle="Your church community awaits">
+    <AuthLayout title="Come back to your church." subtitle="Sign in to give, join events and stay connected to your community.">
       {error && (
         <Alert severity="error" sx={{ mb: 3, borderRadius: "12px" }}>
           {error}
@@ -158,14 +158,13 @@ export default function LoginPage() {
               fontWeight: 700,
               fontSize: "1rem",
               borderRadius: "12px",
-              background: "linear-gradient(135deg, #FFB300 0%, #FF8F00 100%)",
-              color: "#1A1A2E",
-              boxShadow: "0 4px 16px rgba(255,179,0,0.25)",
+              background: "#176B5D",
+              color: "#fff",
+              boxShadow: "none",
               textTransform: "none",
               "&:hover": {
-                background:
-                  "linear-gradient(135deg, #FFC107 0%, #FFB300 100%)",
-                boxShadow: "0 6px 20px rgba(255,179,0,0.35)",
+                background: "#10584D",
+                boxShadow: "none",
               },
               "&:disabled": {
                 background: "#E0E0E0",
@@ -174,7 +173,7 @@ export default function LoginPage() {
             }}
           >
             {isEmailSubmitting ? (
-              <CircularProgress size={24} sx={{ color: "#1A1A2E" }} />
+              <CircularProgress size={24} sx={{ color: "#fff" }} />
             ) : (
               "Sign In"
             )}
@@ -209,14 +208,13 @@ export default function LoginPage() {
               fontWeight: 700,
               fontSize: "1rem",
               borderRadius: "12px",
-              background: "linear-gradient(135deg, #FFB300 0%, #FF8F00 100%)",
-              color: "#1A1A2E",
-              boxShadow: "0 4px 16px rgba(255,179,0,0.25)",
+              background: "#176B5D",
+              color: "#fff",
+              boxShadow: "none",
               textTransform: "none",
               "&:hover": {
-                background:
-                  "linear-gradient(135deg, #FFC107 0%, #FFB300 100%)",
-                boxShadow: "0 6px 20px rgba(255,179,0,0.35)",
+                background: "#10584D",
+                boxShadow: "none",
               },
               "&:disabled": {
                 background: "#E0E0E0",
@@ -225,7 +223,7 @@ export default function LoginPage() {
             }}
           >
             {isPhoneSubmitting ? (
-              <CircularProgress size={24} sx={{ color: "#1A1A2E" }} />
+              <CircularProgress size={24} sx={{ color: "#fff" }} />
             ) : (
               "Send Verification Code"
             )}
@@ -240,7 +238,7 @@ export default function LoginPage() {
           onClick={toggleMode}
           sx={{
             fontWeight: 600,
-            color: "#6B4C9A",
+            color: "#176B5D",
             textTransform: "none",
           }}
         >
@@ -257,7 +255,7 @@ export default function LoginPage() {
             component={RouterLink}
             to="/register"
             underline="hover"
-            sx={{ fontWeight: 600, color: "#6B4C9A" }}
+            sx={{ fontWeight: 700, color: "#176B5D" }}
           >
             Join your church
           </Link>

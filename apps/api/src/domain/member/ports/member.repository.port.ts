@@ -18,7 +18,7 @@ export interface CreateMemberData {
   notes?: string;
 }
 
-export interface UpdateMemberData extends Partial<CreateMemberData> {}
+export type UpdateMemberData = Partial<CreateMemberData>;
 
 export interface MemberSearchQuery extends PaginationQuery {
   search?: string;

@@ -1,114 +1,53 @@
 import type { ReactNode } from "react";
-import { Box, Container, Paper, Typography } from "@mui/material";
+import { Box, Typography } from "@mui/material";
+import { ChurchRounded, Groups2Outlined, LockOutlined, PaymentsOutlined } from "@mui/icons-material";
 
-interface AuthLayoutProps {
-  title: string;
-  subtitle?: string;
-  children: ReactNode;
-}
+interface AuthLayoutProps { title: string; subtitle?: string; children: ReactNode }
 
-const BRAND_MARK = `<svg viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
-  <path d="M50 10C30 10 15 25 15 45C15 55 20 65 30 70C25 75 20 80 20 85C20 90 25 95 35 90C40 87 45 82 50 78C55 82 60 87 65 90C75 95 80 90 80 85C80 80 75 75 70 70C80 65 85 55 85 45C85 25 70 10 50 10Z" stroke="currentColor" stroke-width="5" fill="none" stroke-linejoin="round"/>
-</svg>`;
+const signals = [
+  { icon: Groups2Outlined, text: "Know who needs attention this week" },
+  { icon: PaymentsOutlined, text: "Keep giving and church records together" },
+  { icon: LockOutlined, text: "Role-based access for every ministry team" },
+];
 
-/**
- * Shared shell for the dashboard auth pages (login / register).
- * Replaces the earlier GlassCard + AuthBackground pair.
- */
 export default function AuthLayout({ title, subtitle, children }: AuthLayoutProps) {
   return (
-    <Box
-      sx={{
-        minHeight: "100vh",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        py: { xs: 4, md: 6 },
-        px: 2,
-        position: "relative",
-        overflow: "hidden",
-        background:
-          "linear-gradient(150deg, #1A1A2E 0%, #303F9F 55%, #3F51B5 100%)",
-      }}
-    >
-      {/* Ambient colour orbs */}
-      <Box
-        aria-hidden
-        sx={{
-          position: "absolute",
-          inset: 0,
-          background:
-            "radial-gradient(ellipse at 18% 22%, rgba(255,152,0,0.18) 0%, transparent 52%), " +
-            "radial-gradient(ellipse at 82% 78%, rgba(124,77,255,0.24) 0%, transparent 52%)",
-          pointerEvents: "none",
-        }}
-      />
-
-      <Container maxWidth="sm" sx={{ position: "relative", zIndex: 1 }}>
-        {/* Brand */}
-        <Box
-          sx={{
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            gap: 1.5,
-            mb: 3,
-          }}
-        >
-          <Box
-            aria-hidden
-            sx={{
-              width: 40,
-              height: 40,
-              color: "#fff",
-              "& svg": { width: "100%", height: "100%" },
-            }}
-            dangerouslySetInnerHTML={{ __html: BRAND_MARK }}
-          />
-          <Typography
-            component="span"
-            sx={{
-              color: "#fff",
-              fontWeight: 800,
-              fontSize: "1.4rem",
-              letterSpacing: "-0.02em",
-            }}
-          >
-            ALTAR&nbsp;OS
-          </Typography>
+    <Box sx={{ minHeight: "100dvh", display: "grid", gridTemplateColumns: { xs: "1fr", md: "minmax(0, 1.08fr) minmax(440px, .92fr)" }, bgcolor: "#F4F8F5" }}>
+      <Box sx={{ display: { xs: "none", md: "flex" }, flexDirection: "column", justifyContent: "space-between", bgcolor: "#102A27", color: "#F5FAF7", p: { md: 6, lg: 8 }, minHeight: "100dvh" }}>
+        <Box sx={{ display: "flex", alignItems: "center", gap: 1.4 }}>
+          <Box sx={{ width: 42, height: 42, borderRadius: "14px", bgcolor: "#9DE3D2", color: "#102A27", display: "grid", placeItems: "center" }}><ChurchRounded /></Box>
+          <Typography sx={{ fontWeight: 800, fontSize: "1.2rem", letterSpacing: "-.03em" }}>ALTAR <Box component="span" sx={{ color: "#9DE3D2" }}>OS</Box></Typography>
         </Box>
 
-        <Paper
-          elevation={0}
-          sx={{
-            p: { xs: 3, sm: 4.5 },
-            borderRadius: 4,
-            backgroundColor: "rgba(255,255,255,0.97)",
-            border: "1px solid rgba(255,255,255,0.4)",
-            boxShadow: "0 24px 64px rgba(0,0,0,0.28)",
-          }}
-        >
-          <Box sx={{ mb: 3.5, textAlign: "center" }}>
-            <Typography variant="h4" sx={{ fontWeight: 700, mb: subtitle ? 0.75 : 0 }}>
-              {title}
-            </Typography>
-            {subtitle && (
-              <Typography variant="body2" sx={{ color: "text.secondary" }}>
-                {subtitle}
-              </Typography>
-            )}
-          </Box>
+        <Box sx={{ maxWidth: 590, my: 8 }}>
+          <Typography sx={{ color: "#9DE3D2", fontSize: ".72rem", fontWeight: 800, letterSpacing: ".16em", mb: 2 }}>CHURCH OPERATIONS</Typography>
+          <Typography component="h1" sx={{ fontSize: { md: "3.3rem", lg: "4.25rem" }, lineHeight: .98, letterSpacing: "-.055em", fontWeight: 750, maxWidth: 560 }}>Lead the week with the whole church in view.</Typography>
+          <Typography sx={{ color: "rgba(245,250,247,.64)", fontSize: "1.05rem", lineHeight: 1.65, mt: 3, maxWidth: 490 }}>One place for people, giving, events and pastoral follow-up.</Typography>
+        </Box>
 
+        <Box sx={{ display: "grid", gap: 2.2, maxWidth: 500 }}>
+          {signals.map(({ icon: Icon, text }) => (
+            <Box key={text} sx={{ display: "flex", alignItems: "center", gap: 1.8 }}>
+              <Box sx={{ width: 36, height: 36, borderRadius: "12px", border: "1px solid rgba(157,227,210,.22)", display: "grid", placeItems: "center", color: "#9DE3D2" }}><Icon sx={{ fontSize: 19 }} /></Box>
+              <Typography sx={{ color: "rgba(245,250,247,.76)", fontSize: ".9rem" }}>{text}</Typography>
+            </Box>
+          ))}
+        </Box>
+      </Box>
+
+      <Box component="main" sx={{ minHeight: "100dvh", display: "flex", flexDirection: "column", px: { xs: 2.5, sm: 6, lg: 9 }, py: { xs: 3, md: 5 }, bgcolor: "#F4F8F5" }}>
+        <Box sx={{ display: { xs: "flex", md: "none" }, alignItems: "center", gap: 1.2, mb: 6 }}>
+          <Box sx={{ width: 38, height: 38, borderRadius: "13px", bgcolor: "#CFEFE6", color: "#102A27", display: "grid", placeItems: "center" }}><ChurchRounded sx={{ fontSize: 21 }} /></Box>
+          <Typography sx={{ fontWeight: 800, color: "#102A27" }}>ALTAR OS</Typography>
+        </Box>
+        <Box sx={{ width: "100%", maxWidth: 480, m: "auto" }}>
+          <Typography sx={{ color: "#197665", fontSize: ".72rem", fontWeight: 800, letterSpacing: ".14em", mb: 1.5 }}>CHURCH DASHBOARD</Typography>
+          <Typography variant="h3" component="h2" sx={{ color: "#102A27", fontWeight: 750, fontSize: { xs: "2rem", sm: "2.45rem" }, letterSpacing: "-.04em", mb: 1 }}>{title}</Typography>
+          {subtitle ? <Typography sx={{ color: "#58706C", mb: 4 }}>{subtitle}</Typography> : null}
           {children}
-        </Paper>
-
-        <Typography
-          variant="body2"
-          sx={{ color: "rgba(255,255,255,0.5)", textAlign: "center", mt: 3 }}
-        >
-          © {new Date().getFullYear()} ALTAR OS
-        </Typography>
-      </Container>
+        </Box>
+        <Typography sx={{ color: "#7A918C", fontSize: ".75rem", mt: 5 }}>© {new Date().getFullYear()} Altar OS</Typography>
+      </Box>
     </Box>
   );
 }

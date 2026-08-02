@@ -298,6 +298,51 @@ func (t *TenantCollection) InsertOne(ctx context.Context, doc bson.M) (*mongo.In
 	return res, recordErr(span, err)
 }
 
+// InsertMany writes many documents, each stamped with the caller's church.
+//
+// UNORDERED. That is the whole reason this exists rather than a loop over
+// InsertOne: an unordered insert does not stop at the first failure, so a batch
+// that partially collides with a unique index still writes everything that did
+// not collide, and reports the collisions per row. That is exactly the shape of
+// an offline check-in queue reconciling — most of the batch is new, some of it
+// the server already has, and neither outcome may cost the other.
+//
+// The error on partial failure is a mongo.BulkWriteException whose WriteErrors
+// carry the index of each failed document within docs. Callers that expect
+// collisions must inspect it rather than treat it as failure; see
+// event.Service.Sync.
+func (t *TenantCollection) InsertMany(ctx context.Context, docs []bson.M, opts ...options.Lister[options.InsertManyOptions]) (*mongo.InsertManyResult, error) {
+	ctx, span := t.span(ctx, "insertMany")
+	defer span.End()
+
+	if len(docs) == 0 {
+		return &mongo.InsertManyResult{}, nil
+	}
+
+	stamped := make([]any, 0, len(docs))
+	for _, doc := range docs {
+		out, err := t.stampTenant(ctx, doc)
+		if err != nil {
+			return nil, recordErr(span, err)
+		}
+		stamped = append(stamped, out)
+	}
+
+	// SetOrdered(false) is prepended rather than appended so a caller can
+	// override it deliberately, but never fails to get it by omission.
+	opts = append([]options.Lister[options.InsertManyOptions]{
+		options.InsertMany().SetOrdered(false),
+	}, opts...)
+
+	res, err := t.coll.InsertMany(ctx, stamped, opts...)
+	// A duplicate key here is an expected outcome, not a fault: recording it as
+	// a span error would paint every successful reconcile red.
+	if err != nil && !mongo.IsDuplicateKeyError(err) {
+		recordErr(span, err)
+	}
+	return res, err
+}
+
 // UpdateOne updates a document within the caller's church.
 func (t *TenantCollection) UpdateOne(ctx context.Context, filter any, update bson.M) (*mongo.UpdateResult, error) {
 	scoped, err := t.scopedFilter(ctx, filter)

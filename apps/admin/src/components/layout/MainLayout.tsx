@@ -46,6 +46,7 @@ export default function MainLayout() {
         <Header onMenuToggle={() => setSidebarOpen((o) => !o)} />
         <Box
           component="main"
+          data-route-scroll-container
           sx={{
             flex: 1,
             p: { xs: 2, sm: 3 },

@@ -848,16 +848,44 @@ func TestAnonymousGivingIsAllowed(t *testing.T) {
 	h := newHarness(t)
 
 	result, err := h.svc.StartGiving(h.ctx, GiveRequest{
-		Type:    TypeDonation,
-		Amount:  money.MustNew(5000, "GHS"),
-		Channel: money.ChannelMobileMoney,
-		Email:   "visitor@example.com",
+		InitiatorID: "member_1",
+		Type:        TypeDonation,
+		Amount:      money.MustNew(5000, "GHS"),
+		Channel:     money.ChannelMobileMoney,
+		Email:       "visitor@example.com",
 	})
 	if err != nil {
 		t.Fatalf("anonymous giving must work: %v", err)
 	}
 	if result.Transaction.MemberID != "" {
 		t.Errorf("memberId should be empty, got %q", result.Transaction.MemberID)
+	}
+	if result.Transaction.InitiatedBy != "member_1" {
+		t.Errorf("private initiator = %q, want member_1", result.Transaction.InitiatedBy)
+	}
+
+	ref := result.Transaction.IdempotencyKey
+	h.gw.willSucceed(ref, 5000, 100, 75)
+	if _, err := h.svc.Settle(h.ctx, ref); err != nil {
+		t.Fatalf("settle anonymous gift: %v", err)
+	}
+	prior, err := h.svc.GivenTodayMinor(h.ctx, "member_1", time.Now())
+	if err != nil {
+		t.Fatalf("anonymous daily total: %v", err)
+	}
+	if prior != 5000 {
+		t.Fatalf("anonymous gift must still consume private daily allowance: got %d", prior)
+	}
+	history, err := h.svc.List(h.ctx, Query{OwnerID: "member_1"})
+	if err != nil {
+		t.Fatalf("private anonymous history: %v", err)
+	}
+	if len(history) != 1 || history[0].MemberID != "" {
+		t.Fatalf("private history should contain one still-anonymous gift: %#v", history)
+	}
+	completed := h.pub.firstOf(TopicGivingCompleted)
+	if completed["memberId"] != "member_1" {
+		t.Fatalf("receipt must target the private initiator, got %#v", completed)
 	}
 }
 

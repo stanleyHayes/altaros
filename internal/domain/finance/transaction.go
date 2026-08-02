@@ -109,10 +109,15 @@ type Transaction struct {
 	ChurchID mongodb.ID    `bson:"churchId"      json:"churchId"`
 	// MemberID is empty for anonymous giving, which must stay possible — a
 	// visitor who gives should not be forced to identify themselves.
-	MemberID  mongodb.ID `bson:"memberId,omitempty" json:"memberId,omitempty"`
-	Type      Type       `bson:"type"      json:"type"`
-	Direction Direction  `bson:"direction" json:"direction"`
-	Channel   string     `bson:"channel"   json:"channel"`
+	MemberID mongodb.ID `bson:"memberId,omitempty" json:"memberId,omitempty"`
+	// InitiatedBy privately associates a digital checkout with the signed-in
+	// account that started it. It is never serialized: anonymous means church
+	// reports do not identify the giver, not that the giver loses callback
+	// verification, their own history, or a receipt.
+	InitiatedBy mongodb.ID `bson:"initiatedBy,omitempty" json:"-"`
+	Type        Type       `bson:"type"      json:"type"`
+	Direction   Direction  `bson:"direction" json:"direction"`
+	Channel     string     `bson:"channel"   json:"channel"`
 
 	// GrossMinor is what the giver was debited, excluding the levy their
 	// operator adds on top.

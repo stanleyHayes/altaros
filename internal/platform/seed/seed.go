@@ -16,6 +16,7 @@ import (
 
 	"github.com/hayfordstanley/altar-os/internal/domain/church"
 	"github.com/hayfordstanley/altar-os/internal/domain/consent"
+	"github.com/hayfordstanley/altar-os/internal/domain/event"
 	"github.com/hayfordstanley/altar-os/internal/domain/finance"
 	"github.com/hayfordstanley/altar-os/internal/domain/member"
 	"github.com/hayfordstanley/altar-os/internal/domain/rbac"
@@ -81,6 +82,8 @@ type Result struct {
 	Members       int
 	Transactions  int
 	Consents      int
+	Events        int
+	Attendance    int
 	Logins        []Login
 }
 
@@ -153,6 +156,10 @@ func (s *Seeder) Reset(ctx context.Context) error {
 	collections := []string{
 		"organizations", "churches", "users", "members", "transactions",
 		"consents", "notifications", "notification_preferences", "event_outbox",
+		// Events, attendance and RSVPs are written through the tenant wrapper,
+		// which stamps churchId and not the marker — so the events seeder
+		// stamps them afterwards specifically so this list can find them.
+		"events", "attendance", "rsvps",
 	}
 	for _, name := range collections {
 		res, err := s.raw.Collection(name).DeleteMany(ctx, bson.M{MarkerField: Marker})
@@ -272,6 +279,11 @@ func (s *Seeder) Run(ctx context.Context) (*Result, error) {
 		}
 		result.Members += len(created)
 
+		// Before anything that reads "the member behind this login".
+		if err := s.linkLogins(ctx, churchID, created); err != nil {
+			return nil, err
+		}
+
 		consents, err := s.consents(ctx, churchID, created)
 		if err != nil {
 			return nil, err
@@ -284,6 +296,13 @@ func (s *Seeder) Run(ctx context.Context) (*Result, error) {
 		}
 		result.Transactions += txs
 
+		events, attendance, err := s.events(ctx, churchID, created)
+		if err != nil {
+			return nil, err
+		}
+		result.Events += events
+		result.Attendance += attendance
+
 		if err := s.website(ctx, churchID, b.name, b.city); err != nil {
 			return nil, err
 		}
@@ -291,7 +310,9 @@ func (s *Seeder) Run(ctx context.Context) (*Result, error) {
 		s.opt.Log.Info("seeded church",
 			slog.String("church", b.name),
 			slog.Int("members", len(created)),
-			slog.Int("transactions", txs))
+			slog.Int("transactions", txs),
+			slog.Int("events", events),
+			slog.Int("attendance", attendance))
 	}
 
 	// One org-level admin, so cross-branch visibility can actually be seen.
@@ -692,6 +713,189 @@ func (s *Seeder) giving(ctx context.Context, churchID bson.ObjectID, members []m
 		return count, fmt.Errorf("seed: mark transactions: %w", err)
 	}
 	return count, nil
+}
+
+// linkLogins attaches a member record to each seeded login.
+//
+// Without this every seeded account is a login with no person behind it, and
+// every "my …" path in the product — my RSVP, my giving, my attendance —
+// answers "your account is not linked to a member record". That is a real
+// state a church can be in, but it is a bad default for the data a developer
+// works against every day, because it makes the whole self-service half of the
+// app untestable by hand.
+//
+// The pastor and the department leader are linked too, not only the member:
+// leadership attends its own church, and a giving report that excludes the
+// people running the church is a report nobody recognises.
+func (s *Seeder) linkLogins(ctx context.Context, churchID bson.ObjectID, members []member.Member) error {
+	if len(members) == 0 {
+		return nil
+	}
+
+	cursor, err := s.raw.Collection("users").Find(ctx, bson.M{"churchId": churchID},
+		options.Find().SetSort(bson.D{{Key: "createdAt", Value: 1}}))
+	if err != nil {
+		return fmt.Errorf("seed: find church users: %w", err)
+	}
+	var users []struct {
+		ID   bson.ObjectID `bson:"_id"`
+		Name string        `bson:"name"`
+	}
+	if err := cursor.All(ctx, &users); err != nil {
+		return fmt.Errorf("seed: read church users: %w", err)
+	}
+
+	for i, user := range users {
+		if i >= len(members) {
+			break
+		}
+		first, last, _ := strings.Cut(user.Name, " ")
+		update := bson.M{"userId": user.ID}
+		if first != "" {
+			update["firstName"] = first
+		}
+		if last != "" {
+			update["lastName"] = last
+		}
+		// Leadership is active by definition — a pastor whose member record
+		// says "visitor" makes every status report look broken.
+		update["status"] = string(member.StatusActive)
+
+		if _, err := s.raw.Collection("members").UpdateOne(ctx,
+			bson.M{"_id": members[i].ID},
+			bson.M{"$set": update}); err != nil {
+			return fmt.Errorf("seed: link %s: %w", user.Name, err)
+		}
+	}
+	return nil
+}
+
+// events seeds a church calendar and the attendance behind it.
+//
+// A weekly service plus a midweek one plus a couple of one-offs, because those
+// four shapes are what exercise the parts that differ: a recurring series is
+// one document expanded on read, a one-off is not, and the public site's events
+// block has to render both without knowing which it has.
+//
+// Attendance is written for the Sundays that have already happened, so an
+// attendance report has a trend in it rather than a single bar.
+func (s *Seeder) events(ctx context.Context, churchID bson.ObjectID, members []member.Member) (int, int, error) {
+	scoped := s.scope(churchID)
+
+	svc := event.NewService(s.db, member.NewService(s.db, nil, "GH"))
+	if err := svc.EnsureIndexes(scoped); err != nil {
+		return 0, 0, err
+	}
+
+	now := time.Now().UTC()
+	// The Sunday the weekly service started, far enough back that the series is
+	// established rather than starting today.
+	firstSunday := now.AddDate(0, 0, -int(now.Weekday())-7*s.opt.WeeksOfGiving)
+	firstSunday = time.Date(firstSunday.Year(), firstSunday.Month(), firstSunday.Day(),
+		9, 0, 0, 0, time.UTC)
+
+	sunday, err := svc.Create(scoped, event.Input{
+		Title:          "Sunday Service",
+		Description:    "Our main gathering — worship, the word, and communion on the first Sunday of the month.",
+		Location:       "Main Auditorium",
+		StartDate:      firstSunday,
+		EndDate:        firstSunday.Add(2 * time.Hour),
+		RecurrenceRule: "FREQ=WEEKLY",
+	})
+	if err != nil {
+		return 0, 0, fmt.Errorf("seed: sunday service: %w", err)
+	}
+
+	midweek := firstSunday.AddDate(0, 0, 3).Add(9*time.Hour + 30*time.Minute) // Wednesday 18:30
+	others := []event.Input{
+		{
+			Title:          "Midweek Bible Study",
+			Description:    "Working through the book of Acts, chapter by chapter.",
+			Location:       "Fellowship Hall",
+			StartDate:      midweek,
+			EndDate:        midweek.Add(90 * time.Minute),
+			RecurrenceRule: "FREQ=WEEKLY;BYDAY=WE",
+		},
+		{
+			Title:       "Leaders' Retreat",
+			Description: "Two days away for ministry leads and their spouses.",
+			Location:    "Aburi Conference Centre",
+			StartDate:   now.AddDate(0, 1, 0).Truncate(time.Hour),
+			EndDate:     now.AddDate(0, 1, 2).Truncate(time.Hour),
+			Capacity:    40,
+		},
+		{
+			Title:       "Community Outreach",
+			Description: "Food distribution and free health screening.",
+			Location:    "Market Square",
+			StartDate:   now.AddDate(0, 0, 12).Truncate(time.Hour),
+			EndDate:     now.AddDate(0, 0, 12).Truncate(time.Hour).Add(5 * time.Hour),
+		},
+	}
+
+	created := 1
+	for _, in := range others {
+		if _, err := svc.Create(scoped, in); err != nil {
+			return created, 0, fmt.Errorf("seed: event %q: %w", in.Title, err)
+		}
+		created++
+	}
+
+	// Attendance for the Sundays that have already happened. Between half and
+	// three-quarters of the congregation each week, which is what a real
+	// register looks like and what makes the "who has stopped coming" report
+	// have anything to find.
+	recorded := 0
+	for week := 0; week <= s.opt.WeeksOfGiving; week++ {
+		occurrence := firstSunday.AddDate(0, 0, 7*week)
+		if occurrence.After(now) {
+			break
+		}
+
+		present := len(members)/2 + s.rng.Intn(max(1, len(members)/4))
+		batch := make([]event.CheckIn, 0, present)
+		seen := map[string]bool{}
+		for len(batch) < present {
+			m := members[s.rng.Intn(len(members))]
+			if seen[m.ID.Hex()] {
+				continue
+			}
+			seen[m.ID.Hex()] = true
+
+			method := event.CheckInQR
+			// Somebody always forgets their phone.
+			if s.rng.Intn(100) < 15 {
+				method = event.CheckInManual
+			}
+			batch = append(batch, event.CheckIn{
+				MemberID: m.ID.Hex(),
+				Method:   method,
+				// Arriving across the half hour either side of the start.
+				CheckedInAt: occurrence.Add(time.Duration(s.rng.Intn(60)-30) * time.Minute),
+			})
+		}
+
+		result, err := svc.Sync(scoped, event.SyncRequest{
+			EventID:    sunday.ID.Hex(),
+			CheckIns:   batch,
+			Occurrence: occurrence,
+		})
+		if err != nil {
+			return created, recorded, fmt.Errorf("seed: attendance: %w", err)
+		}
+		recorded += result.Recorded
+	}
+
+	// Marked so Reset removes exactly these. Events and attendance are written
+	// through the tenant wrapper, which stamps churchId and not the marker.
+	for _, name := range []string{event.Collection, event.AttendanceCollection, event.RSVPCollection} {
+		if _, err := s.raw.Collection(name).UpdateMany(ctx,
+			bson.M{"churchId": churchID},
+			bson.M{"$set": bson.M{MarkerField: Marker}}); err != nil {
+			return created, recorded, fmt.Errorf("seed: mark %s: %w", name, err)
+		}
+	}
+	return created, recorded, nil
 }
 
 // --- helpers ---------------------------------------------------------------

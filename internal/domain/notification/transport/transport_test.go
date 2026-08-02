@@ -2,6 +2,8 @@ package transport
 
 import (
 	"context"
+	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -10,6 +12,10 @@ import (
 
 	"github.com/hayfordstanley/altar-os/internal/domain/notification"
 )
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }
 
 func serve(t *testing.T, handler http.HandlerFunc) *httptest.Server {
 	t.Helper()
@@ -203,19 +209,26 @@ func TestEmailAcceptedWithoutIDIsNotSuccess(t *testing.T) {
 // A dead device token must be pruned, not retried forever. A congregation
 // that has reinstalled the app accumulates them.
 func TestPushMarksUnregisteredTokensForPruning(t *testing.T) {
-	srv := serve(t, func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(404)
-		_, _ = w.Write([]byte(`{"error":{"status":"NOT_FOUND","message":"Requested entity was not found.",
-			"details":[{"errorCode":"UNREGISTERED"}]}}`))
+	httpClient := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusNotFound,
+			Body: io.NopCloser(strings.NewReader(`{"error":{"status":"NOT_FOUND","message":"Requested entity was not found.",
+				"details":[{"errorCode":"UNREGISTERED"}]}}`)),
+			Header: make(http.Header),
+		}, nil
+	})}
+	push := NewPush(PushConfig{
+		ProjectID: "altar", TokenSource: StaticToken("tok"), BaseURL: "https://fcm.invalid", HTTPClient: httpClient,
 	})
-
-	push := NewPush(PushConfig{ProjectID: "altar", TokenSource: StaticToken("tok"), BaseURL: srv.URL})
 	_, err := push.Send(context.Background(), "dead_device_token", notification.Message{Body: "x"})
 	if err == nil {
 		t.Fatal("want an error")
 	}
 	if notification.IsRetryable(err) {
 		t.Error("an unregistered device must not be retried")
+	}
+	if !errors.Is(err, notification.ErrUnregisteredDevice) {
+		t.Fatalf("error = %v, want ErrUnregisteredDevice", err)
 	}
 
 	invalid := push.InvalidTokens()

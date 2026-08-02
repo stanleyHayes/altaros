@@ -1,5 +1,9 @@
 import type { ReactNode } from "react";
-import { Box, Container, Paper, Typography } from "@mui/material";
+import { Box, Paper, Stack, Typography } from "@mui/material";
+import ChurchRounded from "@mui/icons-material/ChurchRounded";
+import EventAvailableOutlined from "@mui/icons-material/EventAvailableOutlined";
+import FavoriteBorderRounded from "@mui/icons-material/FavoriteBorderRounded";
+import VolunteerActivismOutlined from "@mui/icons-material/VolunteerActivismOutlined";
 
 interface AuthLayoutProps {
   title: string;
@@ -7,9 +11,11 @@ interface AuthLayoutProps {
   children: ReactNode;
 }
 
-const BRAND_MARK = `<svg viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
-  <path d="M50 10C30 10 15 25 15 45C15 55 20 65 30 70C25 75 20 80 20 85C20 90 25 95 35 90C40 87 45 82 50 78C55 82 60 87 65 90C75 95 80 90 80 85C80 80 75 75 70 70C80 65 85 55 85 45C85 25 70 10 50 10Z" stroke="currentColor" stroke-width="5" fill="none" stroke-linejoin="round"/>
-</svg>`;
+const moments = [
+  { icon: EventAvailableOutlined, label: "Church events" },
+  { icon: VolunteerActivismOutlined, label: "Simple giving" },
+  { icon: FavoriteBorderRounded, label: "Care and community" },
+];
 
 /** Shared shell for the member web auth pages (login / register / OTP). */
 export default function AuthLayout({ title, subtitle, children }: AuthLayoutProps) {
@@ -17,95 +23,154 @@ export default function AuthLayout({ title, subtitle, children }: AuthLayoutProp
     <Box
       sx={{
         minHeight: "100vh",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        py: { xs: 4, md: 6 },
-        px: 2,
-        position: "relative",
-        overflow: "hidden",
-        background:
-          "linear-gradient(150deg, #1A1A2E 0%, #4A3470 55%, #6B4C9A 100%)",
+        bgcolor: "#F4F1E9",
+        display: "grid",
+        gridTemplateColumns: { xs: "1fr", md: "minmax(420px, 0.92fr) minmax(520px, 1.08fr)" },
       }}
     >
-      {/* Ambient colour orbs */}
       <Box
-        aria-hidden
+        component="main"
         sx={{
-          position: "absolute",
-          inset: 0,
-          background:
-            "radial-gradient(ellipse at 18% 22%, rgba(255,107,107,0.18) 0%, transparent 52%), " +
-            "radial-gradient(ellipse at 82% 78%, rgba(139,111,187,0.30) 0%, transparent 52%)",
-          pointerEvents: "none",
+          px: { xs: 2.5, sm: 6, lg: 10 },
+          py: { xs: 3, sm: 6 },
+          display: "flex",
+          flexDirection: "column",
+          justifyContent: "center",
+          order: { xs: 2, md: 1 },
         }}
-      />
-
-      <Container maxWidth="sm" sx={{ position: "relative", zIndex: 1 }}>
-        {/* Brand */}
-        <Box
-          sx={{
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            gap: 1.5,
-            mb: 3,
-          }}
-        >
+      >
+        <Stack direction="row" spacing={1.25} sx={{ alignItems: "center", mb: { xs: 4, md: 7 } }}>
           <Box
-            aria-hidden
             sx={{
               width: 40,
               height: 40,
-              color: "#fff",
-              "& svg": { width: "100%", height: "100%" },
-            }}
-            dangerouslySetInnerHTML={{ __html: BRAND_MARK }}
-          />
-          <Typography
-            component="span"
-            sx={{
-              color: "#fff",
-              fontWeight: 800,
-              fontSize: "1.4rem",
-              letterSpacing: "-0.02em",
+              borderRadius: "14px",
+              bgcolor: "#102A27",
+              color: "#78D8C7",
+              display: "grid",
+              placeItems: "center",
             }}
           >
-            ALTAR&nbsp;OS
-          </Typography>
-        </Box>
+            <ChurchRounded fontSize="small" />
+          </Box>
+          <Box>
+            <Typography sx={{ color: "#102A27", fontWeight: 850, letterSpacing: "-0.035em", lineHeight: 1 }}>
+              ALTAR OS
+            </Typography>
+            <Typography sx={{ color: "#71807A", fontSize: "0.68rem", letterSpacing: "0.12em", mt: 0.4 }}>
+              MEMBER WEB
+            </Typography>
+          </Box>
+        </Stack>
 
         <Paper
           elevation={0}
           sx={{
-            p: { xs: 3, sm: 4.5 },
-            borderRadius: 4,
-            backgroundColor: "rgba(255,255,255,0.97)",
-            border: "1px solid rgba(255,255,255,0.4)",
-            boxShadow: "0 24px 64px rgba(0,0,0,0.28)",
+            width: "100%",
+            maxWidth: 520,
+            bgcolor: "transparent",
           }}
         >
-          <Box sx={{ mb: 3.5, textAlign: "center" }}>
-            <Typography variant="h4" sx={{ fontWeight: 700, mb: subtitle ? 0.75 : 0 }}>
+          <Box sx={{ mb: 4 }}>
+            <Typography
+              component="h1"
+              sx={{
+                color: "#102A27",
+                fontSize: { xs: "2.15rem", sm: "2.75rem" },
+                fontWeight: 760,
+                letterSpacing: "-0.055em",
+                lineHeight: 1.02,
+                mb: subtitle ? 1.4 : 0,
+              }}
+            >
               {title}
             </Typography>
             {subtitle && (
-              <Typography variant="body2" sx={{ color: "text.secondary" }}>
+              <Typography sx={{ color: "#66756F", fontSize: "1rem", lineHeight: 1.65, maxWidth: 420 }}>
                 {subtitle}
               </Typography>
             )}
           </Box>
-
           {children}
         </Paper>
 
-        <Typography
-          variant="body2"
-          sx={{ color: "rgba(255,255,255,0.5)", textAlign: "center", mt: 3 }}
-        >
-          © {new Date().getFullYear()} ALTAR OS
+        <Typography sx={{ color: "#82908A", fontSize: "0.75rem", mt: { xs: 5, md: 8 } }}>
+          © {new Date().getFullYear()} Altar OS · Accra, Ghana
         </Typography>
-      </Container>
+      </Box>
+
+      <Box
+        component="aside"
+        sx={{
+          m: { xs: 1.5, md: 2 },
+          minHeight: { xs: 270, md: "calc(100vh - 32px)" },
+          borderRadius: { xs: "26px", md: "34px" },
+          bgcolor: "#102A27",
+          color: "#F7F5ED",
+          p: { xs: 3, sm: 5, lg: 8 },
+          display: "flex",
+          flexDirection: "column",
+          justifyContent: "space-between",
+          overflow: "hidden",
+          position: "relative",
+          order: { xs: 1, md: 2 },
+        }}
+      >
+        <Box
+          aria-hidden
+          sx={{
+            position: "absolute",
+            width: { xs: 230, lg: 410 },
+            height: { xs: 230, lg: 410 },
+            right: { xs: -95, lg: -110 },
+            top: { xs: -110, lg: -80 },
+            borderRadius: "50%",
+            border: "1px solid rgba(120,216,199,0.22)",
+            boxShadow: "0 0 0 42px rgba(120,216,199,0.035), 0 0 0 84px rgba(120,216,199,0.025)",
+          }}
+        />
+        <Typography sx={{ color: "#78D8C7", fontSize: "0.73rem", fontWeight: 800, letterSpacing: "0.18em", zIndex: 1 }}>
+          YOUR CHURCH, THROUGH THE WEEK
+        </Typography>
+
+        <Box sx={{ zIndex: 1, maxWidth: 590, my: { xs: 5, md: 8 } }}>
+          <Typography
+            sx={{
+              fontFamily: '"Outfit", sans-serif',
+              fontSize: { xs: "2rem", sm: "3rem", lg: "4.2rem" },
+              lineHeight: 1.02,
+              letterSpacing: "-0.045em",
+              mb: 2.5,
+            }}
+          >
+            Belong beyond Sunday.
+          </Typography>
+          <Typography sx={{ color: "rgba(247,245,237,0.66)", lineHeight: 1.7, maxWidth: 480 }}>
+            Give, join events and stay close to the people who make your church feel like home.
+          </Typography>
+        </Box>
+
+        <Stack direction={{ xs: "column", sm: "row" }} spacing={1.2} sx={{ zIndex: 1 }}>
+          {moments.map(({ icon: Icon, label }) => (
+            <Stack
+              key={label}
+              direction="row"
+              spacing={1}
+              sx={{
+                alignItems: "center",
+                px: 1.5,
+                py: 1.2,
+                border: "1px solid rgba(247,245,237,0.13)",
+                borderRadius: "14px",
+                bgcolor: "rgba(255,255,255,0.035)",
+              }}
+            >
+              <Icon sx={{ color: "#78D8C7", fontSize: 18 }} />
+              <Typography sx={{ fontSize: "0.78rem", color: "rgba(247,245,237,0.78)" }}>{label}</Typography>
+            </Stack>
+          ))}
+        </Stack>
+      </Box>
     </Box>
   );
 }

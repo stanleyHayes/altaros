@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
+	"unicode"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
@@ -17,8 +19,9 @@ import (
 
 // Service sends notifications, subject to consent and preference.
 type Service struct {
-	coll  *mongodb.TenantCollection
-	prefs *mongodb.TenantCollection
+	coll    *mongodb.TenantCollection
+	prefs   *mongodb.TenantCollection
+	devices *mongodb.TenantCollection
 	// global reaches the same collection without a tenant, for the sweeper —
 	// which runs on a timer with no request and therefore no church, and has
 	// to find out which churches have work before it can scope anything.
@@ -42,6 +45,7 @@ func NewService(db *mongodb.DB, cc ConsentChecker, dir Directory, transports ...
 		coll:       db.Tenant(Collection),
 		global:     db.Global(Collection),
 		prefs:      db.Tenant(PreferenceCollection),
+		devices:    db.Tenant(DeviceCollection),
 		transports: make(map[Channel]Transport, len(transports)),
 		consent:    cc,
 		dir:        dir,
@@ -108,6 +112,27 @@ func (s *Service) EnsureIndexes(ctx context.Context) error {
 	}); err != nil {
 		return fmt.Errorf("notification: create preference indexes: %w", err)
 	}
+	if err := s.devices.EnsureIndexes(ctx, []mongo.IndexModel{
+		{
+			Keys:    bson.D{{Key: mongodb.TenantField, Value: 1}, {Key: "token", Value: 1}},
+			Options: options.Index().SetName("uq_church_device_token").SetUnique(true),
+		},
+		{
+			Keys:    bson.D{{Key: mongodb.TenantField, Value: 1}, {Key: "memberId", Value: 1}, {Key: "updatedAt", Value: -1}},
+			Options: options.Index().SetName("church_member_devices"),
+		},
+		{
+			Keys: bson.D{
+				{Key: mongodb.TenantField, Value: 1},
+				{Key: "memberId", Value: 1},
+				{Key: "family", Value: 1},
+				{Key: "platform", Value: 1},
+			},
+			Options: options.Index().SetName("uq_church_member_family_platform_device").SetUnique(true),
+		},
+	}); err != nil {
+		return fmt.Errorf("notification: create device indexes: %w", err)
+	}
 	return nil
 }
 
@@ -166,6 +191,17 @@ func (s *Service) Send(ctx context.Context, msg Message) (*Notification, error) 
 	}
 
 	address := msg.Address
+	if address == "" {
+		if msg.Channel == ChannelPush {
+			tokens, tokenErr := s.DeviceTokens(ctx, msg.MemberID)
+			if tokenErr != nil {
+				return nil, fmt.Errorf("notification: resolve device tokens: %w", tokenErr)
+			}
+			if len(tokens) > 0 {
+				address = tokens[0]
+			}
+		}
+	}
 	if address == "" {
 		recipient, err := s.dir.RecipientFor(ctx, msg.MemberID)
 		if err != nil {
@@ -230,6 +266,11 @@ func (s *Service) attempt(ctx context.Context, n *Notification, msg Message) (*N
 	if err == nil {
 		return s.finish(ctx, n.ID, StatusSent, ref, "")
 	}
+	if n.Channel == ChannelPush && errors.Is(err, ErrUnregisteredDevice) {
+		if _, pruneErr := s.devices.DeleteOne(ctx, bson.M{"token": n.Address}); pruneErr != nil {
+			return nil, fmt.Errorf("notification: prune unregistered device: %w", pruneErr)
+		}
+	}
 
 	attempts := n.Attempts + 1
 	if IsRetryable(err) && attempts < MaxAttempts {
@@ -244,7 +285,7 @@ func (s *Service) attempt(ctx context.Context, n *Notification, msg Message) (*N
 	if attempts >= MaxAttempts {
 		reason = fmt.Sprintf("%s (abandoned after %d attempts)", reason, attempts)
 	}
-	return s.finish(ctx, n.ID, StatusFailed, "", reason)
+	return s.finish(ctx, n.ID, StatusFailed, "", reason, attempts)
 }
 
 // Retry attempts everything that is due: queued messages past their quiet
@@ -366,7 +407,13 @@ func (s *Service) record(ctx context.Context, msg Message, address string, statu
 	return created, err == nil, err
 }
 
-func (s *Service) finish(ctx context.Context, id bson.ObjectID, status Status, providerRef, reason string) (*Notification, error) {
+func (s *Service) finish(
+	ctx context.Context,
+	id bson.ObjectID,
+	status Status,
+	providerRef, reason string,
+	attemptCount ...int,
+) (*Notification, error) {
 	set := bson.M{
 		"status":    string(status),
 		"updatedAt": s.now().UTC(),
@@ -376,6 +423,9 @@ func (s *Service) finish(ctx context.Context, id bson.ObjectID, status Status, p
 	}
 	if reason != "" {
 		set["reason"] = reason
+	}
+	if len(attemptCount) > 0 {
+		set["attempts"] = attemptCount[0]
 	}
 	if status == StatusSent || status == StatusDelivered {
 		set["sentAt"] = s.now().UTC()
@@ -474,6 +524,110 @@ func (s *Service) History(ctx context.Context, memberID string, limit int64) ([]
 		return nil, fmt.Errorf("notification: history: %w", err)
 	}
 	return out, nil
+}
+
+// MarkRead records inbox state without rewriting transport delivery status.
+func (s *Service) MarkRead(ctx context.Context, id, memberID string) (*Notification, error) {
+	oid, err := bson.ObjectIDFromHex(id)
+	if err != nil || memberID == "" {
+		return nil, ErrNotFound
+	}
+	now := s.now().UTC()
+	res, err := s.coll.UpdateOne(ctx, bson.M{"_id": oid, "memberId": memberID}, bson.M{"$set": bson.M{"readAt": now}})
+	if err != nil {
+		return nil, fmt.Errorf("notification: mark read: %w", err)
+	}
+	if res.MatchedCount == 0 {
+		return nil, ErrNotFound
+	}
+	return s.ByID(ctx, id)
+}
+
+// RegisterDevice persistently attaches one native token to a member session.
+// A family has one token slot per native platform, so APNs/FCM rotation updates
+// that slot instead of retaining a stale address and attempting duplicate
+// delivery forever.
+func (s *Service) RegisterDevice(ctx context.Context, memberID, family, token, platform string) error {
+	token = strings.TrimSpace(token)
+	family = strings.TrimSpace(family)
+	platform = strings.ToLower(strings.TrimSpace(platform))
+	if memberID == "" || family == "" || len(family) > 256 || strings.IndexFunc(family, unicode.IsControl) >= 0 ||
+		(platform != "ios" && platform != "android") ||
+		len(token) < 32 || len(token) > 4096 || strings.IndexFunc(token, unicode.IsControl) >= 0 {
+		return ErrInvalidDevice
+	}
+	now := s.now().UTC()
+	// The same physical APNs/FCM token can survive an app logout and then be
+	// presented by a replacement login. A best-effort logout cleanup must not
+	// strand that device behind the tenant/token unique index. Reclaim only the
+	// exact token inside this tenant before assigning its new session slot.
+	var prior []DeviceRegistration
+	if err := s.devices.Find(ctx, bson.M{"token": token}, &prior, options.Find().SetLimit(10)); err != nil {
+		return fmt.Errorf("notification: inspect device ownership: %w", err)
+	}
+	for _, device := range prior {
+		if device.MemberID == memberID && device.Family == family && device.Platform == platform {
+			continue
+		}
+		if _, err := s.devices.DeleteOne(ctx, bson.M{"_id": device.ID, "token": token}); err != nil {
+			return fmt.Errorf("notification: transfer device ownership: %w", err)
+		}
+	}
+	_, err := s.devices.UpsertOne(ctx, bson.M{
+		"memberId": memberID,
+		"family":   family,
+		"platform": platform,
+	}, bson.M{
+		"$set":         bson.M{"token": token, "updatedAt": now},
+		"$setOnInsert": bson.M{"createdAt": now},
+	})
+	if err != nil {
+		return fmt.Errorf("notification: register device: %w", err)
+	}
+	return nil
+}
+
+// RemoveDevices deletes either one session family's registrations or, when
+// family is empty, every device owned by the member (global logout).
+func (s *Service) RemoveDevices(ctx context.Context, memberID, family string) error {
+	if memberID == "" {
+		return ErrNoRecipient
+	}
+	filter := bson.M{"memberId": memberID}
+	if family != "" {
+		filter["family"] = family
+	}
+	for {
+		var devices []DeviceRegistration
+		if err := s.devices.Find(ctx, filter, &devices, options.Find().SetLimit(100)); err != nil {
+			return fmt.Errorf("notification: list devices for removal: %w", err)
+		}
+		if len(devices) == 0 {
+			return nil
+		}
+		for _, device := range devices {
+			if _, err := s.devices.DeleteOne(ctx, bson.M{"_id": device.ID, "memberId": memberID}); err != nil {
+				return fmt.Errorf("notification: remove device: %w", err)
+			}
+		}
+	}
+}
+
+// DeviceTokens returns the newest native registrations for a member.
+func (s *Service) DeviceTokens(ctx context.Context, memberID string) ([]string, error) {
+	if memberID == "" {
+		return nil, ErrNoRecipient
+	}
+	var devices []DeviceRegistration
+	if err := s.devices.Find(ctx, bson.M{"memberId": memberID}, &devices,
+		options.Find().SetSort(bson.D{{Key: "updatedAt", Value: -1}}).SetLimit(20)); err != nil {
+		return nil, fmt.Errorf("notification: list devices: %w", err)
+	}
+	tokens := make([]string, 0, len(devices))
+	for _, device := range devices {
+		tokens = append(tokens, device.Token)
+	}
+	return tokens, nil
 }
 
 // Count returns how many notifications match a filter.

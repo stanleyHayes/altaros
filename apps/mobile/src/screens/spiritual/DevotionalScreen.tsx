@@ -1,45 +1,96 @@
-import React, { useState, useEffect } from 'react';
+import React, { useCallback, useState, useEffect, useRef } from 'react';
 import {
   View,
   Text,
   ScrollView,
   StyleSheet,
-  ActivityIndicator,
 } from 'react-native';
 import { Card } from '../../components/common/Card';
-import { colors, typography, spacing, borderRadius } from '../../theme';
+import { colors, typography, spacing } from '../../theme';
 import type { Devotional } from '../../services/spiritual.service';
 import spiritualService from '../../services/spiritual.service';
+import { ScreenSkeleton } from '../../components/common/ScreenSkeleton';
+import { useAuth } from '../../hooks/useAuth';
+import { createLatestRequestGate } from '../../services/latest-request';
+import { connectivityErrorMessage } from '../../services/connectivity';
+import { useKnownOffline } from '../../hooks/useKnownOffline';
+import { spiritualContentBelongsToIdentity, type SpiritualScreenOwner } from './spiritual-screen-state';
+import { StatePanel } from '../../components/common/StatePanel';
 
 export function DevotionalScreen() {
+  const { user } = useAuth();
+  const offline = useKnownOffline();
   const [devotional, setDevotional] = useState<Devotional | null>(null);
+  const [contentOwner, setContentOwner] = useState<SpiritualScreenOwner | null>(() => ({
+    churchId: user?.churchId,
+    memberId: user?.id,
+  }));
   const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState('');
+  const loadGate = useRef(createLatestRequestGate());
+  const contentOwnerRef = useRef(contentOwner);
+  const activeIdentityRef = useRef<SpiritualScreenOwner>({ churchId: user?.churchId, memberId: user?.id });
+  contentOwnerRef.current = contentOwner;
+  activeIdentityRef.current = { churchId: user?.churchId, memberId: user?.id };
+
+  const displayDate = (value: string) => {
+    const parsed = new Date(value);
+    return Number.isNaN(parsed.getTime())
+      ? value
+      : parsed.toLocaleDateString('en-GH', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+  };
+
+  const loadDevotional = useCallback(async () => {
+      const request = loadGate.current.begin();
+      const startedOwner = { churchId: user?.churchId, memberId: user?.id };
+      if (!spiritualContentBelongsToIdentity(contentOwnerRef.current, startedOwner)) {
+        contentOwnerRef.current = startedOwner;
+        setContentOwner(startedOwner);
+        setDevotional(null);
+      }
+      setError('');
+      setIsLoading(true);
+      try {
+        if (!user?.churchId || !user.id) throw new Error('No church selected');
+        const result = await spiritualService.getTodayDevotional(user.churchId);
+        if (loadGate.current.isLatest(request)) {
+          setDevotional(result);
+          const loadedOwner = { churchId: user.churchId, memberId: user.id };
+          contentOwnerRef.current = loadedOwner;
+          setContentOwner(loadedOwner);
+        }
+      } catch (cause) {
+        if (loadGate.current.isLatest(request)) setError(connectivityErrorMessage(cause, 'Today’s devotional could not be loaded.'));
+      } finally {
+        if (loadGate.current.isLatest(request)) setIsLoading(false);
+      }
+  }, [user?.churchId, user?.id]);
 
   useEffect(() => {
-    const loadDevotional = async () => {
-      try {
-        setDevotional(await spiritualService.getTodayDevotional());
-      } catch {
-        setDevotional(null);
-      } finally {
-        setIsLoading(false);
-      }
-    };
-    loadDevotional();
-  }, []);
+    const gate = loadGate.current;
+    void loadDevotional();
+    return () => gate.invalidate();
+  }, [loadDevotional]);
 
-  if (isLoading) {
-    return (
-      <View style={styles.loading}>
-        <ActivityIndicator size="large" color={colors.primary} />
-      </View>
-    );
+  const ownsContent = spiritualContentBelongsToIdentity(contentOwner, activeIdentityRef.current);
+
+  if (isLoading || !ownsContent) {
+    return <ScreenSkeleton cards={2} showHero />;
   }
 
   if (!devotional) {
     return (
       <View style={styles.loading}>
-        <Text style={styles.emptyText}>Today&apos;s devotional is not available yet.</Text>
+        <StatePanel
+          icon={error ? (offline ? 'cloud-offline-outline' : 'book-outline') : 'leaf-outline'}
+          tone={error ? (offline ? 'offline' : 'error') : 'quiet'}
+          title={error ? (offline ? 'Today’s reading is offline' : 'A quiet moment, delayed') : 'No devotional today'}
+          message={error || 'Your church has not published today’s reading yet.'}
+          actionLabel={error ? (offline ? 'Reconnect to retry' : 'Try again') : undefined}
+          actionHint={offline ? 'Reconnect to load today’s devotional.' : 'Loads today’s devotional again.'}
+          actionDisabled={offline}
+          onAction={error ? () => void loadDevotional() : undefined}
+        />
       </View>
     );
   }
@@ -47,7 +98,8 @@ export function DevotionalScreen() {
   return (
     <ScrollView style={styles.container} showsVerticalScrollIndicator={false}>
       <View style={styles.dateHeader}>
-        <Text style={styles.dateText}>{devotional.date}</Text>
+        <Text style={styles.dateEyebrow}>A QUIET PLACE TO BEGIN</Text>
+        <Text style={styles.dateText}>{displayDate(devotional.date)}</Text>
       </View>
 
       <View style={styles.content}>
@@ -56,9 +108,9 @@ export function DevotionalScreen() {
 
         <Card style={styles.scriptureCard}>
           <Text style={styles.scriptureText}>"{devotional.scripture}"</Text>
-          <Text style={styles.scriptureRef}>
-            -- {devotional.scriptureReference}
-          </Text>
+          {devotional.scriptureReference ? (
+            <Text style={styles.scriptureRef}>— {devotional.scriptureReference}</Text>
+          ) : null}
         </Card>
 
         <Text style={styles.body}>{devotional.content}</Text>
@@ -78,25 +130,27 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     backgroundColor: colors.background,
   },
-  emptyText: {
-    fontSize: typography.sizes.base,
-    color: colors.muted,
-  },
   dateHeader: {
-    backgroundColor: colors.primary,
+    backgroundColor: colors.text,
     paddingHorizontal: spacing.xl,
-    paddingVertical: spacing.md,
+    paddingTop: spacing.xl,
+    paddingBottom: spacing['2xl'],
   },
+  dateEyebrow: { color: colors.primaryLight, fontFamily: typography.families.bold, fontSize: typography.sizes.xs, letterSpacing: 1.35, marginBottom: spacing.sm },
   dateText: {
-    fontSize: typography.sizes.md,
-    color: 'rgba(255,255,255,0.8)',
+    fontFamily: typography.families.semibold,
+    fontSize: typography.sizes.lg,
+    color: colors.surface,
   },
   content: {
+    width: '100%',
+    maxWidth: 680,
+    alignSelf: 'center',
     padding: spacing.xl,
   },
   title: {
     fontSize: typography.sizes['2xl'],
-    fontWeight: typography.weights.bold,
+    fontFamily: typography.families.bold,
     color: colors.text,
     marginBottom: spacing.xs,
   },
@@ -121,7 +175,7 @@ const styles = StyleSheet.create({
   scriptureRef: {
     fontSize: typography.sizes.md,
     color: colors.primary,
-    fontWeight: typography.weights.semibold,
+    fontFamily: typography.families.semibold,
   },
   body: {
     fontSize: typography.sizes.base,

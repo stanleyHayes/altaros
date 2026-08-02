@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { forwardRef, useState } from 'react';
 import {
   View,
   Text,
@@ -6,6 +6,7 @@ import {
   StyleSheet,
   TextInputProps,
   ViewStyle,
+  type AccessibilityState,
 } from 'react-native';
 import { colors, typography, spacing, borderRadius } from '../../theme';
 
@@ -15,19 +16,41 @@ interface InputProps extends TextInputProps {
   containerStyle?: ViewStyle;
 }
 
-export function Input({
+export function mergeInputAccessibility(
+  state: AccessibilityState | undefined,
+  editable: boolean | undefined,
+  hint: string | undefined,
+  error: string | undefined,
+): { state: AccessibilityState; hint: string | undefined } {
+  return {
+    state: { ...state, disabled: editable === false || state?.disabled === true },
+    hint: error
+      ? [hint, `Error: ${error}`].filter(Boolean).join('. ')
+      : hint,
+  };
+}
+
+export const Input = forwardRef<TextInput, InputProps>(function Input({
   label,
   error,
   containerStyle,
   style,
   ...props
-}: InputProps) {
+}: InputProps, ref) {
   const [isFocused, setIsFocused] = useState(false);
+  const accessibility = mergeInputAccessibility(
+    props.accessibilityState,
+    props.editable,
+    props.accessibilityHint,
+    error,
+  );
 
   return (
     <View style={[styles.container, containerStyle]}>
       {label && <Text style={styles.label}>{label}</Text>}
       <TextInput
+        ref={ref}
+        {...props}
         style={[
           styles.input,
           isFocused && styles.inputFocused,
@@ -36,7 +59,9 @@ export function Input({
         ]}
         placeholderTextColor={colors.muted}
         accessibilityLabel={props.accessibilityLabel ?? label ?? props.placeholder}
-        accessibilityState={{ disabled: props.editable === false }}
+        accessibilityHint={accessibility.hint}
+        accessibilityState={accessibility.state}
+        aria-invalid={Boolean(error)}
         onFocus={(e) => {
           setIsFocused(true);
           props.onFocus?.(e);
@@ -45,12 +70,15 @@ export function Input({
           setIsFocused(false);
           props.onBlur?.(e);
         }}
-        {...props}
       />
-      {error && <Text style={styles.error}>{error}</Text>}
+      {error && (
+        <Text style={styles.error} accessibilityRole="alert" accessibilityLiveRegion="polite">
+          {error}
+        </Text>
+      )}
     </View>
   );
-}
+});
 
 const styles = StyleSheet.create({
   container: {
@@ -58,7 +86,7 @@ const styles = StyleSheet.create({
   },
   label: {
     fontSize: typography.sizes.md,
-    fontWeight: typography.weights.medium,
+    fontFamily: typography.families.medium,
     color: colors.text,
     marginBottom: spacing.xs,
   },

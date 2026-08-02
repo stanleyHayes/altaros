@@ -20,7 +20,7 @@ export interface CreateEventData {
   capacity?: number;
 }
 
-export interface UpdateEventData extends Partial<CreateEventData> {}
+export type UpdateEventData = Partial<CreateEventData>;
 
 export interface CreateRsvpData {
   eventId: string;
@@ -35,16 +35,22 @@ export interface CreateAttendanceData {
   method: CheckInMethod;
 }
 
+export interface EventQuery extends PaginationQuery {
+  /** Only events whose end time has not passed. */
+  upcoming?: boolean;
+}
+
 export interface IEventRepository {
   create(data: CreateEventData): Promise<Event>;
   findById(id: string): Promise<Event | null>;
   findByChurchId(
     churchId: string,
-    query: PaginationQuery,
+    query: EventQuery,
   ): Promise<PaginatedResult<Event>>;
   update(id: string, data: UpdateEventData): Promise<Event | null>;
   delete(id: string): Promise<boolean>;
   createRsvp(data: CreateRsvpData): Promise<RSVP>;
+  findRsvpsByMember(memberId: string, eventIds?: string[]): Promise<RSVP[]>;
   createAttendance(data: CreateAttendanceData): Promise<Attendance>;
   getAttendanceByEvent(eventId: string): Promise<Attendance[]>;
 }

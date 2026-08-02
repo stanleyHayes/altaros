@@ -21,6 +21,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
+	"strings"
 	"time"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
@@ -30,6 +32,8 @@ import (
 	"github.com/hayfordstanley/altar-os/internal/platform/mongodb"
 	"github.com/hayfordstanley/altar-os/internal/platform/tenancy"
 )
+
+var publicSlugPattern = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
 
 // Collections. Organizations and churches are global rather than
 // tenant-scoped: a church IS the tenant, so it cannot be filtered by itself,
@@ -182,6 +186,25 @@ func (s *Service) ByID(ctx context.Context, id string) (*Church, error) {
 			return nil, ErrNotFound
 		}
 		return nil, fmt.Errorf("church: lookup: %w", err)
+	}
+	return &c, nil
+}
+
+// ByPublicSlug resolves the member-facing join code. It deliberately returns
+// active churches only: a disabled tenant must not continue accepting new
+// member registrations through an old printed or shared code.
+func (s *Service) ByPublicSlug(ctx context.Context, value string) (*Church, error) {
+	slug := strings.ToLower(strings.TrimSpace(value))
+	if len(slug) < 3 || len(slug) > 80 || !publicSlugPattern.MatchString(slug) {
+		return nil, ErrNotFound
+	}
+
+	var c Church
+	if err := s.churches.FindOne(ctx, bson.M{"slug": slug, "isActive": true}).Decode(&c); err != nil {
+		if errors.Is(err, mongo.ErrNoDocuments) {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("church: public slug lookup: %w", err)
 	}
 	return &c, nil
 }

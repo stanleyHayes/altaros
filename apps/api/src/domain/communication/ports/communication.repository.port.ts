@@ -28,8 +28,7 @@ export interface CreateAnnouncementData {
   expiresAt?: Date;
 }
 
-export interface UpdateAnnouncementData
-  extends Partial<CreateAnnouncementData> {}
+export type UpdateAnnouncementData = Partial<CreateAnnouncementData>;
 
 export interface ICommunicationRepository {
   createMessage(data: CreateMessageData): Promise<Message>;

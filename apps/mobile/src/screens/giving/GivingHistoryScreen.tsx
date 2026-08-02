@@ -1,8 +1,14 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, FlatList, RefreshControl, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { FlatList, RefreshControl, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { Card } from '../../components/common/Card';
-import givingService, { formatMoney, type GivingRecord } from '../../services/giving.service';
+import givingService, { formatMoney, sumConfirmedGivingMinor, type GivingRecord } from '../../services/giving.service';
 import { borderRadius, colors, spacing, typography } from '../../theme';
+import { ScreenSkeleton } from '../../components/common/ScreenSkeleton';
+import { createLatestRequestGate } from '../../services/latest-request';
+import { useAuth } from '../../hooks/useAuth';
+import { useKnownOffline } from '../../hooks/useKnownOffline';
+import { connectivityErrorMessage } from '../../services/connectivity';
+import { StatePanel } from '../../components/common/StatePanel';
 
 const statusColors: Record<GivingRecord['status'], string> = {
   success: colors.success,
@@ -11,48 +17,106 @@ const statusColors: Record<GivingRecord['status'], string> = {
   reversed: colors.muted,
 };
 
+interface GivingHistoryOwner {
+  churchId?: string;
+  memberId?: string;
+}
+
+export function givingHistoryBelongsToIdentity(
+  owner: GivingHistoryOwner | null,
+  active: GivingHistoryOwner,
+): boolean {
+  return owner !== null
+    && owner.churchId !== undefined
+    && owner.memberId !== undefined
+    && owner.churchId === active.churchId
+    && owner.memberId === active.memberId;
+}
+
 export function GivingHistoryScreen() {
+  const { user } = useAuth();
+  const offline = useKnownOffline();
   const [records, setRecords] = useState<GivingRecord[]>([]);
+  const [recordsOwner, setRecordsOwner] = useState<GivingHistoryOwner | null>(() => ({
+    churchId: user?.churchId,
+    memberId: user?.id,
+  }));
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [error, setError] = useState('');
+  const loadGate = useRef(createLatestRequestGate());
+  const recordsOwnerRef = useRef(recordsOwner);
+  recordsOwnerRef.current = recordsOwner;
 
   const loadHistory = useCallback(async (refresh = false) => {
-    refresh ? setIsRefreshing(true) : setIsLoading(true);
+    const request = loadGate.current.begin();
+    const startedOwner = { churchId: user?.churchId, memberId: user?.id };
+    if (!givingHistoryBelongsToIdentity(recordsOwnerRef.current, startedOwner)) {
+      recordsOwnerRef.current = startedOwner;
+      setRecordsOwner(startedOwner);
+      setRecords([]);
+    }
+    if (refresh) setIsRefreshing(true);
+    else setIsLoading(true);
     setError('');
     try {
-      setRecords(await givingService.getHistory());
-    } catch {
-      setError('We could not load your giving history.');
+      if (!user?.churchId || !user.id) throw new Error('Member identity is incomplete');
+      const result = await givingService.getHistory(user.churchId, user.id);
+      if (loadGate.current.isLatest(request)) {
+        setRecords(result);
+        const loadedOwner = { churchId: user.churchId, memberId: user.id };
+        recordsOwnerRef.current = loadedOwner;
+        setRecordsOwner(loadedOwner);
+      }
+    } catch (cause) {
+      if (loadGate.current.isLatest(request)) setError(connectivityErrorMessage(cause, 'We could not load your giving history.'));
     } finally {
-      setIsLoading(false);
-      setIsRefreshing(false);
+      if (loadGate.current.isLatest(request)) {
+        setIsLoading(false);
+        setIsRefreshing(false);
+      }
     }
-  }, []);
+  }, [user?.churchId, user?.id]);
 
-  useEffect(() => { void loadHistory(); }, [loadHistory]);
+  useEffect(() => {
+    const gate = loadGate.current;
+    void loadHistory();
+    return () => gate.invalidate();
+  }, [loadHistory]);
 
-  const totalMinor = useMemo(
-    () => records.filter((record) => record.status === 'success').reduce((sum, record) => sum + record.grossMinor, 0),
-    [records],
-  );
+  const ownsRecords = givingHistoryBelongsToIdentity(recordsOwner, {
+    churchId: user?.churchId,
+    memberId: user?.id,
+  });
+  const visibleRecords = ownsRecords ? records : [];
+  const totalMinor = sumConfirmedGivingMinor(visibleRecords);
 
-  if (isLoading) {
-    return <View style={styles.center}><ActivityIndicator size="large" color={colors.primary} /><Text style={styles.loadingText}>Loading your gifts…</Text></View>;
+  if (isLoading || (!ownsRecords && !error)) {
+    return <ScreenSkeleton cards={4} showHero />;
   }
 
   return (
     <View style={styles.container}>
-      <View style={styles.summary}>
-        <Text style={styles.summaryLabel}>Confirmed giving</Text>
-        <Text style={styles.summaryAmount}>{formatMoney(totalMinor)}</Text>
-        <Text style={styles.summaryDetail}>{records.length} {records.length === 1 ? 'record' : 'records'} in your history</Text>
-      </View>
+      {!error || visibleRecords.length > 0 ? (
+        <View style={styles.summary}>
+          <Text style={styles.summaryLabel}>{error ? 'Last loaded confirmed giving' : 'Confirmed giving'}</Text>
+          <Text style={styles.summaryAmount}>{formatMoney(totalMinor)}</Text>
+          <Text style={styles.summaryDetail}>{visibleRecords.length} {visibleRecords.length === 1 ? 'record' : 'records'} in your history</Text>
+        </View>
+      ) : null}
       <FlatList
-        data={records}
+        data={visibleRecords}
         keyExtractor={(item) => item.id}
         contentContainerStyle={styles.list}
-        refreshControl={<RefreshControl refreshing={isRefreshing} onRefresh={() => void loadHistory(true)} tintColor={colors.primary} />}
+        refreshControl={<RefreshControl refreshing={isRefreshing} onRefresh={() => { if (!offline) void loadHistory(true); }} enabled={!offline} tintColor={colors.primary} />}
+        ListHeaderComponent={error && visibleRecords.length > 0 ? (
+          <View style={styles.errorBanner}>
+            <Text style={styles.errorText} accessibilityRole="alert">{error} Showing your last loaded records.</Text>
+            <TouchableOpacity style={[styles.textAction, offline && styles.actionDisabled]} onPress={() => void loadHistory(true)} accessibilityRole="button" disabled={offline} accessibilityState={{ disabled: offline }} accessibilityHint={offline ? 'Reconnect to refresh your giving history.' : undefined}>
+              <Text style={styles.bannerRetry}>Try again</Text>
+            </TouchableOpacity>
+          </View>
+        ) : null}
         renderItem={({ item }) => (
           <Card style={styles.recordCard}>
             <View style={styles.recordHeader}>
@@ -72,11 +136,16 @@ export function GivingHistoryScreen() {
           </Card>
         )}
         ListEmptyComponent={
-          <View style={styles.empty}>
-            <Text style={styles.emptyTitle}>{error ? 'History unavailable' : 'Your first gift will appear here'}</Text>
-            <Text style={styles.emptyBody}>{error || 'Completed and pending gifts are kept together so you can always trace what happened.'}</Text>
-            {error ? <TouchableOpacity onPress={() => void loadHistory()} accessibilityRole="button"><Text style={styles.retry}>Try again</Text></TouchableOpacity> : null}
-          </View>
+          <StatePanel
+            icon={error ? (offline ? 'cloud-offline-outline' : 'receipt-outline') : 'heart-outline'}
+            tone={error ? (offline ? 'offline' : 'error') : 'quiet'}
+            title={error ? (offline ? 'Your history is offline' : 'History unavailable') : 'Your first gift starts here'}
+            message={error || 'Completed and pending gifts stay together here, so every contribution is easy to trace.'}
+            actionLabel={error ? (offline ? 'Reconnect to retry' : 'Try again') : undefined}
+            actionHint={offline ? 'Reconnect to load your giving history.' : 'Loads your giving history again.'}
+            actionDisabled={offline}
+            onAction={error ? () => void loadHistory() : undefined}
+          />
         }
       />
     </View>
@@ -85,26 +154,25 @@ export function GivingHistoryScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
-  center: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.background },
-  loadingText: { color: colors.muted, fontSize: typography.sizes.md, marginTop: spacing.md },
-  summary: { backgroundColor: colors.text, paddingHorizontal: spacing.xl, paddingVertical: spacing['2xl'] },
-  summaryLabel: { color: 'rgba(255,255,255,.6)', fontSize: typography.sizes.md },
-  summaryAmount: { color: colors.surface, fontSize: typography.sizes['4xl'], fontWeight: typography.weights.bold, letterSpacing: -1.2, marginTop: spacing.xs },
-  summaryDetail: { color: colors.primaryLight, fontSize: typography.sizes.sm, marginTop: spacing.sm },
+  summary: { backgroundColor: colors.text, paddingHorizontal: spacing.xl, paddingTop: spacing.xl, paddingBottom: spacing['2xl'] },
+  summaryLabel: { color: colors.primaryLight, fontFamily: typography.families.bold, fontSize: typography.sizes.xs, letterSpacing: 1.25, textTransform: 'uppercase' },
+  summaryAmount: { color: colors.surface, fontFamily: typography.families.bold, fontSize: typography.sizes['4xl'], letterSpacing: -1.2, marginTop: spacing.sm },
+  summaryDetail: { color: 'rgba(255,255,255,.65)', fontFamily: typography.families.medium, fontSize: typography.sizes.sm, marginTop: spacing.sm },
   list: { width: '100%', maxWidth: 680, alignSelf: 'center', padding: spacing.base, flexGrow: 1 },
-  recordCard: { marginBottom: spacing.md },
+  errorBanner: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: spacing.md, backgroundColor: '#FFF7F5', borderRadius: borderRadius.lg, padding: spacing.md, marginBottom: spacing.md },
+  errorText: { color: colors.error, fontSize: typography.sizes.sm, lineHeight: 19, flex: 1 },
+  bannerRetry: { color: colors.primary, fontFamily: typography.families.semibold, fontSize: typography.sizes.sm, paddingVertical: spacing.xs },
+  recordCard: { marginBottom: spacing.md, borderRadius: borderRadius.xl },
   recordHeader: { flexDirection: 'row', justifyContent: 'space-between', gap: spacing.md },
   recordInfo: { flex: 1 },
-  recordType: { color: colors.text, fontSize: typography.sizes.base, fontWeight: typography.weights.semibold, textTransform: 'capitalize' },
+  recordType: { color: colors.text, fontFamily: typography.families.semibold, fontSize: typography.sizes.base, textTransform: 'capitalize' },
   recordDate: { color: colors.muted, fontSize: typography.sizes.sm, marginTop: 3 },
-  recordAmount: { color: colors.text, fontSize: typography.sizes.lg, fontWeight: typography.weights.bold },
+  recordAmount: { color: colors.text, fontFamily: typography.families.bold, fontSize: typography.sizes.lg, flexShrink: 1, textAlign: 'right' },
   recordFooter: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: spacing.md },
   channel: { color: colors.textSecondary, fontSize: typography.sizes.sm, textTransform: 'capitalize' },
   status: { borderRadius: borderRadius.full, paddingHorizontal: spacing.sm, paddingVertical: 3 },
-  statusText: { fontSize: typography.sizes.xs, fontWeight: typography.weights.bold, textTransform: 'capitalize' },
+  statusText: { fontFamily: typography.families.bold, fontSize: typography.sizes.xs, textTransform: 'capitalize' },
   levy: { color: colors.muted, fontSize: typography.sizes.xs, marginTop: spacing.sm },
-  empty: { alignItems: 'center', paddingHorizontal: spacing.xl, paddingTop: spacing['4xl'] },
-  emptyTitle: { color: colors.text, fontSize: typography.sizes.lg, fontWeight: typography.weights.semibold, textAlign: 'center' },
-  emptyBody: { color: colors.muted, fontSize: typography.sizes.md, lineHeight: 21, textAlign: 'center', marginTop: spacing.sm },
-  retry: { color: colors.primary, fontWeight: typography.weights.semibold, marginTop: spacing.lg },
+  textAction: { minHeight: 44, justifyContent: 'center' },
+  actionDisabled: { opacity: 0.5 },
 });

@@ -217,11 +217,14 @@ func report(r *seed.Result, database string, took time.Duration) {
     members        %d
     consents       %d
     transactions   %d
+    events         %d
+    attendance     %d
 
   Sign in with any of these:
 
 `, database, took.Round(time.Millisecond),
-		r.Organizations, r.Churches, r.Users, r.Members, r.Consents, r.Transactions)
+		r.Organizations, r.Churches, r.Users, r.Members, r.Consents, r.Transactions,
+		r.Events, r.Attendance)
 
 	fmt.Printf("    %-42s  %-18s  %s\n", "EMAIL", "ROLE", "CHURCH")
 	fmt.Printf("    %-42s  %-18s  %s\n", strings.Repeat("─", 42),

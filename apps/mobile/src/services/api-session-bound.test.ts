@@ -1,0 +1,27 @@
+import {
+  sessionBoundRequest,
+  shouldAttachCurrentSessionToken,
+  shouldRetryWithRefreshedSession,
+} from './api';
+
+describe('session-bound request ownership', () => {
+  it('captures an exact bearer and marks it as non-transferable', () => {
+    expect(sessionBoundRequest('family-a-access')).toEqual({
+      _sessionBound: true,
+      headers: { Authorization: 'Bearer family-a-access' },
+    });
+  });
+
+  it('preserves an explicitly captured Authorization header', () => {
+    expect(shouldAttachCurrentSessionToken(undefined)).toBe(true);
+    expect(shouldAttachCurrentSessionToken('')).toBe(true);
+    expect(shouldAttachCurrentSessionToken('Bearer family-a-access')).toBe(false);
+  });
+
+  it('never migrates a session-bound 401 through token refresh', () => {
+    expect(shouldRetryWithRefreshedSession(401, { _sessionBound: true })).toBe(false);
+    expect(shouldRetryWithRefreshedSession(401, {})).toBe(true);
+    expect(shouldRetryWithRefreshedSession(401, { _retry: true })).toBe(false);
+    expect(shouldRetryWithRefreshedSession(500, {})).toBe(false);
+  });
+});

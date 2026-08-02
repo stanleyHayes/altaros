@@ -4,10 +4,16 @@ import (
 	"context"
 	"errors"
 
+	"go.mongodb.org/mongo-driver/v2/bson"
+	"go.mongodb.org/mongo-driver/v2/mongo"
+
+	"github.com/hayfordstanley/altar-os/internal/domain/auth"
 	"github.com/hayfordstanley/altar-os/internal/domain/consent"
 	"github.com/hayfordstanley/altar-os/internal/domain/member"
 	"github.com/hayfordstanley/altar-os/internal/domain/notification"
 	"github.com/hayfordstanley/altar-os/internal/platform/deps"
+	"github.com/hayfordstanley/altar-os/internal/platform/mongodb"
+	"github.com/hayfordstanley/altar-os/internal/platform/tenancy"
 )
 
 // The adapters here connect domains that must not import each other.
@@ -19,7 +25,10 @@ import (
 // notification service dead code however well tested it was.
 
 // memberDirectory resolves a member into contact details for notification.
-type memberDirectory struct{ members *member.Service }
+type memberDirectory struct {
+	members  *member.Service
+	accounts *mongo.Collection
+}
 
 var _ notification.Directory = (*memberDirectory)(nil)
 
@@ -32,7 +41,25 @@ var _ notification.Directory = (*memberDirectory)(nil)
 func (d *memberDirectory) RecipientFor(ctx context.Context, memberID string) (*notification.Recipient, error) {
 	m, err := d.members.ByID(ctx, memberID)
 	if errors.Is(err, member.ErrNotFound) {
-		return nil, nil
+		oid, idErr := bson.ObjectIDFromHex(memberID)
+		churchID, scopeErr := tenancy.MustChurchID(ctx)
+		if idErr != nil || scopeErr != nil {
+			return nil, nil
+		}
+		var account auth.User
+		err = d.accounts.FindOne(ctx, bson.M{
+			"_id": oid, "churchId": mongodb.ID(churchID), "isActive": true,
+		}).Decode(&account)
+		if errors.Is(err, mongo.ErrNoDocuments) {
+			return nil, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		return &notification.Recipient{
+			MemberID: account.ID.Hex(), Name: account.Name,
+			PhoneE164: account.Phone, Email: account.Email,
+		}, nil
 	}
 	if err != nil {
 		return nil, err
@@ -69,7 +96,7 @@ func newNotificationService(d *deps.Deps) *notification.Service {
 	return notification.NewService(
 		d.Mongo,
 		&consentGate{consents: consents},
-		&memberDirectory{members: members},
+		&memberDirectory{members: members, accounts: d.Mongo.Global(auth.Collection)},
 		d.Transports()...,
 	).WithLocation(d.Location())
 }

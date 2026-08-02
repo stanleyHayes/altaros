@@ -280,7 +280,7 @@ export default function NotFoundPage() {
               fontWeight: 900,
               lineHeight: 1,
               mb: 1,
-              fontFamily: "'Georgia', serif",
+              fontFamily: '"Outfit", sans-serif',
               letterSpacing: "-3px",
             }}
           >
@@ -305,7 +305,7 @@ export default function NotFoundPage() {
               fontWeight: 700,
               color: "#333",
               mb: 1,
-              fontFamily: "'Georgia', serif",
+              fontFamily: '"Outfit", sans-serif',
               fontSize: { xs: "1.3rem", md: "1.7rem" },
             }}
           >
@@ -351,7 +351,7 @@ export default function NotFoundPage() {
               fontSize: "1.05rem",
               fontWeight: 700,
               textTransform: "none",
-              fontFamily: "'Georgia', serif",
+              fontFamily: '"Outfit", sans-serif',
               "&:hover": {
                 bgcolor: "#FFD700",
               },

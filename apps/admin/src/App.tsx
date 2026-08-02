@@ -11,10 +11,12 @@ import UsersPage from "@/pages/UsersPage";
 import FinancePage from "@/pages/FinancePage";
 import SystemHealthPage from "@/pages/SystemHealthPage";
 import NotFoundPage from "@/pages/NotFoundPage";
+import RouteScrollTop from "@/components/layout/RouteScrollTop";
 
 export default function App() {
   return (
     <BrowserRouter>
+      <RouteScrollTop />
       <ThemeProvider theme={theme}>
         <CssBaseline />
         <SnackbarProvider maxSnack={3} autoHideDuration={4000}>

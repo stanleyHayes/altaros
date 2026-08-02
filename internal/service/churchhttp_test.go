@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -183,6 +184,50 @@ func TestOwnChurchIsReadable(t *testing.T) {
 	}
 	if rec := call(r, http.MethodGet, "/churches/current", access); rec.Code != http.StatusOK {
 		t.Fatalf("current church returned %d, want 200", rec.Code)
+	}
+}
+
+func TestPublicChurchSlugResolvesOnlyMinimalActiveJoinData(t *testing.T) {
+	db, ids, _ := churchFixture(t)
+	d := newTestDeps(t)
+	d.Mongo = db
+	r := standalone(churchRoutes(d))
+
+	rec := call(r, http.MethodGet, "/churches/slug/grace-http", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("public active slug returned %d, body = %s", rec.Code, rec.Body)
+	}
+	var env struct {
+		Data struct {
+			ID, Name, Slug string
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &env); err != nil {
+		t.Fatalf("decode public church: %v", err)
+	}
+	if env.Data.ID != ids["home"].Hex() || env.Data.Name != "Grace Chapel" || env.Data.Slug != "grace-http" {
+		t.Fatalf("unexpected public church payload: %+v", env.Data)
+	}
+	for _, privateField := range []string{"address", "email", "phone", "payoutSubaccountCode", "organizationId"} {
+		if strings.Contains(rec.Body.String(), privateField) {
+			t.Errorf("public response leaked %q: %s", privateField, rec.Body)
+		}
+	}
+
+	ctx := context.Background()
+	if _, err := db.Global("churches").InsertOne(ctx, bson.M{
+		"_id": bson.NewObjectID(), "name": "Closed Church", "slug": "closed-http",
+		"isActive": false, "createdAt": time.Now().UTC(), "updatedAt": time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("seed inactive church: %v", err)
+	}
+	inactive := call(r, http.MethodGet, "/churches/slug/closed-http", "")
+	missing := call(r, http.MethodGet, "/churches/slug/missing-http", "")
+	if inactive.Code != http.StatusNotFound || missing.Code != http.StatusNotFound {
+		t.Fatalf("inactive/missing statuses = %d/%d, want 404/404", inactive.Code, missing.Code)
+	}
+	if inactive.Body.String() != missing.Body.String() {
+		t.Errorf("inactive church is distinguishable from missing church")
 	}
 }
 

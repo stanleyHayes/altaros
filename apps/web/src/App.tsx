@@ -20,6 +20,7 @@ import WelfarePage from "@/pages/WelfarePage";
 import DiscoverPage from "@/pages/DiscoverPage";
 import ChatsPage from "@/pages/ChatsPage";
 import NotFoundPage from "@/pages/NotFoundPage";
+import RouteScrollTop from "@/components/layout/RouteScrollTop";
 
 export default function App() {
   const [showSplash, setShowSplash] = useState(true);
@@ -43,6 +44,7 @@ export default function App() {
       >
         <AuthProvider>
           <BrowserRouter>
+            <RouteScrollTop />
             <Routes>
               {/* Public routes */}
               <Route path="/login" element={<LoginPage />} />

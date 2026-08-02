@@ -155,7 +155,7 @@ func (t *Push) Send(ctx context.Context, to string, msg notification.Message) (s
 	if resp.StatusCode >= 400 {
 		if isUnregistered(raw) {
 			t.markInvalid(to)
-			return "", fmt.Errorf("push: device token is no longer registered")
+			return "", fmt.Errorf("push: %w", notification.ErrUnregisteredDevice)
 		}
 		return "", fmt.Errorf("push: HTTP %d: %s", resp.StatusCode, truncate(raw))
 	}

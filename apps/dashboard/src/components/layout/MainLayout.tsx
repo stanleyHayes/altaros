@@ -58,6 +58,7 @@ export default function MainLayout() {
         />
 
         <Box
+          data-route-scroll-container
           sx={{
             flexGrow: 1,
             p: { xs: 2, sm: 3 },

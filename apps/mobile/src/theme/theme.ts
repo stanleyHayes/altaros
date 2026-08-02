@@ -10,13 +10,13 @@ export const colors = {
   surfaceMuted: '#EFF6F2',
   text: '#102A27',
   textSecondary: '#58706C',
-  muted: '#718580',
+  muted: '#5B716C',
   border: '#DCE8E3',
   divider: '#EAF1ED',
   success: '#287A55',
-  warning: '#A86F18',
+  warning: '#965F10',
   error: '#A84545',
-  info: '#397B8D',
+  info: '#2F6F80',
 } as const;
 
 export const typography = {
@@ -38,9 +38,10 @@ export const typography = {
     bold: '700' as const,
   },
   families: {
-    regular: 'System',
-    medium: 'System',
-    bold: 'System',
+    regular: 'Outfit_400Regular',
+    medium: 'Outfit_500Medium',
+    semibold: 'Outfit_600SemiBold',
+    bold: 'Outfit_700Bold',
   },
 } as const;
 

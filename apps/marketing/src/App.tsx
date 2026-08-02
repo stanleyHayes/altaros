@@ -27,6 +27,7 @@ import PressPage from "@/pages/PressPage";
 import NotFoundPage from "@/pages/NotFoundPage";
 import PricingPage from "@/pages/PricingPage";
 import GetStartedPage from "@/pages/GetStartedPage";
+import RouteScrollTop from "@/components/layout/RouteScrollTop";
 
 export default function App() {
   return (
@@ -34,6 +35,7 @@ export default function App() {
       <ThemeProvider theme={theme}>
         <CssBaseline />
         <BrowserRouter>
+          <RouteScrollTop />
           <Navbar />
           <main>
             <Routes>

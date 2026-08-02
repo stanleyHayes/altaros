@@ -2,14 +2,20 @@ import React from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { useNetInfo } from '@react-native-community/netinfo';
 import { colors, spacing, typography } from '../../theme';
+import { isKnownOffline } from '../../services/connectivity';
 
 export function OfflineBanner() {
   const { isConnected, isInternetReachable } = useNetInfo();
-  const offline = isConnected === false || isInternetReachable === false;
+  const offline = isKnownOffline({ isConnected, isInternetReachable });
   if (!offline) return null;
 
   return (
-    <View style={styles.banner} accessibilityRole="alert">
+    <View
+      style={styles.banner}
+      accessibilityRole="alert"
+      accessibilityLiveRegion="assertive"
+      accessibilityLabel="You are offline. New updates and actions need a connection."
+    >
       <View style={styles.dot} />
       <Text style={styles.text}>You&apos;re offline. New updates and actions need a connection.</Text>
     </View>

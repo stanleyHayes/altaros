@@ -13,7 +13,10 @@ import (
 
 // Query filters a ledger read.
 type Query struct {
-	MemberID   string
+	MemberID string
+	// OwnerID is for the signed-in member's private history. It includes old
+	// attributed rows and new anonymous rows privately linked by initiatedBy.
+	OwnerID    string
 	Type       Type
 	Status     Status
 	Direction  Direction
@@ -24,6 +27,12 @@ type Query struct {
 
 func (q Query) filter() bson.M {
 	f := bson.M{}
+	if q.OwnerID != "" {
+		f["$or"] = bson.A{
+			bson.M{"memberId": q.OwnerID},
+			bson.M{"initiatedBy": q.OwnerID},
+		}
+	}
 	if q.MemberID != "" {
 		f["memberId"] = q.MemberID
 	}
@@ -251,7 +260,10 @@ func (s *Service) GivenTodayMinor(ctx context.Context, memberID string, now time
 	}
 	err := s.coll.Aggregate(ctx, []bson.M{
 		{"$match": bson.M{
-			"memberId":   memberID,
+			"$or": bson.A{
+				bson.M{"memberId": memberID},
+				bson.M{"initiatedBy": memberID},
+			},
 			"status":     string(StatusSuccess),
 			"direction":  string(DirectionIncome),
 			"channel":    bson.M{"$in": []string{money.ChannelMobileMoney, money.ChannelBankTransfer, money.ChannelUSSD}},

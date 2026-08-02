@@ -418,46 +418,6 @@ func TestBearerParsing(t *testing.T) {
 	}
 }
 
-// implementedNames is maintained by hand because building the real route sets
-// needs a database connection. This keeps it honest: a service added to
-// routeSets but not to the list would silently never mount on the gateway.
-func TestImplementedListMatchesTheRouteSets(t *testing.T) {
-	d := newTestDeps(t)
-	// Deps with no Mongo would panic inside the service constructors, so this
-	// asserts the reverse direction: every name claimed as implemented is
-	// either the gateway or a real route set.
-	_ = d
-
-	claimed := map[string]bool{}
-	for _, name := range Implemented() {
-		claimed[name] = true
-	}
-	if !claimed["gateway"] {
-		t.Error("the gateway must appear in Implemented()")
-	}
-	for _, name := range []string{
-		"auth", "church", "member", "finance", "rbac", "invitation", "notification",
-	} {
-		if !claimed[name] {
-			t.Errorf("%s serves real routes but is missing from Implemented()", name)
-		}
-	}
-
-	// Every implemented name must also be a registered, runnable service.
-	for name := range claimed {
-		if _, err := Lookup(name); err != nil {
-			t.Errorf("%s is claimed as implemented but is not in the registry", name)
-		}
-	}
-
-	// And nothing still served by a placeholder may claim to be implemented.
-	for _, name := range []string{"event", "communication", "ai"} {
-		if claimed[name] {
-			t.Errorf("%s is still a placeholder but claims to be implemented", name)
-		}
-	}
-}
-
 // Every service must be runnable on its own, which is what makes splitting one
 // out a deploy-config change rather than a refactor (ADR-004).
 func TestEveryRegisteredServiceIsRunnable(t *testing.T) {

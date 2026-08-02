@@ -23,16 +23,16 @@ import AuthLayout from "@/components/auth/AuthLayout";
 /* ---------- Clean field styling for light background ---------- */
 const fieldSx = {
   "& .MuiOutlinedInput-root": {
-    backgroundColor: "#fff",
+    backgroundColor: "#FFFFFF",
     borderRadius: "12px",
-    "& fieldset": { borderColor: "#E0E0E0" },
-    "&:hover fieldset": { borderColor: "#BDBDBD" },
+    "& fieldset": { borderColor: "#C9D8D3" },
+    "&:hover fieldset": { borderColor: "#197665" },
     "&.Mui-focused fieldset": {
-      borderColor: "primary.main",
-      boxShadow: "0 0 0 3px rgba(63,81,181,0.12)",
+      borderColor: "#197665",
+      boxShadow: "0 0 0 3px rgba(25,118,101,0.12)",
     },
   },
-  "& .MuiInputLabel-root.Mui-focused": { color: "primary.main" },
+  "& .MuiInputLabel-root.Mui-focused": { color: "#197665" },
 } as const;
 
 const loginSchema = z.object({
@@ -84,7 +84,7 @@ export default function LoginPage() {
   };
 
   return (
-    <AuthLayout title="Welcome Back" subtitle="Sign in to your admin dashboard">
+    <AuthLayout title="Welcome back" subtitle="Sign in to manage your church workspace.">
       {serverError && (
         <Alert severity="error" sx={{ mb: 3, borderRadius: "12px" }}>
           {serverError}
@@ -156,7 +156,7 @@ export default function LoginPage() {
                 size="small"
                 sx={{
                   color: "#BDBDBD",
-                  "&.Mui-checked": { color: "primary.main" },
+                  "&.Mui-checked": { color: "#197665" },
                 }}
               />
             }
@@ -171,7 +171,7 @@ export default function LoginPage() {
             to="/forgot-password"
             variant="body2"
             underline="hover"
-            sx={{ color: "primary.main", fontWeight: 500 }}
+            sx={{ color: "#197665", fontWeight: 650 }}
           >
             Forgot password?
           </Link>
@@ -189,13 +189,13 @@ export default function LoginPage() {
             fontWeight: 700,
             fontSize: "1rem",
             borderRadius: "12px",
-            background: "linear-gradient(135deg, #FFB300 0%, #FF8F00 100%)",
-            color: "#1A1A2E",
-            boxShadow: "0 4px 16px rgba(255,179,0,0.25)",
+            backgroundColor: "#197665",
+            color: "#FFFFFF",
+            boxShadow: "none",
             textTransform: "none",
             "&:hover": {
-              background: "linear-gradient(135deg, #FFC107 0%, #FFB300 100%)",
-              boxShadow: "0 6px 20px rgba(255,179,0,0.35)",
+              backgroundColor: "#125B4E",
+              boxShadow: "none",
             },
             "&:disabled": {
               background: "#E0E0E0",
@@ -204,7 +204,7 @@ export default function LoginPage() {
           }}
         >
           {isSubmitting ? (
-            <CircularProgress size={24} sx={{ color: "#1A1A2E" }} />
+            <CircularProgress size={24} sx={{ color: "#FFFFFF" }} />
           ) : (
             "Sign In"
           )}
@@ -217,7 +217,7 @@ export default function LoginPage() {
               component={RouterLink}
               to="/register"
               underline="hover"
-              sx={{ fontWeight: 600, color: "primary.main" }}
+              sx={{ fontWeight: 650, color: "#197665" }}
             >
               Register your church
             </Link>

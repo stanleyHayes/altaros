@@ -1,0 +1,30 @@
+{
+  "build": {
+    "preview": {
+      "distribution": "internal",
+      "environment": "preview",
+      "env": {
+        "EXPO_PUBLIC_API_URL": "https://api.altaros.com/api/v1"
+      },
+      "android": {
+        "buildType": "apk"
+      }
+    },
+    "preview-simulator": {
+      "extends": "preview",
+      "ios": {
+        "simulator": true
+      }
+    },
+    "production": {
+      "environment": "production",
+      "env": {
+        "EXPO_PUBLIC_API_URL": "https://api.altaros.com/api/v1"
+      },
+      "autoIncrement": true
+    }
+  },
+  "submit": {
+    "production": {}
+  }
+}

@@ -3,6 +3,7 @@ package notification
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"sync"
@@ -816,6 +817,107 @@ func TestMissingTransportSuppressesRatherThanFails(t *testing.T) {
 	}
 	if !strings.Contains(n.Reason, "no transport") {
 		t.Errorf("reason = %q", n.Reason)
+	}
+}
+
+func TestMemberInboxReadAndDeviceRegistrationAreOwned(t *testing.T) {
+	h := newHarness(t)
+	n, err := h.svc.Send(h.ctx, Message{
+		MemberID: "member_1", Channel: ChannelSMS, Kind: KindTransactional,
+		Subject: "Receipt", Body: "Thank you.",
+	})
+	if err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	read, err := h.svc.MarkRead(h.ctx, n.ID.Hex(), "member_1")
+	if err != nil || read.ReadAt == nil {
+		t.Fatalf("MarkRead: item=%+v error=%v", read, err)
+	}
+	if _, err := h.svc.MarkRead(h.ctx, n.ID.Hex(), "member_2"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("another member marked the notification read: %v", err)
+	}
+
+	token := strings.Repeat("device-token-", 4)
+	if err := h.svc.RegisterDevice(h.ctx, "member_1", "family-a", token, "android"); err != nil {
+		t.Fatalf("RegisterDevice: %v", err)
+	}
+	if err := h.svc.RegisterDevice(h.ctx, "member_1", "family-a", token, "android"); err != nil {
+		t.Fatalf("idempotent RegisterDevice: %v", err)
+	}
+	tokens, err := h.svc.DeviceTokens(h.ctx, "member_1")
+	if err != nil || len(tokens) != 1 || tokens[0] != token {
+		t.Fatalf("DeviceTokens = %v, error=%v", tokens, err)
+	}
+	replacement := strings.Repeat("rotated-token-", 4)
+	if err := h.svc.RegisterDevice(h.ctx, "member_1", "family-a", replacement, "android"); err != nil {
+		t.Fatalf("RegisterDevice rotated token: %v", err)
+	}
+	tokens, err = h.svc.DeviceTokens(h.ctx, "member_1")
+	if err != nil || len(tokens) != 1 || tokens[0] != replacement {
+		t.Fatalf("rotated token retained a stale registration: tokens=%v error=%v", tokens, err)
+	}
+	if err := h.svc.RegisterDevice(h.ctx, "member_1", "family-replacement", replacement, "android"); err != nil {
+		t.Fatalf("RegisterDevice replacement login: %v", err)
+	}
+	if err := h.svc.RemoveDevices(h.ctx, "member_1", "family-a"); err != nil {
+		t.Fatalf("RemoveDevices old family: %v", err)
+	}
+	tokens, err = h.svc.DeviceTokens(h.ctx, "member_1")
+	if err != nil || len(tokens) != 1 || tokens[0] != replacement {
+		t.Fatalf("old-family cleanup removed the transferred device: tokens=%v error=%v", tokens, err)
+	}
+	second := strings.Repeat("other-device-", 4)
+	if err := h.svc.RegisterDevice(h.ctx, "member_1", "family-b", second, "ios"); err != nil {
+		t.Fatalf("RegisterDevice second family: %v", err)
+	}
+	if err := h.svc.RemoveDevices(h.ctx, "member_1", "family-replacement"); err != nil {
+		t.Fatalf("RemoveDevices family: %v", err)
+	}
+	tokens, _ = h.svc.DeviceTokens(h.ctx, "member_1")
+	if len(tokens) != 1 || tokens[0] != second {
+		t.Fatalf("family logout removed the wrong devices: %v", tokens)
+	}
+	// Global logout must not leave rows after the service's 100-row query
+	// batch. Use distinct families to model many historical device sessions.
+	for i := 0; i < 105; i++ {
+		bulkToken := fmt.Sprintf("bulk-device-token-%03d-%s", i, strings.Repeat("x", 32))
+		bulkFamily := fmt.Sprintf("bulk-family-%03d", i)
+		if err := h.svc.RegisterDevice(h.ctx, "member_1", bulkFamily, bulkToken, "android"); err != nil {
+			t.Fatalf("RegisterDevice bulk %d: %v", i, err)
+		}
+	}
+	if err := h.svc.RemoveDevices(h.ctx, "member_1", ""); err != nil {
+		t.Fatalf("RemoveDevices global: %v", err)
+	}
+	tokens, _ = h.svc.DeviceTokens(h.ctx, "member_1")
+	if len(tokens) != 0 {
+		t.Fatalf("global logout retained devices: %v", tokens)
+	}
+}
+
+func TestUnregisteredPushTokenIsPruned(t *testing.T) {
+	h := newHarness(t)
+	h.cc.grant("member_1")
+	push := newTransport(ChannelPush)
+	push.err = ErrUnregisteredDevice
+	h.svc.transports[ChannelPush] = push
+
+	token := strings.Repeat("dead-device-token-", 3)
+	if err := h.svc.RegisterDevice(h.ctx, "member_1", "family-dead", token, "android"); err != nil {
+		t.Fatalf("RegisterDevice: %v", err)
+	}
+	result, err := h.svc.Send(h.ctx, Message{
+		MemberID: "member_1", Channel: ChannelPush, Kind: KindAnnouncement, Body: "Service update.",
+	})
+	if err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	if result.Status != StatusFailed || result.Attempts != 1 {
+		t.Fatalf("result = status %s attempts %d, want failed once", result.Status, result.Attempts)
+	}
+	tokens, err := h.svc.DeviceTokens(h.ctx, "member_1")
+	if err != nil || len(tokens) != 0 {
+		t.Fatalf("dead token remained registered: tokens=%v error=%v", tokens, err)
 	}
 }
 

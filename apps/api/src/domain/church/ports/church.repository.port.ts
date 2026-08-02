@@ -15,7 +15,7 @@ export interface CreateChurchData {
   currency: string;
 }
 
-export interface UpdateChurchData extends Partial<CreateChurchData> {}
+export type UpdateChurchData = Partial<CreateChurchData>;
 
 export interface PaginatedResult<T> {
   data: T[];

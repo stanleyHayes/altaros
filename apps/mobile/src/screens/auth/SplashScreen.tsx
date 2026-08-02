@@ -1,6 +1,8 @@
-import React, { useEffect, useRef } from 'react';
-import { View, Text, StyleSheet, Animated, Easing } from 'react-native';
+import React, { useEffect, useRef, useState } from 'react';
+import { View, Text, Image, StyleSheet, Animated, Easing, AccessibilityInfo, Platform } from 'react-native';
 import { colors, typography, spacing } from '../../theme';
+import { resolveReducedMotion } from './splash-motion';
+import appIcon from '../../../assets/icon.png';
 
 interface SplashScreenProps {
   /** Called once the splash animation has finished. */
@@ -12,35 +14,61 @@ interface SplashScreenProps {
 export function SplashScreen({ onComplete, duration = 1600 }: SplashScreenProps) {
   const fade = useRef(new Animated.Value(0)).current;
   const scale = useRef(new Animated.Value(0.88)).current;
+  const [motion, setMotion] = useState({ ready: false, reduced: false });
 
   useEffect(() => {
-    Animated.parallel([
+    let mounted = true;
+    void resolveReducedMotion(() => AccessibilityInfo.isReduceMotionEnabled()).then((reduced) => {
+      if (mounted) setMotion({ ready: true, reduced });
+    });
+    const subscription = AccessibilityInfo.addEventListener('reduceMotionChanged', (reduced) => {
+      setMotion({ ready: true, reduced });
+    });
+    return () => {
+      mounted = false;
+      subscription.remove();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!motion.ready) return;
+    const animation = Animated.parallel([
       Animated.timing(fade, {
         toValue: 1,
-        duration: 450,
+        duration: motion.reduced ? 0 : 360,
         easing: Easing.out(Easing.quad),
-        useNativeDriver: true,
+        useNativeDriver: Platform.OS !== 'web',
       }),
-      Animated.spring(scale, {
+      Animated.timing(scale, {
         toValue: 1,
-        friction: 6,
-        tension: 60,
-        useNativeDriver: true,
+        duration: motion.reduced ? 0 : 440,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: Platform.OS !== 'web',
       }),
-    ]).start();
+    ]);
+    animation.start();
 
     const timer = setTimeout(() => onComplete(), duration);
-    return () => clearTimeout(timer);
-  }, [fade, scale, onComplete, duration]);
+    return () => {
+      animation.stop();
+      clearTimeout(timer);
+    };
+  }, [fade, scale, onComplete, duration, motion]);
 
   return (
     <View style={styles.container}>
       <Animated.View
         style={[styles.markWrap, { opacity: fade, transform: [{ scale }] }]}
+        accessible
+        accessibilityLabel="ALTAR OS. Your church community."
       >
-        <View style={styles.mark}>
-          <Text style={styles.markLetter}>A</Text>
-        </View>
+        <Image
+          source={appIcon}
+          style={styles.mark}
+          resizeMode="contain"
+          accessible={false}
+          importantForAccessibility="no"
+        />
         <Text style={styles.title}>ALTAR OS</Text>
         <Text style={styles.subtitle}>Your church community</Text>
       </Animated.View>
@@ -59,22 +87,13 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   mark: {
-    width: 88,
-    height: 88,
-    borderRadius: 44,
-    backgroundColor: colors.surface,
-    alignItems: 'center',
-    justifyContent: 'center',
+    width: 96,
+    height: 96,
     marginBottom: spacing.lg,
-  },
-  markLetter: {
-    fontSize: typography.sizes['4xl'],
-    fontWeight: typography.weights.bold,
-    color: colors.primary,
   },
   title: {
     fontSize: typography.sizes['2xl'],
-    fontWeight: typography.weights.bold,
+    fontFamily: typography.families.bold,
     color: colors.surface,
     letterSpacing: 1,
   },

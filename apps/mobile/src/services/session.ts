@@ -1,13 +1,35 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as SecureStore from 'expo-secure-store';
 import { Platform } from 'react-native';
+import {
+  normalizeOpaqueSessionToken,
+  normalizeSessionTokenPair,
+  type SessionTokenPair,
+} from './session-token';
 
+const SESSION_KEY = 'altar.session';
 const ACCESS_TOKEN_KEY = 'altar.accessToken';
 const REFRESH_TOKEN_KEY = 'altar.refreshToken';
 const USER_KEY = 'altar.user';
+const REVOKED_SESSION_KEY = 'altar.sessionRevoked';
+const MAX_CACHED_USER_LENGTH = 16_384;
+let tokenMutationTail: Promise<void> = Promise.resolve();
 
 type SessionExpiredListener = () => void;
 const expiryListeners = new Set<SessionExpiredListener>();
+
+function encodeCachedUser(user: unknown): string {
+  let encoded: string | undefined;
+  try {
+    encoded = JSON.stringify(user);
+  } catch {
+    throw new Error('The member profile could not be stored safely.');
+  }
+  if (!encoded || encoded.length > MAX_CACHED_USER_LENGTH) {
+    throw new Error('The member profile could not be stored safely.');
+  }
+  return encoded;
+}
 
 async function getSecret(key: string): Promise<string | null> {
   if (Platform.OS === 'web') return AsyncStorage.getItem(key);
@@ -32,40 +54,149 @@ async function deleteSecret(key: string): Promise<void> {
   await SecureStore.deleteItemAsync(key);
 }
 
-export const session = {
-  getAccessToken: () => getSecret(ACCESS_TOKEN_KEY),
-  getRefreshToken: () => getSecret(REFRESH_TOKEN_KEY),
+function serializeTokenMutation<T>(operation: () => Promise<T>): Promise<T> {
+  const result = tokenMutationTail.then(operation, operation);
+  tokenMutationTail = result.then(() => undefined, () => undefined);
+  return result;
+}
 
-  async setTokens(accessToken: string, refreshToken: string): Promise<void> {
-    await Promise.all([
-      setSecret(ACCESS_TOKEN_KEY, accessToken),
-      setSecret(REFRESH_TOKEN_KEY, refreshToken),
-    ]);
+async function persistTokens(tokens: SessionTokenPair): Promise<void> {
+  // One write keeps a rotating access/refresh pair consistent if the app is
+  // suspended or killed while credentials are being replaced.
+  await setSecret(SESSION_KEY, JSON.stringify(tokens));
+  // Remove a prior logout tombstone only after the complete replacement pair
+  // is durable. A crash before this point must fail closed, not resurrect an
+  // older envelope whose deletion previously failed.
+  await AsyncStorage.removeItem(REVOKED_SESSION_KEY);
+  // Legacy cleanup must not turn a successfully persisted new session into
+  // a failed login. The envelope is authoritative on the next read.
+  await Promise.allSettled([deleteSecret(ACCESS_TOKEN_KEY), deleteSecret(REFRESH_TOKEN_KEY)]);
+}
+
+async function clearSessionUnlocked(): Promise<void> {
+  const results = await Promise.allSettled([
+    AsyncStorage.setItem(REVOKED_SESSION_KEY, '1'),
+    deleteSecret(ACCESS_TOKEN_KEY),
+    deleteSecret(REFRESH_TOKEN_KEY),
+    deleteSecret(SESSION_KEY),
+    deleteSecret(USER_KEY),
+    // Remove keys used by the pre-SecureStore build after migration.
+    AsyncStorage.removeItem('accessToken'),
+    AsyncStorage.removeItem('refreshToken'),
+    AsyncStorage.removeItem('user'),
+  ]);
+  const failure = results.find((result): result is PromiseRejectedResult => result.status === 'rejected');
+  if (failure) throw failure.reason;
+}
+
+export const session = {
+  async getAccessToken(): Promise<string | null> {
+    await tokenMutationTail;
+    return (await readTokensUnlocked())?.accessToken ?? null;
+  },
+  async getRefreshToken(): Promise<string | null> {
+    await tokenMutationTail;
+    return (await readTokensUnlocked())?.refreshToken ?? null;
+  },
+
+  async commitAuthenticatedSessionIf(
+    accessToken: string,
+    refreshToken: string,
+    user: unknown,
+    canCommit: () => boolean = () => true,
+  ): Promise<boolean> {
+    const tokens = normalizeSessionTokenPair(accessToken, refreshToken);
+    const encodedUser = encodeCachedUser(user);
+    return serializeTokenMutation(async () => {
+      if (!canCommit()) return false;
+      try {
+        await persistTokens(tokens);
+        if (!canCommit()) {
+          await clearSessionUnlocked();
+          return false;
+        }
+        await setSecret(USER_KEY, encodedUser);
+        if (!canCommit()) {
+          await clearSessionUnlocked();
+          return false;
+        }
+        return true;
+      } catch (error) {
+        await clearSessionUnlocked().catch(() => undefined);
+        throw error;
+      }
+    });
+  },
+
+  async replaceTokensIfCurrent(
+    expectedRefreshToken: string,
+    accessToken: string,
+    refreshToken: string,
+  ): Promise<boolean> {
+    const expected = normalizeOpaqueSessionToken(expectedRefreshToken);
+    const replacement = normalizeSessionTokenPair(accessToken, refreshToken);
+    return serializeTokenMutation(async () => {
+      const current = await readTokensUnlocked();
+      if (current?.refreshToken !== expected) return false;
+      await persistTokens(replacement);
+      return true;
+    });
   },
 
   async getUser<T>(): Promise<T | null> {
-    const value = await AsyncStorage.getItem(USER_KEY);
+    const value = await getSecret(USER_KEY);
     if (!value) return null;
+    if (value.length > MAX_CACHED_USER_LENGTH) {
+      await deleteSecret(USER_KEY);
+      return null;
+    }
     try {
       return JSON.parse(value) as T;
     } catch {
-      await AsyncStorage.removeItem(USER_KEY);
+      await deleteSecret(USER_KEY);
       return null;
     }
   },
 
-  setUser: (user: unknown) => AsyncStorage.setItem(USER_KEY, JSON.stringify(user)),
+  async replaceUserIfRefreshTokenCurrent(
+    expectedRefreshToken: string,
+    user: unknown,
+    canCommit: () => boolean = () => true,
+  ): Promise<boolean> {
+    const expected = normalizeOpaqueSessionToken(expectedRefreshToken);
+    const encodedUser = encodeCachedUser(user);
+    return serializeTokenMutation(async () => {
+      if (!canCommit()) return false;
+      const current = await readTokensUnlocked();
+      if (current?.refreshToken !== expected || !canCommit()) return false;
+      await setSecret(USER_KEY, encodedUser);
+      return canCommit();
+    });
+  },
 
   async clear(): Promise<void> {
-    await Promise.all([
-      deleteSecret(ACCESS_TOKEN_KEY),
-      deleteSecret(REFRESH_TOKEN_KEY),
-      AsyncStorage.removeItem(USER_KEY),
-      // Remove keys used by the pre-SecureStore build after migration.
-      AsyncStorage.removeItem('accessToken'),
-      AsyncStorage.removeItem('refreshToken'),
-      AsyncStorage.removeItem('user'),
-    ]);
+    // This marker contains no credential material. It makes logout fail closed
+    // across restarts if a device keychain refuses one of the deletions below.
+    await serializeTokenMutation(clearSessionUnlocked);
+  },
+
+  async clearIfRefreshTokenCurrent(
+    expectedRefreshToken: string,
+    notifyExpired = false,
+  ): Promise<boolean> {
+    const expected = normalizeOpaqueSessionToken(expectedRefreshToken);
+    return serializeTokenMutation(async () => {
+      const current = await readTokensUnlocked();
+      if (current?.refreshToken !== expected) return false;
+      try {
+        await clearSessionUnlocked();
+      } finally {
+        // Once this matching family is authoritatively rejected, private UI
+        // must unmount even when a keychain deletion reports a secondary error.
+        if (notifyExpired) session.notifyExpired();
+      }
+      return true;
+    });
   },
 
   onExpired(listener: SessionExpiredListener): () => void {
@@ -78,3 +209,41 @@ export const session = {
   },
 };
 
+async function readTokensUnlocked(): Promise<SessionTokenPair | null> {
+  if (await AsyncStorage.getItem(REVOKED_SESSION_KEY)) {
+    // Best-effort cleanup is repeated on every read, but a stale secure
+    // envelope is never accepted while the revocation marker exists.
+    await Promise.allSettled([
+      deleteSecret(ACCESS_TOKEN_KEY),
+      deleteSecret(REFRESH_TOKEN_KEY),
+      deleteSecret(SESSION_KEY),
+    ]);
+    return null;
+  }
+  const encoded = await getSecret(SESSION_KEY);
+  if (encoded) {
+    try {
+      const parsed = JSON.parse(encoded) as Partial<SessionTokenPair>;
+      return normalizeSessionTokenPair(parsed.accessToken, parsed.refreshToken);
+    } catch {
+      // Invalid session data is cleared below alongside legacy keys.
+    }
+    await deleteSecret(SESSION_KEY);
+  }
+
+  // One-time migration from the pre-envelope build. Only migrate a complete
+  // pair; combining one old token with one new token can revoke a token family.
+  const [accessToken, refreshToken] = await Promise.all([
+    getSecret(ACCESS_TOKEN_KEY),
+    getSecret(REFRESH_TOKEN_KEY),
+  ]);
+  let tokens: SessionTokenPair;
+  try {
+    tokens = normalizeSessionTokenPair(accessToken, refreshToken);
+  } catch {
+    await Promise.all([deleteSecret(ACCESS_TOKEN_KEY), deleteSecret(REFRESH_TOKEN_KEY)]);
+    return null;
+  }
+  await persistTokens(tokens);
+  return tokens;
+}

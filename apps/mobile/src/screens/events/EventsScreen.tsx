@@ -1,11 +1,11 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   View,
   Text,
   FlatList,
   StyleSheet,
   TouchableOpacity,
-  ActivityIndicator,
+  RefreshControl,
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -14,39 +14,91 @@ import { Button } from '../../components/common/Button';
 import { colors, typography, spacing, borderRadius } from '../../theme';
 import type { RootStackParamList } from '../../components/navigation/AppNavigator';
 import type { ChurchEvent } from '../../services/event.service';
-import eventService from '../../services/event.service';
+import eventService, { eventRsvpAvailability } from '../../services/event.service';
+import { useAuth } from '../../hooks/useAuth';
+import { useKnownOffline } from '../../hooks/useKnownOffline';
+import { ScreenSkeleton } from '../../components/common/ScreenSkeleton';
+import { StatePanel } from '../../components/common/StatePanel';
+import { createSubmissionLock } from '../../services/submission-lock';
+import { createLatestRequestGate } from '../../services/latest-request';
+import { reconcileToggleCount } from '../../services/list-reconciliation';
+import { eventListBelongsToIdentity, type EventMemberContext } from './event-screen-state';
+import { useAnimatedRouteTop } from '../../hooks/useAnimatedRouteTop';
 
 type EventsNav = NativeStackNavigationProp<RootStackParamList>;
 
-const categoryColors: Record<string, string> = {
-  worship: colors.primary,
-  fellowship: colors.info,
-  outreach: colors.success,
-  youth: colors.secondary,
-  conference: colors.warning,
-  other: colors.muted,
-};
-
 export function EventsScreen() {
   const navigation = useNavigation<EventsNav>();
+  const { user } = useAuth();
+  const offline = useKnownOffline();
   const [events, setEvents] = useState<ChurchEvent[]>([]);
+  const [eventsOwner, setEventsOwner] = useState<EventMemberContext | null>(() => ({
+    churchId: user?.churchId,
+    memberId: user?.id,
+  }));
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState('');
+  const [rsvpWarning, setRsvpWarning] = useState('');
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [updatingId, setUpdatingId] = useState<string | null>(null);
+  const rsvpLock = useRef(createSubmissionLock());
+  const loadGate = useRef(createLatestRequestGate());
+  const listRef = useRef<FlatList<ChurchEvent>>(null);
+  useAnimatedRouteTop(listRef);
+  const mountedRef = useRef(true);
+  const activeIdentityRef = useRef<EventMemberContext>({ churchId: user?.churchId, memberId: user?.id });
+  const eventsOwnerRef = useRef(eventsOwner);
+  const activeEventIdsRef = useRef(new Set<string>());
+  activeIdentityRef.current = { churchId: user?.churchId, memberId: user?.id };
+  eventsOwnerRef.current = eventsOwner;
+  activeEventIdsRef.current = new Set(events.map((event) => event.id));
 
-  useEffect(() => {
-    const loadEvents = async () => {
+  const loadEvents = useCallback(async (refresh = false) => {
+      const request = loadGate.current.begin();
+      const startedOwner = { churchId: user?.churchId, memberId: user?.id };
+      if (!eventListBelongsToIdentity(eventsOwnerRef.current, startedOwner)) {
+        eventsOwnerRef.current = startedOwner;
+        setEventsOwner(startedOwner);
+        setEvents([]);
+        setRsvpWarning('');
+        setUpdatingId(null);
+        rsvpLock.current.release();
+      }
+      if (refresh) setIsRefreshing(true);
+      else setIsLoading(true);
       try {
         setError('');
-        const result = await eventService.getEvents({ upcoming: true, limit: 50 });
-        setEvents(result.events);
+        if (!user?.churchId) throw new Error('No church selected');
+        if (!user.id) throw new Error('Member identity is incomplete');
+        const result = await eventService.getEvents(user.churchId, user.id, { upcoming: true, limit: 50 });
+        if (loadGate.current.isLatest(request)) {
+          setEvents(result.events);
+          const loadedOwner = { churchId: user.churchId, memberId: user.id };
+          eventsOwnerRef.current = loadedOwner;
+          setEventsOwner(loadedOwner);
+          setRsvpWarning(result.events.some((event) => !event.rsvpStatusKnown)
+            ? 'Your attendance status is temporarily unavailable. Refresh before updating an RSVP.'
+            : '');
+        }
       } catch {
-        setError('We could not load upcoming events.');
+        if (loadGate.current.isLatest(request)) {
+          setError('We could not load upcoming events.');
+          setRsvpWarning('');
+        }
       } finally {
-        setIsLoading(false);
+        if (loadGate.current.isLatest(request)) {
+          setIsLoading(false);
+          setIsRefreshing(false);
+        }
       }
-    };
-    loadEvents();
-  }, []);
+  }, [user?.churchId, user?.id]);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    const gate = loadGate.current;
+    void loadEvents();
+    return () => { mountedRef.current = false; gate.invalidate(); };
+  }, [loadEvents]);
 
   const formatDate = (dateStr: string) => {
     const date = new Date(dateStr);
@@ -61,32 +113,67 @@ export function EventsScreen() {
   };
 
   const handleRsvp = async (event: ChurchEvent) => {
+    if (!event.rsvpStatusKnown) return;
+    if (!rsvpLock.current.acquire()) return;
+    const startedChurchId = user?.churchId;
+    const startedMemberId = user?.id;
+    if (!startedChurchId || !startedMemberId
+      || !mountedRef.current
+      || !eventListBelongsToIdentity(eventsOwnerRef.current, activeIdentityRef.current)
+      || !activeEventIdsRef.current.has(event.id)) {
+      rsvpLock.current.release();
+      return;
+    }
     try {
+      setUpdatingId(event.id);
+      setError('');
       const response = event.isRsvped
-        ? await eventService.cancelRsvp(event.id)
-        : await eventService.rsvp(event.id);
-      setEvents((current) => current.map((item) => item.id === event.id ? {
-        ...item,
-        isRsvped: response.status === 'confirmed',
-        attendeeCount: response.attendeeCount,
-      } : item));
+        ? await eventService.cancelRsvp(event.id, startedMemberId)
+        : await eventService.rsvp(event.id, startedMemberId);
+      if (!mountedRef.current
+        || activeIdentityRef.current.churchId !== startedChurchId
+        || activeIdentityRef.current.memberId !== startedMemberId
+        || !activeEventIdsRef.current.has(event.id)) return;
+      setEvents((current) => current.map((item) => {
+        if (item.id !== event.id) return item;
+        const reconciled = reconcileToggleCount(
+          { selected: item.isRsvped, count: item.attendeeCount },
+          response.status === 'confirmed',
+          response.attendeeCount,
+        );
+        return {
+          ...item,
+          isRsvped: reconciled.selected,
+          rsvpStatusKnown: true,
+          attendeeCount: reconciled.count,
+        };
+      }));
     } catch {
-      setError('We could not update that RSVP. Try again.');
+      if (mountedRef.current
+        && activeIdentityRef.current.churchId === startedChurchId
+        && activeIdentityRef.current.memberId === startedMemberId
+        && activeEventIdsRef.current.has(event.id)) {
+        setError('We could not update that RSVP. Try again.');
+      }
+    } finally {
+      rsvpLock.current.release();
+      if (mountedRef.current) setUpdatingId(null);
     }
   };
 
   const renderEvent = ({ item }: { item: ChurchEvent }) => {
     const { day, month, time } = formatDate(item.startDate);
-    const catColor = categoryColors[item.category] || colors.muted;
+    const availability = eventRsvpAvailability(item);
 
     return (
-      <TouchableOpacity
-        activeOpacity={0.7}
-        onPress={() =>
-          navigation.navigate('EventDetail', { eventId: item.id })
-        }
-      >
-        <Card style={styles.eventCard}>
+      <Card style={styles.eventCard}>
+        <TouchableOpacity
+          activeOpacity={0.7}
+          onPress={() => navigation.navigate('EventDetail', { eventId: item.id })}
+          accessibilityRole="button"
+          accessibilityLabel={`${item.title}, ${month} ${day} at ${time}, ${item.location}`}
+          accessibilityHint="Opens event details"
+        >
           <View style={styles.eventRow}>
             {/* Date Badge */}
             <View style={styles.dateBadge}>
@@ -96,12 +183,6 @@ export function EventsScreen() {
 
             {/* Event Info */}
             <View style={styles.eventInfo}>
-              <View style={styles.eventHeader}>
-                <View
-                  style={[styles.categoryDot, { backgroundColor: catColor }]}
-                />
-                <Text style={styles.categoryText}>{item.category}</Text>
-              </View>
               <Text style={styles.eventTitle}>{item.title}</Text>
               <Text style={styles.eventMeta}>
                 {time} {'\u2022'} {item.location}
@@ -114,41 +195,63 @@ export function EventsScreen() {
               </Text>
             </View>
           </View>
+        </TouchableOpacity>
 
-          {/* RSVP Button */}
-          <View style={styles.rsvpRow}>
-            <Button
-              title={item.isRsvped ? 'Cancel RSVP' : 'RSVP'}
-              variant={item.isRsvped ? 'outline' : 'primary'}
-              size="sm"
-              onPress={() => void handleRsvp(item)}
-            />
-          </View>
-        </Card>
-      </TouchableOpacity>
+        {/* RSVP is deliberately outside the detail navigation target so one
+            tap cannot both mutate attendance and open another screen. */}
+        <View style={styles.rsvpRow}>
+          <Button
+            title={availability.label}
+            variant={item.isRsvped ? 'outline' : 'primary'}
+            size="sm"
+            onPress={() => void handleRsvp(item)}
+            loading={updatingId === item.id}
+            disabled={offline || !availability.allowed || (updatingId !== null && updatingId !== item.id)}
+            accessibilityLabel={item.isRsvped ? `Cancel RSVP for ${item.title}` : `RSVP for ${item.title}`}
+            accessibilityHint={offline ? 'Reconnect to update your RSVP.' : availability.reason}
+          />
+          {availability.reason ? <Text style={styles.rsvpReason}>{availability.reason}</Text> : null}
+        </View>
+      </Card>
     );
   };
 
-  if (isLoading) {
-    return (
-      <View style={styles.loading}>
-        <ActivityIndicator size="large" color={colors.primary} />
-      </View>
-    );
+  const ownsEvents = eventListBelongsToIdentity(eventsOwner, activeIdentityRef.current);
+  const visibleEvents = ownsEvents ? events : [];
+
+  if (isLoading || !ownsEvents) {
+    return <ScreenSkeleton cards={4} />;
   }
 
   return (
     <FlatList
+      ref={listRef}
       style={styles.container}
-      data={events}
+      data={visibleEvents}
       keyExtractor={(item) => item.id}
       renderItem={renderEvent}
       contentContainerStyle={styles.list}
       showsVerticalScrollIndicator={false}
-      ListEmptyComponent={
-        <View style={styles.empty}>
-          <Text style={styles.emptyText}>{error || 'No upcoming events have been published yet.'}</Text>
+      refreshControl={<RefreshControl refreshing={isRefreshing} onRefresh={() => { if (!offline) void loadEvents(true); }} enabled={!offline} tintColor={colors.primary} />}
+      ListHeaderComponent={(error && visibleEvents.length) || rsvpWarning ? (
+        <View style={styles.errorBanner}>
+          <Text style={styles.errorText} accessibilityRole="alert">{error || rsvpWarning}</Text>
+          <TouchableOpacity onPress={() => void loadEvents(true)} accessibilityRole="button" disabled={offline} accessibilityState={{ disabled: offline }} accessibilityHint={offline ? 'Reconnect to refresh upcoming events.' : undefined} style={offline && { opacity: 0.5 }}>
+            <Text style={styles.retry}>{offline ? 'Reconnect to retry' : 'Try again'}</Text>
+          </TouchableOpacity>
         </View>
+      ) : null}
+      ListEmptyComponent={
+        <StatePanel
+          icon={error ? (offline ? 'cloud-offline-outline' : 'calendar-outline') : 'calendar-clear-outline'}
+          tone={error ? (offline ? 'offline' : 'error') : 'quiet'}
+          title={error ? (offline ? 'Events need a connection' : 'Events are taking a pause') : 'Nothing on the calendar yet'}
+          message={error || 'When your church publishes its next gathering, every detail will be waiting here.'}
+          actionLabel={error ? (offline ? 'Reconnect to retry' : 'Try again') : undefined}
+          actionHint={offline ? 'Reconnect to load upcoming events.' : 'Loads upcoming events again.'}
+          actionDisabled={offline}
+          onAction={error ? () => void loadEvents() : undefined}
+        />
       }
     />
   );
@@ -159,14 +262,12 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: colors.background,
   },
-  loading: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: colors.background,
-  },
   list: {
+    width: '100%',
+    maxWidth: 680,
+    alignSelf: 'center',
     padding: spacing.xl,
+    flexGrow: 1,
   },
   eventCard: {
     marginBottom: spacing.md,
@@ -185,37 +286,21 @@ const styles = StyleSheet.create({
   },
   dateMonth: {
     fontSize: typography.sizes.xs,
-    fontWeight: typography.weights.semibold,
+    fontFamily: typography.families.semibold,
     color: colors.primary,
     textTransform: 'uppercase',
   },
   dateDay: {
     fontSize: typography.sizes.xl,
-    fontWeight: typography.weights.bold,
+    fontFamily: typography.families.bold,
     color: colors.primary,
   },
   eventInfo: {
     flex: 1,
   },
-  eventHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: spacing.xs,
-  },
-  categoryDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    marginRight: spacing.xs,
-  },
-  categoryText: {
-    fontSize: typography.sizes.xs,
-    color: colors.muted,
-    textTransform: 'capitalize',
-  },
   eventTitle: {
     fontSize: typography.sizes.base,
-    fontWeight: typography.weights.semibold,
+    fontFamily: typography.families.semibold,
     color: colors.text,
     marginBottom: spacing.xs,
   },
@@ -232,12 +317,13 @@ const styles = StyleSheet.create({
     marginTop: spacing.md,
     alignItems: 'flex-end',
   },
-  empty: {
-    alignItems: 'center',
-    paddingTop: spacing['4xl'],
+  rsvpReason: { color: colors.muted, fontSize: typography.sizes.xs, marginTop: spacing.xs, textAlign: 'right' },
+  errorBanner: {
+    backgroundColor: `${colors.error}12`,
+    borderRadius: borderRadius.lg,
+    padding: spacing.md,
+    marginBottom: spacing.md,
   },
-  emptyText: {
-    fontSize: typography.sizes.base,
-    color: colors.muted,
-  },
+  errorText: { color: colors.error, fontSize: typography.sizes.sm },
+  retry: { color: colors.primary, fontSize: typography.sizes.sm, fontFamily: typography.families.semibold, marginTop: spacing.xs },
 });

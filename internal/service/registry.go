@@ -38,19 +38,37 @@ func standalone(rs routeSet) http.Handler {
 	return r
 }
 
-// routeSets are the services with real endpoints, in mount order.
-func routeSets(d *deps.Deps) map[string]routeSet {
-	return map[string]routeSet{
-		"auth":         authRoutes(d),
-		"church":       churchRoutes(d),
-		"rbac":         rbacRoutes(d),
-		"invitation":   invitationRoutes(d),
-		"member":       memberRoutes(d),
-		"finance":      financeRoutes(d),
-		"notification": notificationRoutes(d),
-		"site":         siteRoutes(d),
-		"domain":       domainRoutes(d),
+// routeBuilders are the services with real endpoints.
+//
+// The values are UNAPPLIED functions on purpose. Applying one constructs live
+// services against the database, so this map can be read for its names without
+// a connection — which is what lets Implemented() derive from the same source
+// the gateway mounts from, rather than from a second list somebody has to
+// remember to update. A service that appears in one and not the other is
+// invisible until a client 404s, and that has already happened once here.
+func routeBuilders() map[string]func(*deps.Deps) routeSet {
+	return map[string]func(*deps.Deps) routeSet{
+		"auth":         authRoutes,
+		"church":       churchRoutes,
+		"rbac":         rbacRoutes,
+		"invitation":   invitationRoutes,
+		"member":       memberRoutes,
+		"finance":      financeRoutes,
+		"notification": notificationRoutes,
+		"site":         siteRoutes,
+		"domain":       domainRoutes,
+		"event":        eventRoutes,
+		"spiritual":    spiritualRoutes,
 	}
+}
+
+// routeSets builds every service's routes, in mount order.
+func routeSets(d *deps.Deps) map[string]routeSet {
+	built := make(map[string]routeSet, len(routeBuilders()))
+	for name, build := range routeBuilders() {
+		built[name] = build(d)
+	}
+	return built
 }
 
 // registry is the full set of runnable services.
@@ -71,7 +89,8 @@ func init() {
 		"invitation":    buildInvitation,
 		"site":          buildSite,
 		"domain":        buildDomain,
-		"event":         placeholder("event", "events, RSVP, QR check-in, attendance"),
+		"event":         buildEvent,
+		"spiritual":     buildSpiritual,
 		"communication": placeholder("communication", "broadcast + targeted messaging"),
 		"ai":            placeholder("ai", "sermon assistant, member insights, prayer chat"),
 		"notification":  buildNotification,
@@ -154,19 +173,18 @@ func buildGateway(d *deps.Deps) http.Handler {
 	return r
 }
 
-// implementedNames lists the services serving real domain routes, as opposed
-// to the placeholders still awaiting their work package.
-//
-// A plain list rather than a key set of routeSets: building the route sets
-// constructs live services against the database, so asking "which services
-// exist" must not require a connection.
-var implementedNames = []string{"auth", "church", "domain", "finance", "gateway", "invitation", "member", "notification", "rbac", "site"}
-
 // Implemented lists the services with real routes, sorted. The gateway is
 // included because it serves its own index.
+//
+// Derived from routeBuilders rather than hand-listed, so it cannot disagree
+// with what the gateway actually mounts.
 func Implemented() []string {
-	names := make([]string, len(implementedNames))
-	copy(names, implementedNames)
+	builders := routeBuilders()
+	names := make([]string, 0, len(builders)+1)
+	for name := range builders {
+		names = append(names, name)
+	}
+	names = append(names, "gateway")
 	sort.Strings(names)
 	return names
 }

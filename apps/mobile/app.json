@@ -8,6 +8,11 @@
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "assetBundlePatterns": ["**/*"],
+    "splash": {
+      "image": "./assets/icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#102A27"
+    },
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.altaros.app"
@@ -21,8 +26,12 @@
     },
     "plugins": [
       "expo-secure-store",
-      "expo-camera",
-      "expo-notifications"
+      [
+        "expo-notifications",
+        {
+          "color": "#6DD5C4"
+        }
+      ]
     ]
   }
 }

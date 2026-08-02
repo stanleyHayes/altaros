@@ -1,10 +1,11 @@
-import type { Event, RSVP, Attendance, PaginationQuery } from "@altar-os/shared-types";
+import type { Event, RSVP, Attendance } from "@altar-os/shared-types";
 import type {
   IEventRepository,
   CreateEventData,
   UpdateEventData,
   CreateRsvpData,
   CreateAttendanceData,
+  EventQuery,
 } from "../ports/event.repository.port.js";
 import type { PaginatedResult } from "../../church/ports/church.repository.port.js";
 import { AppError } from "../../../infrastructure/middleware/error.middleware.js";
@@ -26,7 +27,7 @@ export class EventService {
 
   async getByChurchId(
     churchId: string,
-    query: PaginationQuery,
+    query: EventQuery,
   ): Promise<PaginatedResult<Event>> {
     return this.eventRepo.findByChurchId(churchId, query);
   }
@@ -48,6 +49,10 @@ export class EventService {
 
   async rsvp(data: CreateRsvpData): Promise<RSVP> {
     return this.eventRepo.createRsvp(data);
+  }
+
+  async getRsvpsForMember(memberId: string, eventIds?: string[]): Promise<RSVP[]> {
+    return this.eventRepo.findRsvpsByMember(memberId, eventIds);
   }
 
   async checkIn(data: CreateAttendanceData): Promise<Attendance> {

@@ -23,6 +23,7 @@ interface ButtonProps {
   style?: ViewStyle;
   textStyle?: TextStyle;
   accessibilityLabel?: string;
+  accessibilityHint?: string;
 }
 
 export function Button({
@@ -36,6 +37,7 @@ export function Button({
   style,
   textStyle,
   accessibilityLabel,
+  accessibilityHint,
 }: ButtonProps) {
   const buttonStyles = [
     styles.base,
@@ -62,12 +64,14 @@ export function Button({
       activeOpacity={0.7}
       accessibilityRole="button"
       accessibilityLabel={accessibilityLabel ?? title}
+      accessibilityHint={accessibilityHint}
       accessibilityState={{ disabled: disabled || loading, busy: loading }}
     >
       {loading ? (
         <ActivityIndicator
           color={variant === 'outline' ? colors.primary : '#FFFFFF'}
           size="small"
+          importantForAccessibility="no"
         />
       ) : (
         <Text style={textStyles}>{title}</Text>
@@ -78,6 +82,7 @@ export function Button({
 
 const styles = StyleSheet.create({
   base: {
+    minHeight: 44,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
@@ -113,7 +118,7 @@ const styles = StyleSheet.create({
     opacity: 0.5,
   },
   text: {
-    fontWeight: typography.weights.semibold,
+    fontFamily: typography.families.semibold,
   },
   text_primary: {
     color: '#FFFFFF',

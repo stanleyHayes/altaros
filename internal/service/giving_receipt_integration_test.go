@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -219,14 +220,23 @@ func TestGivingProducesAnSMSReceiptThroughKafka(t *testing.T) {
 	consumeCtx, stopConsuming := context.WithCancel(context.Background())
 	defer stopConsuming()
 
-	handled := make(chan string, 8)
+	handled := make(chan string, 1)
+	var targetEventID atomic.Value
+	targetEventID.Store("")
 	inner := givingReceiptHandler(d, notifications, nil)
 	err = bus.Consume(consumeCtx, map[string]events.Handler{
 		events.TopicGivingCompleted: deduper.Wrap(func(c context.Context, e *events.Envelope, raw []byte) error {
 			if err := inner(c, e, raw); err != nil {
 				return err
 			}
-			handled <- e.ID
+			// A unique consumer group begins at the topic's configured offset,
+			// which may include records from prior test runs. Only the transaction
+			// created below proves this flow, and ignoring older transactions prevents them
+			// from filling the channel and deadlocking Bus.Close during cleanup.
+			data, _ := e.Data.(map[string]any)
+			if data["transactionId"] == targetEventID.Load().(string) {
+				handled <- e.ID
+			}
 			return nil
 		}),
 	})
@@ -249,6 +259,7 @@ func TestGivingProducesAnSMSReceiptThroughKafka(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StartGiving: %v", err)
 	}
+	targetEventID.Store(result.Transaction.ID.Hex())
 
 	settled, err := fin.Settle(giverCtx, result.Transaction.IdempotencyKey)
 	if err != nil {
