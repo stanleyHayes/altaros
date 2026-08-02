@@ -108,3 +108,11 @@ infra-down: ## Stop infrastructure (data volumes survive)
 
 infra-logs: ## Tail infrastructure logs
 	@docker compose logs -f --tail=50
+
+# Run one mutation against a file and report whether a test notices.
+#   make mutate FILE=internal/domain/rota/service.go MUT=/tmp/m.py PKG=./internal/domain/rota/
+# See scripts/mutate.sh for why this is a script rather than something done by
+# hand: doing it by hand produced three wrong answers in one session.
+.PHONY: mutate
+mutate:
+	@REQUIRE_INFRA=1 ./scripts/mutate.sh $(FILE) $(MUT) $(PKG)
