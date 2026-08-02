@@ -7,6 +7,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/hayfordstanley/altar-os/internal/domain/church"
+	"github.com/hayfordstanley/altar-os/internal/domain/rbac"
 	"github.com/hayfordstanley/altar-os/internal/platform/deps"
 	"github.com/hayfordstanley/altar-os/internal/platform/httpx"
 	"github.com/hayfordstanley/altar-os/internal/platform/ratelimit"
@@ -45,6 +46,24 @@ func churchRoutes(d *deps.Deps) routeSet {
 			// branch in their denomination; a church admin gets exactly one.
 			r.Get("/churches/visible", handleVisibleChurches(svc))
 
+			// The same set as full records — what the dashboard's church
+			// picker reads. Ported from the legacy TypeScript API (WP-20);
+			// it used to fall through to the proxy and 502.
+			r.Get("/churches", handleListChurches(svc))
+
+			// Creating a branch is an ORG-level act, guarded by the same role
+			// check as listing a denomination's branches and for the same
+			// reason given below: it is about organisational reach, and
+			// `resource:action` cannot express that. A church admin creating
+			// sibling churches inside their denomination is not a capability
+			// anybody asked for.
+			r.With(requireRole(RoleOrgAdmin)).
+				Post("/churches", handleCreateChurch(svc))
+
+			// Editing a church's own details is settings, not reach.
+			r.With(resolvePermissions(d), requirePermission(rbac.ResourceSettings, rbac.ActionUpdate)).
+				Put("/churches/{id}", handleUpdateChurch(svc))
+
 			// The caller's own church, without needing to know its id.
 			r.Get("/churches/current", handleCurrentChurch(svc))
 
@@ -72,6 +91,70 @@ func churchRoutes(d *deps.Deps) routeSet {
 				r.Get("/organizations/{id}/branches", handleBranches(svc))
 			})
 		})
+	}
+}
+
+// churchInput is the wire shape of a church.
+type churchInput struct {
+	Name     string `json:"name"`
+	Slug     string `json:"slug"`
+	Address  string `json:"address"`
+	City     string `json:"city"`
+	Country  string `json:"country"`
+	Phone    string `json:"phone"`
+	Email    string `json:"email"`
+	Timezone string `json:"timezone"`
+	Currency string `json:"currency"`
+}
+
+func (in churchInput) toDomain() church.Input {
+	return church.Input{
+		Name: in.Name, Slug: in.Slug, Address: in.Address, City: in.City,
+		Country: in.Country, Phone: in.Phone, Email: in.Email,
+		Timezone: in.Timezone, Currency: in.Currency,
+	}
+}
+
+func handleListChurches(svc *church.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		churches, err := svc.Visible(r.Context())
+		if err != nil {
+			writeChurchError(w, err)
+			return
+		}
+		httpx.JSON(w, http.StatusOK, churches)
+	}
+}
+
+func handleCreateChurch(svc *church.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var body churchInput
+		if err := decode(r, &body); err != nil {
+			httpx.Error(w, http.StatusBadRequest, "Malformed request body")
+			return
+		}
+		created, err := svc.Create(r.Context(), body.toDomain())
+		if err != nil {
+			writeChurchError(w, err)
+			return
+		}
+		httpx.JSON(w, http.StatusCreated, created)
+	}
+}
+
+func handleUpdateChurch(svc *church.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var body churchInput
+		if err := decode(r, &body); err != nil {
+			httpx.Error(w, http.StatusBadRequest, "Malformed request body")
+			return
+		}
+		updated, err := svc.Update(r.Context(), chi.URLParam(r, "id"), body.toDomain())
+		if err != nil {
+			writeChurchError(w, err)
+			return
+		}
+		httpx.JSON(w, http.StatusOK, updated)
 	}
 }
 
@@ -165,6 +248,8 @@ func writeChurchError(w http.ResponseWriter, err error) {
 	case errors.Is(err, church.ErrNotFound):
 		httpx.Error(w, http.StatusNotFound, "Church not found")
 
+	case errors.Is(err, church.ErrInvalidInput):
+		httpx.Error(w, http.StatusBadRequest, err.Error())
 	case errors.Is(err, church.ErrForbidden):
 		// 404, not 403. A 403 confirms the church exists, which lets anyone
 		// with an account enumerate every church on the platform by id.

@@ -10,6 +10,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 
+	"github.com/hayfordstanley/altar-os/internal/domain/finance"
 	"github.com/hayfordstanley/altar-os/internal/platform/mongodb"
 )
 
@@ -142,7 +143,12 @@ func (s *Service) Churches(ctx context.Context, db *mongodb.DB, page, limit int)
 // that shows the rest. The number is a summary on a directory page, not a
 // figure anybody bills from.
 func churchCommission(ctx context.Context, db *mongodb.DB, owner bson.M) int64 {
-	match := bson.M{"status": "completed", "direction": "income"}
+	// The constants, not literals. See the note in stats.go: `"completed"` is
+	// not a status this system ever writes.
+	match := bson.M{
+		"status":    string(finance.StatusSuccess),
+		"direction": string(finance.DirectionIncome),
+	}
 	for k, v := range owner {
 		match[k] = v
 	}

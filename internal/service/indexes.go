@@ -42,6 +42,7 @@ func EnsureIndexes(ctx context.Context, d *deps.Deps) error {
 		{"consent", consent.NewService(d.Mongo, d.Events).EnsureIndexes},
 		{"member", member.NewService(d.Mongo, d.Events, d.Config.DataRegion).EnsureIndexes},
 		{"finance", finance.NewService(d.Mongo, nil, nil, nil).EnsureIndexes},
+		{"finance campaigns", finance.NewService(d.Mongo, nil, nil, nil).EnsureCampaignIndexes},
 		{"notification", newNotificationService(d).EnsureIndexes},
 		{"rbac", rbac.NewService(d.Mongo).EnsureIndexes},
 		{"invitation", invitation.NewService(d.Mongo).EnsureIndexes},

@@ -25,6 +25,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 
+	"github.com/hayfordstanley/altar-os/internal/domain/finance"
 	"github.com/hayfordstanley/altar-os/internal/domain/member"
 	"github.com/hayfordstanley/altar-os/internal/platform/mongodb"
 )
@@ -435,7 +436,20 @@ func (s *Service) activeSince(ctx context.Context, memberIDs []string, since tim
 		any = append(any, oid)
 	}
 
-	giving := bson.M{"memberId": bson.M{"$in": any}, "status": "completed"}
+	// StatusSuccess, not the literal "completed" this used to carry. Nothing in
+	// this system writes "completed", so the giving half of activity filtering
+	// matched NOTHING — and the consequence is the exact failure the comment
+	// above warns about: a member who gives every month but has not been
+	// scanned at a door in a year was classified as lapsed and would have been
+	// sent "we miss you" while still paying for the building.
+	//
+	// The integration test agreed with the bug, because its fixture wrote
+	// "completed" too. A test and the code being wrong in the same way is not
+	// coverage.
+	giving := bson.M{
+		"memberId": bson.M{"$in": any},
+		"status":   string(finance.StatusSuccess),
+	}
 	if !since.IsZero() {
 		giving["occurredAt"] = bson.M{"$gte": since}
 	}

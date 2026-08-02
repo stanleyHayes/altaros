@@ -8,6 +8,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 
+	"github.com/hayfordstanley/altar-os/internal/domain/finance"
 	"github.com/hayfordstanley/altar-os/internal/platform/mongodb"
 )
 
@@ -109,8 +110,11 @@ func (s *Service) StatsFor(ctx context.Context, db *mongodb.DB) (*Stats, error) 
 func platformRevenue(ctx context.Context, transactions *mongo.Collection) (int64, string, error) {
 	cursor, err := transactions.Aggregate(ctx, []bson.M{
 		{"$match": bson.M{
-			"status":    "completed",
-			"direction": "income",
+			// The constants, not literals. These were `"completed"`, which
+			// matches NOTHING — the stored value is `success` — so platform
+			// revenue read zero for a reason that looked like "no giving yet".
+			"status":    string(finance.StatusSuccess),
+			"direction": string(finance.DirectionIncome),
 		}},
 		{"$group": bson.M{
 			"_id":   "$currency",

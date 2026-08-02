@@ -59,18 +59,20 @@ type ChurchDirectory interface {
 
 // Service is the giving and ledger domain.
 type Service struct {
-	coll    *mongodb.TenantCollection
-	global  *mongo.Collection
-	gateway payments.Gateway
-	pub     Publisher
-	dir     ChurchDirectory
-	now     func() time.Time
+	coll      *mongodb.TenantCollection
+	campaigns *mongodb.TenantCollection
+	global    *mongo.Collection
+	gateway   payments.Gateway
+	pub       Publisher
+	dir       ChurchDirectory
+	now       func() time.Time
 }
 
 // NewService builds the finance service.
 func NewService(db *mongodb.DB, gw payments.Gateway, dir ChurchDirectory, pub Publisher) *Service {
 	return &Service{
-		coll: db.Tenant(Collection),
+		coll:      db.Tenant(Collection),
+		campaigns: db.Tenant(CampaignCollection),
 		// A webhook arrives from the provider with no session and therefore no
 		// tenant, so the transaction it refers to has to be found before the
 		// church is known. This is the one place finance reads across tenants,
@@ -251,9 +253,9 @@ func (s *Service) StartGiving(ctx context.Context, req GiveRequest) (*GiveResult
 
 	now := s.now().UTC()
 	doc := bson.M{
-		"type":             string(req.Type),
-		"direction":        string(DirectionIncome),
-		"channel":          req.Channel,
+		"type":       string(req.Type),
+		"direction":  string(DirectionIncome),
+		"channel":    req.Channel,
 		"grossMinor": req.Amount.Minor,
 		"levyMinor":  levy.Levy.Minor,
 		// The ESTIMATE, replaced by the provider's actual figure on settlement.

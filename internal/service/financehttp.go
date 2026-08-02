@@ -76,6 +76,22 @@ func financeRoutes(d *deps.Deps) routeSet {
 			// to see their own receipts.
 			r.Post("/finance/give/quote", handleGivingQuote(svc, directory))
 			r.Post("/finance/give", handleStartGiving(svc, directory))
+
+			// Giving campaigns, ported from the legacy TypeScript API (WP-20).
+			// Reading one is finance:read; running an appeal is a finance write.
+			r.With(requirePermission(rbac.ResourceFinance, rbac.ActionRead)).
+				Get("/finance/campaigns", handleListGivingCampaigns(svc))
+			r.With(requirePermission(rbac.ResourceFinance, rbac.ActionCreate)).
+				Post("/finance/campaigns", handleCreateGivingCampaign(svc))
+			r.With(requirePermission(rbac.ResourceFinance, rbac.ActionRead)).
+				Get("/finance/campaigns/{id}", handleGetGivingCampaign(svc))
+			r.With(requirePermission(rbac.ResourceFinance, rbac.ActionUpdate)).
+				Put("/finance/campaigns/{id}", handleUpdateGivingCampaign(svc))
+			// Closed, never deleted: giving points at a campaign, and removing
+			// it would leave a church's ledger showing income against a fund
+			// that no longer exists.
+			r.With(requirePermission(rbac.ResourceFinance, rbac.ActionUpdate)).
+				Post("/finance/campaigns/{id}/close", handleCloseGivingCampaign(svc))
 			// Ownership-checked inside the handler via selfOr, which is
 			// the only guard here and has to stay that way: a member reading
 			// their own receipt holds nothing that would satisfy a permission.
@@ -350,6 +366,119 @@ func handleStartGiving(svc *finance.Service, directory *churchDirectory) http.Ha
 			return
 		}
 		httpx.JSON(w, http.StatusCreated, result)
+	}
+}
+
+// A GIVING campaign — a building fund, a missions appeal. Named apart from
+// communication's campaigns, which are message broadcasts, because "campaign"
+// means two unrelated things in this product and one of them moves money.
+//
+// campaignInput is the wire shape of a giving campaign.
+type campaignInput struct {
+	Title        string     `json:"title"`
+	Description  string     `json:"description"`
+	TargetAmount int64      `json:"targetAmount"`
+	Currency     string     `json:"currency"`
+	StartDate    *time.Time `json:"startDate"`
+	EndDate      *time.Time `json:"endDate"`
+	IsActive     *bool      `json:"isActive"`
+}
+
+func (in campaignInput) toDomain() finance.CampaignInput {
+	out := finance.CampaignInput{
+		Title:        in.Title,
+		Description:  in.Description,
+		TargetAmount: in.TargetAmount,
+		Currency:     in.Currency,
+		IsActive:     in.IsActive,
+	}
+	if in.StartDate != nil {
+		out.StartDate = *in.StartDate
+	}
+	if in.EndDate != nil {
+		out.EndDate = *in.EndDate
+	}
+	return out
+}
+
+// campaignView adds the derived figures a progress bar needs, so the client
+// does not divide two numbers and disagree with the server about rounding.
+type campaignView struct {
+	*finance.Campaign
+	Progress int `json:"progress"`
+}
+
+func viewCampaign(c *finance.Campaign) campaignView {
+	return campaignView{Campaign: c, Progress: c.Progress()}
+}
+
+func handleListGivingCampaigns(svc *finance.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		campaigns, err := svc.Campaigns(r.Context(),
+			r.URL.Query().Get("active") == "true")
+		if err != nil {
+			writeFinanceError(w, err)
+			return
+		}
+		out := make([]campaignView, 0, len(campaigns))
+		for i := range campaigns {
+			out = append(out, viewCampaign(&campaigns[i]))
+		}
+		httpx.JSON(w, http.StatusOK, map[string]any{"campaigns": out})
+	}
+}
+
+func handleCreateGivingCampaign(svc *finance.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var body campaignInput
+		if err := decode(r, &body); err != nil {
+			httpx.Error(w, http.StatusBadRequest, "Malformed request body")
+			return
+		}
+		created, err := svc.CreateCampaign(r.Context(), body.toDomain())
+		if err != nil {
+			writeFinanceError(w, err)
+			return
+		}
+		httpx.JSON(w, http.StatusCreated, viewCampaign(created))
+	}
+}
+
+func handleGetGivingCampaign(svc *finance.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		found, err := svc.CampaignByID(r.Context(), chi.URLParam(r, "id"))
+		if err != nil {
+			writeFinanceError(w, err)
+			return
+		}
+		httpx.JSON(w, http.StatusOK, viewCampaign(found))
+	}
+}
+
+func handleUpdateGivingCampaign(svc *finance.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var body campaignInput
+		if err := decode(r, &body); err != nil {
+			httpx.Error(w, http.StatusBadRequest, "Malformed request body")
+			return
+		}
+		updated, err := svc.UpdateCampaign(r.Context(), chi.URLParam(r, "id"), body.toDomain())
+		if err != nil {
+			writeFinanceError(w, err)
+			return
+		}
+		httpx.JSON(w, http.StatusOK, viewCampaign(updated))
+	}
+}
+
+func handleCloseGivingCampaign(svc *finance.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		closed, err := svc.CloseCampaign(r.Context(), chi.URLParam(r, "id"))
+		if err != nil {
+			writeFinanceError(w, err)
+			return
+		}
+		httpx.JSON(w, http.StatusOK, viewCampaign(closed))
 	}
 }
 
@@ -684,6 +813,14 @@ func writeFinanceError(w http.ResponseWriter, err error) {
 		httpx.Error(w, http.StatusBadGateway,
 			"The payment provider is not responding. Please try again shortly.")
 
+	case errors.Is(err, finance.ErrCampaignNotFound):
+		httpx.Error(w, http.StatusNotFound, "That campaign does not exist.")
+	case errors.Is(err, finance.ErrCampaignTitle):
+		httpx.Error(w, http.StatusBadRequest, "Give the campaign a title.")
+	case errors.Is(err, finance.ErrCampaignTarget):
+		httpx.Error(w, http.StatusBadRequest, "Set a target above zero.")
+	case errors.Is(err, finance.ErrCampaignDates):
+		httpx.Error(w, http.StatusBadRequest, "The campaign has to end after it starts.")
 	case errors.Is(err, tenancy.ErrNoTenant):
 		httpx.Error(w, http.StatusUnauthorized, "Sign in to continue.")
 

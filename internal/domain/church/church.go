@@ -369,6 +369,170 @@ func (s *Service) SetRegistrationSettings(ctx context.Context, churchID string, 
 	return s.ByID(ctx, churchID)
 }
 
+// Visible returns every church the caller may see, as full records.
+//
+// The list the dashboard's church picker reads. It is VisibleChurchIDs
+// widened into documents rather than a new query, so there is exactly one
+// place that decides reach: an org admin sees their denomination's branches, a
+// church admin sees one, and adding a second query here would be adding a
+// second answer to that question.
+func (s *Service) Visible(ctx context.Context) ([]Church, error) {
+	ids, err := s.VisibleChurchIDs(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if len(ids) == 0 {
+		return []Church{}, nil
+	}
+
+	oids := make([]bson.ObjectID, 0, len(ids))
+	for _, id := range ids {
+		if oid, err := bson.ObjectIDFromHex(id); err == nil {
+			oids = append(oids, oid)
+		}
+	}
+	if len(oids) == 0 {
+		return []Church{}, nil
+	}
+
+	cursor, err := s.churches.Find(ctx, bson.M{"_id": bson.M{"$in": oids}},
+		options.Find().SetSort(bson.D{{Key: "name", Value: 1}}))
+	if err != nil {
+		return nil, fmt.Errorf("church: list visible: %w", err)
+	}
+	out := []Church{}
+	if err := cursor.All(ctx, &out); err != nil {
+		return nil, fmt.Errorf("church: read visible: %w", err)
+	}
+	return out, nil
+}
+
+// Input is a church as submitted.
+type Input struct {
+	Name     string
+	Slug     string
+	Address  string
+	City     string
+	Country  string
+	Phone    string
+	Email    string
+	Timezone string
+	Currency string
+}
+
+// Create adds a branch under the caller's organization.
+//
+// The organization is taken from the CALLER's scope, never from the request. A
+// church id in a body is user input, and accepting one here would let anybody
+// who may create a branch create it inside somebody else's denomination.
+func (s *Service) Create(ctx context.Context, in Input) (*Church, error) {
+	scope, err := tenancy.FromContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	name := strings.TrimSpace(in.Name)
+	if name == "" {
+		return nil, fmt.Errorf("%w: a church needs a name", ErrInvalidInput)
+	}
+	slug := strings.ToLower(strings.TrimSpace(in.Slug))
+	if slug == "" {
+		slug = slugify(name)
+	}
+	if !publicSlugPattern.MatchString(slug) {
+		return nil, fmt.Errorf("%w: %q is not a usable address", ErrInvalidInput, slug)
+	}
+	// The same reserved list the CMS and custom domains use. A branch called
+	// "api" would take a platform hostname (R-15).
+	if IsReservedSlug(slug) {
+		return nil, fmt.Errorf("%w: %q is reserved", ErrInvalidInput, slug)
+	}
+
+	now := time.Now().UTC()
+	doc := bson.M{
+		"name": name, "slug": slug,
+		"address":  strings.TrimSpace(in.Address),
+		"city":     strings.TrimSpace(in.City),
+		"country":  strings.TrimSpace(in.Country),
+		"phone":    strings.TrimSpace(in.Phone),
+		"email":    strings.TrimSpace(in.Email),
+		"isActive": true,
+		// Inherited from the caller rather than supplied. See above.
+		"organizationId": mongodb.ID(scope.OrganizationID),
+		"createdAt":      now,
+		"updatedAt":      now,
+	}
+	if in.Timezone != "" {
+		doc["timezone"] = in.Timezone
+	}
+	if in.Currency != "" {
+		doc["currency"] = strings.ToUpper(in.Currency)
+	}
+
+	res, err := s.churches.InsertOne(ctx, doc)
+	if err != nil {
+		if mongo.IsDuplicateKeyError(err) {
+			return nil, fmt.Errorf("%w: %q is already taken", ErrInvalidInput, slug)
+		}
+		return nil, fmt.Errorf("church: create: %w", err)
+	}
+	return s.ByID(ctx, res.InsertedID.(bson.ObjectID).Hex())
+}
+
+// Update edits a church the caller may reach.
+//
+// The SLUG is deliberately not editable here. It is the church's public
+// address and its subdomain (ADR-007); changing it breaks every link anybody
+// has shared and silently frees the old name for somebody else to claim.
+// Renaming is a support operation with its own redirect handling.
+func (s *Service) Update(ctx context.Context, churchID string, in Input) (*Church, error) {
+	if err := s.CanAccessChurch(ctx, churchID); err != nil {
+		return nil, err
+	}
+	oid, err := bson.ObjectIDFromHex(churchID)
+	if err != nil {
+		return nil, ErrNotFound
+	}
+
+	set := bson.M{"updatedAt": time.Now().UTC()}
+	for field, value := range map[string]string{
+		"name": in.Name, "address": in.Address, "city": in.City,
+		"country": in.Country, "phone": in.Phone, "email": in.Email,
+		"timezone": in.Timezone,
+	} {
+		// Only what was SENT. A partial update that wrote every empty field
+		// would blank a church's address because the form omitted it.
+		if v := strings.TrimSpace(value); v != "" {
+			set[field] = v
+		}
+	}
+	if in.Currency != "" {
+		set["currency"] = strings.ToUpper(strings.TrimSpace(in.Currency))
+	}
+
+	if _, err := s.churches.UpdateOne(ctx, bson.M{"_id": oid}, bson.M{"$set": set}); err != nil {
+		return nil, fmt.Errorf("church: update: %w", err)
+	}
+	return s.ByID(ctx, churchID)
+}
+
+// slugify turns a name into a usable address.
+func slugify(name string) string {
+	var b strings.Builder
+	lastDash := true
+	for _, r := range strings.ToLower(name) {
+		switch {
+		case (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9'):
+			b.WriteRune(r)
+			lastDash = false
+		case !lastDash:
+			b.WriteByte('-')
+			lastDash = true
+		}
+	}
+	return strings.Trim(b.String(), "-")
+}
+
 // GivingSettings is the part of a church's configuration that decides what a
 // giver is charged. Written from the church admin portal.
 type GivingSettings struct {

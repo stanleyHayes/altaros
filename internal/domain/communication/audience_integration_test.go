@@ -8,6 +8,7 @@ import (
 
 	"go.mongodb.org/mongo-driver/v2/bson"
 
+	"github.com/hayfordstanley/altar-os/internal/domain/finance"
 	"github.com/hayfordstanley/altar-os/internal/domain/member"
 	"github.com/hayfordstanley/altar-os/internal/domain/notification"
 	"github.com/hayfordstanley/altar-os/internal/platform/config"
@@ -161,8 +162,14 @@ func (f *fixture) attended(t *testing.T, memberID string, at time.Time) {
 // gave records a completed gift at a time.
 func (f *fixture) gave(t *testing.T, memberID string, at time.Time) {
 	t.Helper()
+	// finance.StatusSuccess, not a literal. This fixture wrote "completed",
+	// which the system never writes — so it agreed with a bug in the code and
+	// the test passed while the giving half of activity filtering matched
+	// nothing. A fixture that invents its own values is not testing the system.
 	if _, err := f.db.Tenant("transactions").InsertOne(f.ctx, bson.M{
-		"memberId": mustOID(t, memberID), "status": "completed",
+		"memberId":   mustOID(t, memberID),
+		"status":     string(finance.StatusSuccess),
+		"direction":  string(finance.DirectionIncome),
 		"occurredAt": at, "grossMinor": int64(5000), "currency": "GHS",
 	}); err != nil {
 		t.Fatalf("transaction: %v", err)
@@ -178,7 +185,7 @@ func TestTheAcceptanceCriterionResolvesTheCorrectSet(t *testing.T) {
 		f.person(t, "Kofi", member.StatusInactive, []bson.ObjectID{f.youth, f.choir}, "+233241000002"),
 	}
 	// And every near miss.
-	f.person(t, "Yaa", member.StatusActive, []bson.ObjectID{f.youth}, "+233241000003")    // wrong status
+	f.person(t, "Yaa", member.StatusActive, []bson.ObjectID{f.youth}, "+233241000003")     // wrong status
 	f.person(t, "Kwesi", member.StatusInactive, []bson.ObjectID{f.choir}, "+233241000004") // wrong department
 	f.person(t, "Abena", member.StatusInactive, nil, "+233241000005")                      // no department
 
