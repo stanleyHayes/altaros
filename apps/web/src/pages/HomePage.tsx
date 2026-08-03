@@ -1,301 +1,38 @@
-import Box from "@mui/material/Box";
-import Typography from "@mui/material/Typography";
-import Card from "@mui/material/Card";
-import CardContent from "@mui/material/CardContent";
-import Grid from "@mui/material/Grid";
-import Chip from "@mui/material/Chip";
-import VolunteerActivismRoundedIcon from "@mui/icons-material/VolunteerActivismRounded";
-import AutoStoriesRoundedIcon from "@mui/icons-material/AutoStoriesRounded";
-import EventRoundedIcon from "@mui/icons-material/EventRounded";
-import FavoriteBorderRoundedIcon from "@mui/icons-material/FavoriteBorderRounded";
-import PlayCircleOutlineRoundedIcon from "@mui/icons-material/PlayCircleOutlineRounded";
-import CalendarTodayRoundedIcon from "@mui/icons-material/CalendarTodayRounded";
-import LocationOnRoundedIcon from "@mui/icons-material/LocationOnRounded";
+import { useNavigate } from "react-router-dom";
+import { Box, Button, Card, CardContent, Chip, Grid, Typography } from "@mui/material";
+import { ArrowForwardRounded, AutoStoriesRounded, CalendarTodayRounded, EventRounded, FavoriteBorderRounded, LocationOnRounded, PlayCircleOutlineRounded, VolunteerActivismRounded } from "@mui/icons-material";
 import { useAuth } from "@/hooks/useAuth";
 import { firstNameOf } from "@/services/auth.service";
-import QuickActionCard from "@/components/home/QuickActionCard";
 import AnnouncementBanner from "@/components/home/AnnouncementBanner";
 
-// TODO: Replace with actual API data
-const mockAnnouncements = [
-  {
-    id: "1",
-    title: "Easter Sunday Celebration",
-    message:
-      "Join us for a special Easter service with worship, communion, and fellowship. Invite a friend!",
-    category: "Event",
-    date: "Mar 30",
-  },
-  {
-    id: "2",
-    title: "New Member Orientation",
-    message:
-      "Welcome to our church family! Attend the new member orientation this Saturday at 10 AM.",
-    category: "Notice",
-    date: "Apr 5",
-  },
+const announcements = [
+  { id: "1", title: "Easter Sunday celebration", message: "Worship, communion and fellowship this Sunday. Bring someone with you.", category: "Gathering", date: "Mar 30" },
+  { id: "2", title: "New member orientation", message: "Meet the care team and learn how to find your place in the church family.", category: "Notice", date: "Apr 5" },
 ];
-
-const mockUpcomingEvents = [
-  {
-    id: "1",
-    title: "Sunday Worship Service",
-    date: "Sun, Mar 30",
-    time: "9:00 AM",
-    location: "Main Auditorium",
-  },
-  {
-    id: "2",
-    title: "Bible Study Group",
-    date: "Wed, Apr 2",
-    time: "6:30 PM",
-    location: "Room 201",
-  },
-  {
-    id: "3",
-    title: "Youth Fellowship",
-    date: "Fri, Apr 4",
-    time: "5:00 PM",
-    location: "Youth Center",
-  },
+const events = [
+  { id: "1", title: "Sunday worship service", date: "Sun, Mar 30", time: "9:00 AM", location: "Main Auditorium" },
+  { id: "2", title: "Midweek Bible study", date: "Wed, Apr 2", time: "6:30 PM", location: "Room 201" },
+  { id: "3", title: "Youth fellowship", date: "Fri, Apr 4", time: "5:00 PM", location: "Youth Centre" },
 ];
-
-const mockRecentSermons = [
-  {
-    id: "1",
-    title: "Walking in Faith",
-    speaker: "Pastor James",
-    date: "Mar 23",
-    duration: "45 min",
-  },
-  {
-    id: "2",
-    title: "The Power of Prayer",
-    speaker: "Minister Grace",
-    date: "Mar 16",
-    duration: "38 min",
-  },
+const actions = [
+  { label: "Give", copy: "Tithe or offering", icon: VolunteerActivismRounded, path: "/giving" },
+  { label: "Ask for prayer", copy: "Share privately", icon: FavoriteBorderRounded, path: "/spiritual?tab=prayer" },
+  { label: "See events", copy: "What is coming up", icon: EventRounded, path: "/events" },
+  { label: "Read scripture", copy: "Continue your reading", icon: AutoStoriesRounded, path: "/spiritual?tab=bible" },
 ];
 
 export default function HomePage() {
+  const navigate = useNavigate();
   const { user } = useAuth();
   const firstName = user ? firstNameOf(user) : "Friend";
+  return <Box sx={{ py: { xs: 2, sm: 3 } }}>
+    <Box component="section" sx={{ p: { xs: 3, sm: 4 }, borderRadius: 2, bgcolor: "#0B2E2A", color: "white", backgroundImage: "radial-gradient(circle at 86% 0%, rgba(109,213,196,.22), transparent 30%)", display: "grid", gridTemplateColumns: { xs: "1fr", md: "1.2fr .8fr" }, gap: 3, alignItems: "end" }}><Box><Typography variant="overline" sx={{ color: "primary.light" }}>For today</Typography><Typography variant="h2" sx={{ mt: 1.4, color: "inherit", maxWidth: 570 }}>A quiet place to begin, {firstName}.</Typography><Typography sx={{ mt: 1.5, maxWidth: 520, color: "rgba(255,255,255,.64)" }}>Stay close to your church through worship, care, giving and the people walking with you.</Typography></Box><Box sx={{ p: 2, borderLeft: { md: "1px solid rgba(255,255,255,.14)" } }}><Typography variant="overline" sx={{ color: "rgba(255,255,255,.46)" }}>Daily reading</Typography><Typography variant="h5" sx={{ mt: 1 }}>Be still, and know.</Typography><Typography sx={{ mt: .5, fontSize: ".72rem", color: "rgba(255,255,255,.54)" }}>Psalm 46 · 8 minutes</Typography><Button onClick={() => navigate("/spiritual")} sx={{ mt: 1.2, px: 0, color: "primary.light" }}>Open devotional →</Button></Box></Box>
 
-  return (
-    <Box sx={{ py: 2 }}>
-      {/* Welcome */}
-      <Box sx={{ mb: 3 }}>
-        <Typography variant="h5" sx={{ fontWeight: 700 }}>
-          Good morning, {firstName}
-        </Typography>
-        <Typography variant="body2" color="text.secondary">
-          Welcome to your church community
-        </Typography>
-      </Box>
+    <Box component="section" sx={{ mt: 3 }}><Typography variant="overline" color="primary.main">Church life</Typography><Typography variant="h4" sx={{ mt: .8, mb: 1.8 }}>What would you like to do?</Typography><Grid container spacing={1.2}>{actions.map(({ label, copy, icon: Icon, path }) => <Grid key={label} size={{ xs: 6, md: 3 }}><Box component="button" type="button" onClick={() => navigate(path)} sx={{ width: "100%", minHeight: 126, p: 1.8, border: "1px solid", borderColor: "divider", borderRadius: 1.25, bgcolor: "background.paper", color: "text.primary", textAlign: "left", cursor: "pointer", font: "inherit", transition: "transform 180ms ease, border-color 180ms ease", "&:hover": { transform: "translateY(-2px)", borderColor: "primary.main" } }}><Box sx={{ width: 36, height: 36, borderRadius: 1, bgcolor: "#D9F0EA", color: "primary.dark", display: "grid", placeItems: "center" }}><Icon sx={{ fontSize: 19 }} /></Box><Typography sx={{ mt: 1.6, fontSize: ".82rem", fontWeight: 700 }}>{label}</Typography><Typography sx={{ mt: .2, fontSize: ".65rem", color: "text.secondary" }}>{copy}</Typography></Box></Grid>)}</Grid></Box>
 
-      {/* Quick Actions */}
-      <Grid container spacing={1.5} sx={{ mb: 3 }}>
-        <Grid size={{ xs: 3 }}>
-          <QuickActionCard
-            icon={<VolunteerActivismRoundedIcon />}
-            label="Give"
-            path="/giving"
-            color="#FF6B6B"
-            bgcolor="#FFF0F0"
-          />
-        </Grid>
-        <Grid size={{ xs: 3 }}>
-          <QuickActionCard
-            icon={<FavoriteBorderRoundedIcon />}
-            label="Prayer"
-            path="/spiritual?tab=prayer"
-            color="#6B4C9A"
-            bgcolor="#EDE7F6"
-          />
-        </Grid>
-        <Grid size={{ xs: 3 }}>
-          <QuickActionCard
-            icon={<EventRoundedIcon />}
-            label="Events"
-            path="/events"
-            color="#10B981"
-            bgcolor="#D1FAE5"
-          />
-        </Grid>
-        <Grid size={{ xs: 3 }}>
-          <QuickActionCard
-            icon={<AutoStoriesRoundedIcon />}
-            label="Bible"
-            path="/spiritual?tab=bible"
-            color="#F59E0B"
-            bgcolor="#FEF3C7"
-          />
-        </Grid>
-      </Grid>
+    <Box component="section" sx={{ mt: 4 }}><Box sx={{ display: "flex", alignItems: "end", justifyContent: "space-between", gap: 2, mb: 1.8 }}><Box><Typography variant="overline" color="primary.main">From your church</Typography><Typography variant="h4" sx={{ mt: .8 }}>Worth knowing</Typography></Box></Box><Box sx={{ display: "flex", gap: 1.5, overflowX: "auto", pb: 1, scrollbarWidth: "none" }}>{announcements.map((announcement) => <AnnouncementBanner key={announcement.id} {...announcement} />)}</Box></Box>
 
-      {/* Announcements */}
-      <Typography variant="h6" sx={{ mb: 1.5 }}>
-        Announcements
-      </Typography>
-      <Box
-        sx={{
-          display: "flex",
-          gap: 2,
-          overflowX: "auto",
-          pb: 1,
-          mb: 3,
-          "&::-webkit-scrollbar": { display: "none" },
-        }}
-      >
-        {mockAnnouncements.map((a) => (
-          <AnnouncementBanner
-            key={a.id}
-            title={a.title}
-            message={a.message}
-            category={a.category}
-            date={a.date}
-          />
-        ))}
-      </Box>
-
-      {/* Upcoming Events */}
-      <Typography variant="h6" sx={{ mb: 1.5 }}>
-        Upcoming Events
-      </Typography>
-      <Box sx={{ display: "flex", flexDirection: "column", gap: 1.5, mb: 3 }}>
-        {mockUpcomingEvents.map((event) => (
-          <Card key={event.id}>
-            <CardContent
-              sx={{
-                display: "flex",
-                alignItems: "center",
-                gap: 2,
-                p: 2,
-                "&:last-child": { pb: 2 },
-              }}
-            >
-              <Box
-                sx={{
-                  minWidth: 48,
-                  height: 48,
-                  borderRadius: 2,
-                  bgcolor: "primary.main",
-                  color: "white",
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                }}
-              >
-                <CalendarTodayRoundedIcon fontSize="small" />
-              </Box>
-              <Box sx={{ flex: 1, minWidth: 0 }}>
-                <Typography variant="subtitle2" noWrap sx={{ fontWeight: 600 }}>
-                  {event.title}
-                </Typography>
-                <Typography variant="caption" color="text.secondary">
-                  {event.date} at {event.time}
-                </Typography>
-                <Box sx={{ display: "flex", alignItems: "center", gap: 0.5 }}>
-                  <LocationOnRoundedIcon
-                    sx={{ fontSize: 12, color: "text.secondary" }}
-                  />
-                  <Typography variant="caption" color="text.secondary">
-                    {event.location}
-                  </Typography>
-                </Box>
-              </Box>
-              <Chip label="RSVP" size="small" color="primary" variant="outlined" />
-            </CardContent>
-          </Card>
-        ))}
-      </Box>
-
-      {/* Recent Sermons */}
-      <Typography variant="h6" sx={{ mb: 1.5 }}>
-        Recent Sermons
-      </Typography>
-      <Box sx={{ display: "flex", flexDirection: "column", gap: 1.5, mb: 3 }}>
-        {mockRecentSermons.map((sermon) => (
-          <Card key={sermon.id}>
-            <CardContent
-              sx={{
-                display: "flex",
-                alignItems: "center",
-                gap: 2,
-                p: 2,
-                "&:last-child": { pb: 2 },
-              }}
-            >
-              <Box
-                sx={{
-                  width: 52,
-                  height: 52,
-                  borderRadius: 2,
-                  bgcolor: "#EDE7F6",
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                }}
-              >
-                <PlayCircleOutlineRoundedIcon
-                  sx={{ color: "primary.main", fontSize: 28 }}
-                />
-              </Box>
-              <Box sx={{ flex: 1, minWidth: 0 }}>
-                <Typography variant="subtitle2" noWrap sx={{ fontWeight: 600 }}>
-                  {sermon.title}
-                </Typography>
-                <Typography variant="caption" color="text.secondary">
-                  {sermon.speaker} &middot; {sermon.date}
-                </Typography>
-              </Box>
-              <Typography variant="caption" color="text.secondary">
-                {sermon.duration}
-              </Typography>
-            </CardContent>
-          </Card>
-        ))}
-      </Box>
-
-      {/* Giving Summary */}
-      <Typography variant="h6" sx={{ mb: 1.5 }}>
-        My Giving This Month
-      </Typography>
-      <Card
-        sx={{
-          background: "linear-gradient(135deg, #6B4C9A 0%, #9B7FCB 100%)",
-          color: "white",
-          border: "none",
-          mb: 2,
-        }}
-      >
-        <CardContent sx={{ p: 2.5 }}>
-          <Typography variant="body2" sx={{ opacity: 0.85 }}>
-            Total Given
-          </Typography>
-          <Typography variant="h4" sx={{ fontWeight: 700, my: 0.5 }}>
-            $250.00
-          </Typography>
-          <Box sx={{ display: "flex", gap: 2, mt: 1 }}>
-            <Box>
-              <Typography variant="caption" sx={{ opacity: 0.7 }}>
-                Tithe
-              </Typography>
-              <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
-                $200.00
-              </Typography>
-            </Box>
-            <Box>
-              <Typography variant="caption" sx={{ opacity: 0.7 }}>
-                Offering
-              </Typography>
-              <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
-                $50.00
-              </Typography>
-            </Box>
-          </Box>
-        </CardContent>
-      </Card>
-    </Box>
-  );
+    <Grid container spacing={2} sx={{ mt: 2.5 }}><Grid size={{ xs: 12, md: 7 }}><Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "end", mb: 1.5 }}><Box><Typography variant="overline" color="primary.main">Coming up</Typography><Typography variant="h4" sx={{ mt: .8 }}>Gather together</Typography></Box><Button onClick={() => navigate("/events")} endIcon={<ArrowForwardRounded />}>All events</Button></Box><Card><CardContent sx={{ p: 0, "&:last-child": { pb: 0 } }}>{events.map((event, index) => <Box key={event.id} sx={{ display: "grid", gridTemplateColumns: "46px minmax(0,1fr) auto", alignItems: "center", gap: 1.4, p: 1.7, borderTop: index ? "1px solid" : 0, borderColor: "divider" }}><Box sx={{ width: 42, height: 42, borderRadius: 1, bgcolor: index === 0 ? "primary.main" : "#E5EFEB", color: index === 0 ? "white" : "primary.dark", display: "grid", placeItems: "center" }}><CalendarTodayRounded sx={{ fontSize: 18 }} /></Box><Box sx={{ minWidth: 0 }}><Typography noWrap sx={{ fontSize: ".8rem", fontWeight: 700 }}>{event.title}</Typography><Typography sx={{ mt: .2, fontSize: ".65rem", color: "text.secondary" }}>{event.date} · {event.time}</Typography><Box sx={{ display: "flex", alignItems: "center", gap: .3, mt: .2 }}><LocationOnRounded sx={{ fontSize: 11, color: "text.secondary" }} /><Typography sx={{ fontSize: ".62rem", color: "text.secondary" }}>{event.location}</Typography></Box></Box><Chip label={index === 0 ? "RSVP" : "Open"} size="small" color={index === 0 ? "primary" : "default"} /></Box>)}</CardContent></Card></Grid>
+      <Grid size={{ xs: 12, md: 5 }}><Typography variant="overline" color="primary.main">Your month</Typography><Typography variant="h4" sx={{ mt: .8, mb: 1.5 }}>Giving</Typography><Card sx={{ bgcolor: "#DDF2EC", borderColor: "transparent", mb: 1.5 }}><CardContent><Typography sx={{ fontSize: ".68rem", color: "text.secondary" }}>Total recognised</Typography><Typography sx={{ mt: .6, fontSize: "2rem", fontWeight: 760, letterSpacing: "-.05em" }}>GHS 250</Typography><Box sx={{ display: "flex", gap: 3, mt: 2, pt: 1.5, borderTop: "1px solid rgba(11,46,42,.12)" }}><Box><Typography sx={{ fontSize: ".6rem", color: "text.secondary" }}>Tithe</Typography><Typography sx={{ fontSize: ".76rem", fontWeight: 700 }}>GHS 200</Typography></Box><Box><Typography sx={{ fontSize: ".6rem", color: "text.secondary" }}>Offering</Typography><Typography sx={{ fontSize: ".76rem", fontWeight: 700 }}>GHS 50</Typography></Box></Box><Button onClick={() => navigate("/giving")} sx={{ mt: 1.3, px: 0 }}>View giving →</Button></CardContent></Card><Card><CardContent sx={{ display: "flex", alignItems: "center", gap: 1.4 }}><Box sx={{ width: 42, height: 42, borderRadius: 1, bgcolor: "#E5EFEB", display: "grid", placeItems: "center" }}><PlayCircleOutlineRounded color="primary" /></Box><Box><Typography sx={{ fontSize: ".66rem", color: "text.secondary" }}>Continue listening</Typography><Typography sx={{ fontSize: ".8rem", fontWeight: 700 }}>Walking in faith</Typography><Typography sx={{ fontSize: ".62rem", color: "text.secondary" }}>Pastor James · 45 min</Typography></Box></CardContent></Card></Grid></Grid>
+  </Box>;
 }

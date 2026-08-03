@@ -18,6 +18,7 @@ import { useForm, Controller } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod/v3";
 import { useSnackbar } from "notistack";
+import PageIntro from "@/components/ui/PageIntro";
 
 // ─── Zod schema ──────────────────────────────────────────────────
 const requestSchema = z.object({
@@ -198,9 +199,7 @@ export default function WelfarePage() {
 
   return (
     <Box sx={{ py: 2 }}>
-      <Typography variant="h5" sx={{ fontWeight: 700, mb: 2 }}>
-        Welfare &amp; Support
-      </Typography>
+      <PageIntro eyebrow="Care & welfare" title="You do not have to carry it alone" copy="Ask for practical support, reach the emergency team or volunteer to care for someone else." />
 
       <Tabs value={tab} onChange={(_, v) => setTab(v)} sx={{ mb: 3 }}>
         <Tab label="Request Help" />

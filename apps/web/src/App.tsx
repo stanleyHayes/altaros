@@ -29,7 +29,7 @@ export default function App() {
     return (
       <ThemeProvider theme={theme}>
         <CssBaseline />
-        <SplashScreen onComplete={() => setShowSplash(false)} />
+        <SplashScreen context="Opening your member space" onComplete={() => setShowSplash(false)} />
       </ThemeProvider>
     );
   }

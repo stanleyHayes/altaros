@@ -13,7 +13,7 @@ import { ScreenSkeleton } from '../../components/common/ScreenSkeleton';
 import { createLatestRequestGate } from '../../services/latest-request';
 import { connectivityErrorMessage } from '../../services/connectivity';
 import { useKnownOffline } from '../../hooks/useKnownOffline';
-import { homeContentBelongsToIdentity, type HomeContentOwner } from './home-state';
+import { homeContentBelongsToIdentity, homeSectionRecoveryAction, type HomeContentOwner } from './home-state';
 import { useAnimatedRouteTop } from '../../hooks/useAnimatedRouteTop';
 import { Ionicons } from '@expo/vector-icons';
 
@@ -33,6 +33,36 @@ function greeting(): string {
   return 'Good evening';
 }
 
+function HomeSectionError({
+  message,
+  offline,
+  refreshing,
+  onRetry,
+}: {
+  message: string;
+  offline: boolean;
+  refreshing: boolean;
+  onRetry: () => void;
+}) {
+  const action = homeSectionRecoveryAction(offline, refreshing);
+  return (
+    <View style={styles.sectionErrorPanel}>
+      <Text style={styles.sectionError} accessibilityRole="alert">{message}</Text>
+      <TouchableOpacity
+        style={[styles.sectionRetry, action.disabled && styles.actionDisabled]}
+        onPress={onRetry}
+        disabled={action.disabled}
+        accessibilityRole="button"
+        accessibilityLabel={action.label}
+        accessibilityHint={action.hint}
+        accessibilityState={{ disabled: action.disabled, busy: action.busy }}
+      >
+        <Text style={styles.sectionRetryText}>{action.label}</Text>
+      </TouchableOpacity>
+    </View>
+  );
+}
+
 export function HomeScreen() {
   const navigation = useNavigation<HomeNav>();
   const { user } = useAuth();
@@ -42,7 +72,7 @@ export function HomeScreen() {
   const [sermons, setSermons] = useState<Sermon[]>([]);
   const [contentOwner, setContentOwner] = useState<HomeContentOwner | null>(() => ({
     churchId: user?.churchId,
-    memberId: user?.id,
+    memberId: user?.memberId,
   }));
   const [isLoading, setIsLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -50,16 +80,17 @@ export function HomeScreen() {
   const [devotionalError, setDevotionalError] = useState('');
   const [sermonError, setSermonError] = useState('');
   const loadGate = useRef(createLatestRequestGate());
+  const refreshInFlightRef = useRef(false);
   const scrollRef = useRef<ScrollView>(null);
   useAnimatedRouteTop(scrollRef);
   const contentOwnerRef = useRef(contentOwner);
-  const activeIdentityRef = useRef<HomeContentOwner>({ churchId: user?.churchId, memberId: user?.id });
+  const activeIdentityRef = useRef<HomeContentOwner>({ churchId: user?.churchId, memberId: user?.memberId });
   contentOwnerRef.current = contentOwner;
-  activeIdentityRef.current = { churchId: user?.churchId, memberId: user?.id };
+  activeIdentityRef.current = { churchId: user?.churchId, memberId: user?.memberId };
 
   const loadHome = useCallback(async (refresh = false) => {
     const request = loadGate.current.begin();
-    const startedOwner = { churchId: user?.churchId, memberId: user?.id };
+    const startedOwner = { churchId: user?.churchId, memberId: user?.memberId };
     if (!homeContentBelongsToIdentity(contentOwnerRef.current, startedOwner)) {
       contentOwnerRef.current = startedOwner;
       setContentOwner(startedOwner);
@@ -75,8 +106,8 @@ export function HomeScreen() {
     setSermonError('');
     const churchId = user?.churchId;
     const [eventResult, devotionalResult, sermonResult] = await Promise.allSettled([
-      churchId && user?.id
-        ? eventService.getUpcoming(churchId, user.id, 3)
+      churchId && user?.memberId
+        ? eventService.getUpcoming(churchId, user.memberId, 3)
         : Promise.reject(new Error('No church selected')),
       churchId
         ? spiritualService.getTodayDevotional(churchId)
@@ -89,14 +120,20 @@ export function HomeScreen() {
     contentOwnerRef.current = startedOwner;
     setContentOwner(startedOwner);
     if (eventResult.status === 'fulfilled') setEvents(eventResult.value);
-    else setEventError(connectivityErrorMessage(eventResult.reason, 'Upcoming events could not be loaded. Pull down to try again.'));
+    else setEventError(connectivityErrorMessage(eventResult.reason, 'Upcoming events could not be loaded.'));
     if (devotionalResult.status === 'fulfilled') setDevotional(devotionalResult.value);
     else setDevotionalError(connectivityErrorMessage(devotionalResult.reason, 'Today’s devotional is unavailable right now.'));
     if (sermonResult.status === 'fulfilled') setSermons(sermonResult.value.sermons);
-    else setSermonError(connectivityErrorMessage(sermonResult.reason, 'Recent sermons could not be loaded. Pull down to try again.'));
+    else setSermonError(connectivityErrorMessage(sermonResult.reason, 'Recent sermons could not be loaded.'));
     setIsLoading(false);
     setRefreshing(false);
-  }, [user?.churchId, user?.id]);
+  }, [user?.churchId, user?.memberId]);
+
+  const refreshHome = useCallback(() => {
+    if (offline || refreshInFlightRef.current) return;
+    refreshInFlightRef.current = true;
+    void loadHome(true).finally(() => { refreshInFlightRef.current = false; });
+  }, [loadHome, offline]);
 
   useFocusEffect(useCallback(() => {
     const gate = loadGate.current;
@@ -118,7 +155,7 @@ export function HomeScreen() {
       style={styles.container}
       contentContainerStyle={styles.content}
       showsVerticalScrollIndicator={false}
-      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { if (!offline) void loadHome(true); }} enabled={!offline} tintColor={colors.primary} />}
+      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refreshHome} enabled={!offline} tintColor={colors.primary} />}
     >
       <View style={styles.topRow}>
         <View style={styles.heroOrb} accessible={false} />
@@ -174,10 +211,10 @@ export function HomeScreen() {
           <Text style={styles.devotionalRef}>{visibleDevotional?.scriptureReference || 'Daily devotional'}</Text>
           <Text style={styles.devotionalTitle}>{visibleDevotional?.title || (devotionalError ? 'Reading unavailable' : 'No devotional has been published today')}</Text>
           {visibleDevotional?.scripture ? <Text style={styles.devotionalText} numberOfLines={3}>“{visibleDevotional.scripture}”</Text> : null}
-          {devotionalError ? <Text style={styles.sectionError} accessibilityRole="alert">{devotionalError}</Text> : null}
           <Text style={styles.cardLink}>{devotionalError ? 'Try the devotional screen →' : 'Read today’s devotional →'}</Text>
         </Card>
       </TouchableOpacity>
+      {devotionalError ? <HomeSectionError message={devotionalError} offline={offline} refreshing={refreshing} onRetry={refreshHome} /> : null}
 
       <View style={styles.sectionHeaderRow}>
         <View>
@@ -186,7 +223,7 @@ export function HomeScreen() {
         </View>
         <TouchableOpacity style={styles.seeAllButton} onPress={() => navigation.navigate('MainTabs', { screen: 'Events' })} accessibilityRole="button"><Text style={styles.seeAll}>All events</Text></TouchableOpacity>
       </View>
-      {eventError ? <Text style={styles.sectionError} accessibilityRole="alert">{eventError}</Text> : null}
+      {eventError ? <HomeSectionError message={eventError} offline={offline} refreshing={refreshing} onRetry={refreshHome} /> : null}
       {visibleEvents.length === 0 && !eventError ? <Text style={styles.emptyText}>No upcoming events have been published.</Text> : visibleEvents.map((event) => {
         const date = new Date(event.startDate);
         return (
@@ -204,7 +241,7 @@ export function HomeScreen() {
         <View><Text style={styles.sectionKicker}>LISTEN AGAIN</Text><Text style={styles.sectionTitle}>Recent messages.</Text></View>
         <TouchableOpacity style={styles.seeAllButton} onPress={() => navigation.navigate('Sermons')} accessibilityRole="button"><Text style={styles.seeAll}>All sermons</Text></TouchableOpacity>
       </View>
-      {sermonError ? <Text style={styles.sectionError} accessibilityRole="alert">{sermonError}</Text> : null}
+      {sermonError ? <HomeSectionError message={sermonError} offline={offline} refreshing={refreshing} onRetry={refreshHome} /> : null}
       {visibleSermons.length === 0 && !sermonError ? <Text style={styles.emptyText}>No sermons are available yet.</Text> : visibleSermons.map((sermon) => (
         <TouchableOpacity key={sermon.id} onPress={() => navigation.navigate('Sermons')} style={styles.sermonRow} accessibilityRole="button">
           <View style={styles.play}><Text style={styles.playText}>▶</Text></View>
@@ -227,7 +264,7 @@ const styles = StyleSheet.create({
   name: { color: colors.surface, fontFamily: typography.families.bold, fontSize: typography.sizes['4xl'], lineHeight: 40, letterSpacing: -1.3 },
   church: { color: colors.primaryLight, fontFamily: typography.families.medium, fontSize: typography.sizes.sm, marginTop: spacing.sm },
   heroActions: { alignItems: 'center', gap: spacing.md },
-  notificationButton: { width: 42, height: 42, borderRadius: borderRadius.full, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(255,255,255,.1)', borderWidth: 1, borderColor: 'rgba(255,255,255,.14)' },
+  notificationButton: { width: 44, height: 44, borderRadius: borderRadius.full, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(255,255,255,.1)', borderWidth: 1, borderColor: 'rgba(255,255,255,.14)' },
   actionGrid: { flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'space-between', backgroundColor: colors.surface, borderRadius: borderRadius.xl, marginTop: -14, marginHorizontal: spacing.sm, marginBottom: spacing.xl, paddingHorizontal: spacing.md, paddingTop: spacing.md, paddingBottom: spacing.base, borderWidth: 1, borderColor: colors.border },
   action: { alignItems: 'center', minWidth: 58 },
   actionIcon: { width: 46, height: 42, borderRadius: borderRadius.md, backgroundColor: colors.secondaryLight, alignItems: 'center', justifyContent: 'center' },
@@ -252,7 +289,11 @@ const styles = StyleSheet.create({
   eventMeta: { color: colors.muted, fontSize: typography.sizes.sm, marginTop: 3 },
   chevron: { color: colors.muted, fontSize: 26 },
   emptyText: { color: colors.muted, fontSize: typography.sizes.md, paddingVertical: spacing.lg },
-  sectionError: { color: colors.error, fontSize: typography.sizes.sm, lineHeight: 19, paddingVertical: spacing.md },
+  sectionErrorPanel: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: spacing.sm, backgroundColor: '#FFF7F5', borderRadius: borderRadius.lg, paddingHorizontal: spacing.md, paddingVertical: spacing.sm },
+  sectionError: { flexGrow: 1, flexShrink: 1, color: colors.error, fontSize: typography.sizes.sm, lineHeight: 19, paddingVertical: spacing.sm },
+  sectionRetry: { minHeight: 44, justifyContent: 'center', paddingHorizontal: spacing.md },
+  sectionRetryText: { color: colors.primaryDark, fontFamily: typography.families.semibold, fontSize: typography.sizes.sm },
+  actionDisabled: { opacity: 0.5 },
   sermonRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: spacing.md },
   play: { width: 46, height: 46, borderRadius: 16, backgroundColor: colors.text, alignItems: 'center', justifyContent: 'center', marginRight: spacing.md },
   playText: { color: colors.primaryLight, fontSize: typography.sizes.sm, marginLeft: 2 },

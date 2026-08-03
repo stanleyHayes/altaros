@@ -4,6 +4,7 @@ import { session } from './session';
 import { isAuthenticationRejection } from './api-error';
 import { ensureConnectionAvailable } from './connectivity';
 import { rotateSessionTokens } from './token-refresh';
+import { coalesceSessionRefresh } from './session-refresh-coordinator';
 import { resolveApiBaseUrl } from './api-config';
 
 // The Go gateway is the single origin. It serves auth, members and finance
@@ -40,6 +41,24 @@ export function shouldAttachCurrentSessionToken(existingAuthorization: unknown):
   return typeof existingAuthorization !== 'string' || existingAuthorization.trim() === '';
 }
 
+export async function resolveSessionAuthorization(
+  existingAuthorization: unknown,
+  readAccessToken: () => Promise<string | null>,
+): Promise<string | undefined> {
+  // Session-bound work already carries the immutable initiating bearer. Do
+  // not queue that request behind a concurrent logout/keychain mutation merely
+  // to read a token that must not replace its explicit Authorization header.
+  if (!shouldAttachCurrentSessionToken(existingAuthorization)) {
+    return existingAuthorization as string;
+  }
+  try {
+    const token = await readAccessToken();
+    return token ? `Bearer ${token}` : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export function shouldRetryWithRefreshedSession(
   status: number | undefined,
   request: { _retry?: boolean; _sessionBound?: boolean } | undefined,
@@ -51,15 +70,12 @@ export function shouldRetryWithRefreshedSession(
 api.interceptors.request.use(
   async (config) => {
     await ensureConnectionAvailable();
-    try {
-      const token = await session.getAccessToken();
-      if (token && shouldAttachCurrentSessionToken(config.headers.Authorization)) {
-        config.headers.Authorization = `Bearer ${token}`;
-      }
-    } catch {
-      // A failed secure-store read is handled like a signed-out request. The
-      // response path will surface authentication failure without leaking
-      // device storage details to production logs.
+    const authorization = await resolveSessionAuthorization(
+      config.headers.Authorization,
+      () => session.getAccessToken(),
+    );
+    if (authorization) {
+      config.headers.Authorization = authorization;
     }
     return config;
   },
@@ -70,7 +86,6 @@ type RetryableRequest = InternalAxiosRequestConfig & {
   _retry?: boolean;
   _sessionBound?: boolean;
 };
-let refreshPromise: Promise<string> | null = null;
 
 // Response interceptor: handle 401 and token refresh
 api.interceptors.response.use(
@@ -102,10 +117,10 @@ api.interceptors.response.use(
       try {
         // Refresh tokens rotate and are single-use. Coalesce simultaneous 401s
         // so two requests never replay one token and revoke the whole family.
-        refreshPromise ??= rotateSessionTokens(API_BASE_URL, refreshToken).finally(() => {
-          refreshPromise = null;
-        });
-        const accessToken = await refreshPromise;
+        const accessToken = await coalesceSessionRefresh(
+          refreshToken,
+          () => rotateSessionTokens(API_BASE_URL, refreshToken),
+        );
         originalRequest.headers.Authorization = `Bearer ${accessToken}`;
         return api(originalRequest);
       } catch (refreshError) {

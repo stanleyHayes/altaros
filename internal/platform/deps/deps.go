@@ -205,7 +205,27 @@ func (d *Deps) Transports() []notification.Transport {
 			APIKey: d.Config.Resend.APIKey,
 			From:   d.Config.Resend.FromEmail,
 		}),
+		d.pushTransport(),
 	}
+}
+
+func (d *Deps) pushTransport() notification.Transport {
+	var android notification.Transport
+	source, err := transport.NewGoogleServiceAccountTokenSource(d.Config.Firebase.ServiceAccount, nil)
+	if err == nil {
+		android = transport.NewPush(transport.PushConfig{
+			ProjectID:   source.ProjectID(),
+			TokenSource: source,
+		})
+	} else {
+		android = transport.NewPush(transport.PushConfig{})
+	}
+	ios := transport.NewAPNS(transport.APNSConfig{
+		TeamID: d.Config.APNS.TeamID, KeyID: d.Config.APNS.KeyID,
+		BundleID: d.Config.APNS.BundleID, PrivateKey: d.Config.APNS.PrivateKey,
+		Sandbox: d.Config.APNS.Sandbox,
+	})
+	return transport.NewPushRouter(android, ios)
 }
 
 // smsTransport builds the SMS provider this deployment is configured for.

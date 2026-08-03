@@ -1,13 +1,28 @@
 import api, { clearTokens, sessionBoundRequest } from './api';
 import { session } from './session';
 import { normalizeSessionTokenPair, type SessionTokenPair } from './session-token';
-import { MemberSessionIdentityError } from './api-error';
+import { isAmbiguousMutationFailure, MemberSessionIdentityError } from './api-error';
+
+export class RegistrationOutcomeUnknownError extends Error {
+  constructor() {
+    super('We could not confirm whether your account was created.');
+    this.name = 'RegistrationOutcomeUnknownError';
+  }
+}
+
+export class OtpDeliveryUnknownError extends Error {
+  constructor() {
+    super('We could not confirm whether the verification code was delivered.');
+    this.name = 'OtpDeliveryUnknownError';
+  }
+}
 
 export interface LoginRequest {
   email?: string;
   phone?: string;
   password?: string;
   method?: 'PHONE' | 'PASSWORD';
+  workspace: string;
 }
 
 export interface RegisterRequest {
@@ -30,6 +45,7 @@ export interface RegistrationChurch {
 export interface OtpRequest {
   phone: string;
   otp: string;
+  workspace: string;
 }
 
 export interface AuthResponse {
@@ -43,8 +59,14 @@ export interface RegistrationResponse {
   message?: string;
 }
 
+interface LogoutAcknowledgement {
+  message: string;
+  deviceCleanupConfirmed: boolean;
+}
+
 export interface User {
   id: string;
+  memberId: string;
   firstName: string;
   lastName: string;
   email: string;
@@ -68,6 +90,16 @@ export function canonicalEmail(value: unknown): string | null {
   return email.length > 0 && email.length <= MAX_AUTH_EMAIL_LENGTH
     && !/[\u0000-\u001F\u007F]/.test(email) && EMAIL_PATTERN.test(email)
     ? email
+    : null;
+}
+
+export function canonicalWorkspace(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const workspace = value.trim().toLowerCase();
+  return workspace.length > 0 && workspace.length <= MAX_CHURCH_CODE_LENGTH
+    && !/[\u0000-\u001F\u007F]/.test(workspace)
+    && /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(workspace)
+    ? workspace
     : null;
 }
 
@@ -117,6 +149,7 @@ export function normalizePhone(value: string): string {
 
 interface WireUser {
   id: string;
+  memberId?: string;
   name?: string;
   firstName?: string;
   lastName?: string;
@@ -200,6 +233,26 @@ function unwrap<T>(data: T | ApiEnvelope<T>): T {
   return data;
 }
 
+export function normalizeLogoutAcknowledgement(
+  value: unknown,
+  scope: 'current' | 'all',
+): LogoutAcknowledgement {
+  const unwrapped = unwrap(value as unknown | ApiEnvelope<unknown>);
+  if (typeof unwrapped !== 'object' || unwrapped === null || Array.isArray(unwrapped)) {
+    throw new Error('The server did not confirm that your sessions were ended.');
+  }
+  const acknowledgement = unwrapped as Record<string, unknown>;
+  const expectedMessage = scope === 'all' ? 'Signed out on all devices.' : 'Signed out.';
+  if (acknowledgement.message !== expectedMessage
+    || typeof acknowledgement.deviceCleanupConfirmed !== 'boolean') {
+    throw new Error('The server did not confirm that your sessions were ended.');
+  }
+  return {
+    message: expectedMessage,
+    deviceCleanupConfirmed: acknowledgement.deviceCleanupConfirmed,
+  };
+}
+
 function optionalString(record: Record<string, unknown>, key: string): string | undefined {
   const value = record[key];
   if (value === undefined || value === null) return undefined;
@@ -214,6 +267,7 @@ export function normalizeUser(value: unknown): User {
   const record = value as Record<string, unknown>;
   const id = boundedIdentityId(optionalString(record, 'id'));
   const churchId = boundedIdentityId(optionalString(record, 'churchId'));
+  const memberId = boundedIdentityId(optionalString(record, 'memberId'));
   const role = boundedIdentityString(optionalString(record, 'role') ?? 'MEMBER', 32, true);
   if (!USER_ROLES.has(role)) throw new Error('The server returned an invalid member identity.');
   const emailValue = boundedIdentityString(optionalString(record, 'email'), MAX_AUTH_EMAIL_LENGTH);
@@ -225,6 +279,7 @@ export function normalizeUser(value: unknown): User {
 
   const user: WireUser = {
     id,
+    memberId,
     name: boundedIdentityString(optionalString(record, 'name'), 120) || undefined,
     firstName: boundedIdentityString(optionalString(record, 'firstName'), 120) || undefined,
     lastName: boundedIdentityString(optionalString(record, 'lastName'), 120) || undefined,
@@ -241,6 +296,7 @@ export function normalizeUser(value: unknown): User {
   const lastName = (user.lastName ?? nameParts.slice(1).join(' ')).trim();
   return {
     id: user.id,
+    memberId,
     firstName: firstName || 'Member',
     lastName,
     email: user.email ?? '',
@@ -285,8 +341,8 @@ export function normalizeRegistrationChurch(value: unknown, expectedSlug: string
 }
 
 export async function resolveChurchCode(value: string): Promise<RegistrationChurch> {
-  const slug = value.trim().toLowerCase();
-  if (slug.length < 3 || slug.length > MAX_CHURCH_CODE_LENGTH || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug)) {
+  const slug = canonicalWorkspace(value);
+  if (!slug || slug.length < 3) {
     throw new Error('Enter the church code exactly as your church shared it.');
   }
   const { data } = await api.get<WireChurch | ApiEnvelope<WireChurch>>(
@@ -383,7 +439,9 @@ async function endSession(path: '/auth/logout' | '/auth/logout-all'): Promise<vo
   // Axios begins the request chain immediately; local fail-closed cleanup runs
   // concurrently and never waits on a slow or unreachable gateway.
   const remoteRevocation = accessToken
-    ? api.post(path, undefined, sessionBoundRequest(accessToken))
+    ? api.post<unknown>(path, undefined, sessionBoundRequest(accessToken)).then(({ data }) => {
+      normalizeLogoutAcknowledgement(data, path === '/auth/logout-all' ? 'all' : 'current');
+    })
     : Promise.resolve();
   const [remoteResult, localResult] = await Promise.allSettled([
     remoteRevocation,
@@ -402,9 +460,10 @@ async function endAllSessions(): Promise<boolean> {
 
   // Global logout must not claim success until the gateway confirms family
   // revocation. Keep this session available for retry when the request fails.
-  await api.post('/auth/logout-all', undefined, {
+  const { data } = await api.post<unknown>('/auth/logout-all', undefined, {
     ...sessionBoundRequest(accessToken),
   });
+  normalizeLogoutAcknowledgement(data, 'all');
 
   // A token can be replaced while revocation is in flight (for example after
   // expiry followed by a fresh OTP login). Never clear that newer session.
@@ -423,14 +482,16 @@ const authService = {
 
   async login(credentials: LoginRequest, canCommit: () => boolean = () => true): Promise<AuthResponse> {
     const email = canonicalEmail(credentials.email);
+    const workspace = canonicalWorkspace(credentials.workspace);
     if ((credentials.method !== undefined && credentials.method !== 'PASSWORD')
-      || !email || !validAuthPassword(credentials.password, 1)) {
-      throw new Error('Enter a valid email and password to continue.');
+      || !email || !workspace || !validAuthPassword(credentials.password, 1)) {
+      throw new Error('Enter a valid church workspace, email and password to continue.');
     }
     const { data } = await api.post<WireAuthResponse>('/auth/login', {
       email,
       password: credentials.password,
       method: 'PASSWORD',
+      workspace,
     });
     const normalized = normalizeAuthResponse(data);
     if (normalized.user.email !== email) {
@@ -460,13 +521,22 @@ const authService = {
     if (details.confirmedChurchId && church.id !== details.confirmedChurchId) {
       throw new Error('That church code has changed. Confirm your church again before joining.');
     }
-    const { data } = await api.post<unknown>('/auth/register', {
-      name,
-      email,
-      phone,
-      password: details.password,
-      churchId: church.id,
-    });
+    let data: unknown;
+    try {
+      const response = await api.post<unknown>('/auth/register', {
+        name,
+        email,
+        phone,
+        password: details.password,
+        churchId: church.id,
+      });
+      data = response.data;
+    } catch (error) {
+      // The server may have committed the account before a response-less
+      // timeout. Never direct the member into a duplicate registration retry.
+      if (isAmbiguousMutationFailure(error)) throw new RegistrationOutcomeUnknownError();
+      throw error;
+    }
     // Registration is account creation, not proof that the member controls
     // the supplied phone number. No session is accepted here; VerifyOTP is the
     // only step that establishes a mobile session.
@@ -475,9 +545,11 @@ const authService = {
 
   async verifyOtp(otpData: OtpRequest, canCommit: () => boolean = () => true): Promise<AuthResponse> {
     const phone = canonicalPhone(otpData.phone);
+    const workspace = canonicalWorkspace(otpData.workspace);
     if (!phone) throw new Error('Enter a valid mobile number, including the country code.');
+    if (!workspace) throw new Error('Enter the church workspace provided by your church.');
     if (!/^\d{6}$/.test(otpData.otp)) throw new Error('Enter the full 6-digit code.');
-    const { data } = await api.post<WireAuthResponse>('/auth/verify-otp', { otp: otpData.otp, phone });
+    const { data } = await api.post<WireAuthResponse>('/auth/verify-otp', { otp: otpData.otp, phone, workspace });
     const normalized = normalizeAuthResponse(data);
     if (normalized.user.phone !== phone) {
       throw new Error('The server returned a session for another member. Please try again.');
@@ -490,20 +562,30 @@ const authService = {
     return response;
   },
 
-  async requestOtp(phone: string): Promise<{ message: string }> {
+  async requestOtp(phone: string, workspaceInput: string): Promise<{ message: string }> {
     const canonical = canonicalPhone(phone);
+    const workspace = canonicalWorkspace(workspaceInput);
     if (!canonical) throw new Error('Enter a valid mobile number, including the country code.');
-    const { data } = await api.post<{ message: string } | ApiEnvelope<{ message: string }>>(
-      '/auth/request-otp',
-      { phone: canonical },
-    );
+    if (!workspace) throw new Error('Enter the church workspace provided by your church.');
+    let data: { message: string } | ApiEnvelope<{ message: string }>;
+    try {
+      const response = await api.post<{ message: string } | ApiEnvelope<{ message: string }>>(
+        '/auth/request-otp',
+        { phone: canonical, workspace },
+      );
+      data = response.data;
+    } catch (error) {
+      if (isAmbiguousMutationFailure(error)) throw new OtpDeliveryUnknownError();
+      throw error;
+    }
     return normalizeOtpDispatch(data);
   },
 
-  async getCurrentUser(expected?: Pick<User, 'id' | 'churchId'>): Promise<User> {
+  async getCurrentUser(expected?: Pick<User, 'id' | 'memberId' | 'churchId'>): Promise<User> {
     const { data } = await api.get<WireUser | ApiEnvelope<WireUser>>('/auth/me');
     const user = await enrichChurchName(normalizeUser(unwrap(data)));
-    if (expected && (user.id !== expected.id || user.churchId !== expected.churchId)) {
+    if (expected && (user.id !== expected.id || user.memberId !== expected.memberId
+      || user.churchId !== expected.churchId)) {
       throw new MemberSessionIdentityError();
     }
     // AuthContext owns the session-revision guard. Persisting here would let a
@@ -522,7 +604,18 @@ const authService = {
 
   async getStoredUser(): Promise<User | null> {
     const stored = await session.getUser<unknown>();
-    return stored === null ? null : normalizeUser(stored);
+    if (stored === null) return null;
+    // Sessions created before account/member identity separation have valid
+    // tokens but no memberId in the cached profile. Treat that cache as absent
+    // so AuthContext reconciles it from /auth/me; clearing the token here would
+    // unnecessarily sign every existing member out during the upgrade.
+    if (typeof stored === 'object' && !Array.isArray(stored)
+      && typeof (stored as Record<string, unknown>).id === 'string'
+      && typeof (stored as Record<string, unknown>).churchId === 'string'
+      && (stored as Record<string, unknown>).memberId === undefined) {
+      return null;
+    }
+    return normalizeUser(stored);
   },
   async isAuthenticated(): Promise<boolean> {
     return Boolean(await session.getAccessToken());

@@ -17,7 +17,7 @@ const fieldSx = {
   "& .MuiOutlinedInput-root": {
     color: "#ECF5F1",
     bgcolor: "#142D2A",
-    borderRadius: "12px",
+    borderRadius: "8px",
     "& fieldset": { borderColor: "#31504B" },
     "&:hover fieldset": { borderColor: "#79CDBA" },
     "&.Mui-focused fieldset": { borderColor: "#79CDBA", boxShadow: "0 0 0 3px rgba(121,205,186,.12)" },
@@ -65,14 +65,14 @@ export default function LoginPage() {
           <Typography variant="h3" component="h2" sx={{ color: "#ECF5F1", fontWeight: 750, fontSize: { xs: "2rem", sm: "2.45rem" }, letterSpacing: "-.04em" }}>Platform sign in</Typography>
           <Typography sx={{ color: "#91AAA4", mt: 1, mb: 4 }}>Use your operator credentials to continue.</Typography>
 
-          {serverError ? <Alert severity="error" sx={{ mb: 3, borderRadius: "12px" }}>{serverError}</Alert> : null}
+          {serverError ? <Alert severity="error" sx={{ mb: 3, borderRadius: "8px" }}>{serverError}</Alert> : null}
           <Box component="form" onSubmit={handleSubmit(onSubmit)} noValidate sx={{ display: "grid", gap: 2.4 }}>
             <TextField label="Email" fullWidth autoComplete="email" autoFocus error={!!errors.email} helperText={errors.email?.message} sx={fieldSx} {...register("email")} />
             <TextField
               label="Password" type={showPassword ? "text" : "password"} fullWidth autoComplete="current-password" error={!!errors.password} helperText={errors.password?.message} sx={fieldSx} {...register("password")}
               slotProps={{ input: { endAdornment: <InputAdornment position="end"><IconButton aria-label={showPassword ? "Hide password" : "Show password"} onClick={() => setShowPassword((value) => !value)} edge="end" sx={{ color: "#91AAA4" }}>{showPassword ? <VisibilityOff /> : <Visibility />}</IconButton></InputAdornment> } }}
             />
-            <Button type="submit" variant="contained" size="large" disabled={isSubmitting} sx={{ minHeight: 52, mt: 1, bgcolor: "#9DE3D2", color: "#0B1C1A", fontWeight: 800, borderRadius: "12px", "&:hover": { bgcolor: "#B8ECDF" } }}>
+            <Button type="submit" variant="contained" size="large" disabled={isSubmitting} sx={{ minHeight: 52, mt: 1, bgcolor: "#9DE3D2", color: "#0B1C1A", fontWeight: 800, borderRadius: "8px", "&:hover": { bgcolor: "#B8ECDF" } }}>
               {isSubmitting ? <CircularProgress size={23} sx={{ color: "#0B1C1A" }} /> : "Enter admin"}
             </Button>
           </Box>

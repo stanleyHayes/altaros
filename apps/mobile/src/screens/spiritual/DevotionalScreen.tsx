@@ -16,22 +16,25 @@ import { connectivityErrorMessage } from '../../services/connectivity';
 import { useKnownOffline } from '../../hooks/useKnownOffline';
 import { spiritualContentBelongsToIdentity, type SpiritualScreenOwner } from './spiritual-screen-state';
 import { StatePanel } from '../../components/common/StatePanel';
+import { useAnimatedRouteTop } from '../../hooks/useAnimatedRouteTop';
 
 export function DevotionalScreen() {
   const { user } = useAuth();
   const offline = useKnownOffline();
+  const scrollRef = useRef<ScrollView>(null);
+  useAnimatedRouteTop(scrollRef);
   const [devotional, setDevotional] = useState<Devotional | null>(null);
   const [contentOwner, setContentOwner] = useState<SpiritualScreenOwner | null>(() => ({
     churchId: user?.churchId,
-    memberId: user?.id,
+    memberId: user?.memberId,
   }));
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState('');
   const loadGate = useRef(createLatestRequestGate());
   const contentOwnerRef = useRef(contentOwner);
-  const activeIdentityRef = useRef<SpiritualScreenOwner>({ churchId: user?.churchId, memberId: user?.id });
+  const activeIdentityRef = useRef<SpiritualScreenOwner>({ churchId: user?.churchId, memberId: user?.memberId });
   contentOwnerRef.current = contentOwner;
-  activeIdentityRef.current = { churchId: user?.churchId, memberId: user?.id };
+  activeIdentityRef.current = { churchId: user?.churchId, memberId: user?.memberId };
 
   const displayDate = (value: string) => {
     const parsed = new Date(value);
@@ -42,7 +45,7 @@ export function DevotionalScreen() {
 
   const loadDevotional = useCallback(async () => {
       const request = loadGate.current.begin();
-      const startedOwner = { churchId: user?.churchId, memberId: user?.id };
+      const startedOwner = { churchId: user?.churchId, memberId: user?.memberId };
       if (!spiritualContentBelongsToIdentity(contentOwnerRef.current, startedOwner)) {
         contentOwnerRef.current = startedOwner;
         setContentOwner(startedOwner);
@@ -51,11 +54,11 @@ export function DevotionalScreen() {
       setError('');
       setIsLoading(true);
       try {
-        if (!user?.churchId || !user.id) throw new Error('No church selected');
+        if (!user?.churchId || !user.memberId) throw new Error('No church selected');
         const result = await spiritualService.getTodayDevotional(user.churchId);
         if (loadGate.current.isLatest(request)) {
           setDevotional(result);
-          const loadedOwner = { churchId: user.churchId, memberId: user.id };
+          const loadedOwner = { churchId: user.churchId, memberId: user.memberId };
           contentOwnerRef.current = loadedOwner;
           setContentOwner(loadedOwner);
         }
@@ -64,7 +67,7 @@ export function DevotionalScreen() {
       } finally {
         if (loadGate.current.isLatest(request)) setIsLoading(false);
       }
-  }, [user?.churchId, user?.id]);
+  }, [user?.churchId, user?.memberId]);
 
   useEffect(() => {
     const gate = loadGate.current;
@@ -96,7 +99,7 @@ export function DevotionalScreen() {
   }
 
   return (
-    <ScrollView style={styles.container} showsVerticalScrollIndicator={false}>
+    <ScrollView ref={scrollRef} style={styles.container} showsVerticalScrollIndicator={false}>
       <View style={styles.dateHeader}>
         <Text style={styles.dateEyebrow}>A QUIET PLACE TO BEGIN</Text>
         <Text style={styles.dateText}>{displayDate(devotional.date)}</Text>

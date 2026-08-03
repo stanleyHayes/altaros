@@ -72,7 +72,7 @@ func (s *Service) Today(ctx context.Context) (*Devotional, error) {
 func (s *Service) Devotionals(ctx context.Context, p, l int) ([]Devotional, int64, error) {
 	skip, limit := page(p, l)
 	out := []Devotional{}
-	if err := s.devotionals.Find(ctx, nil, &out, options.Find().SetSort(bson.D{{Key: "date", Value: -1}}).SetSkip(skip).SetLimit(limit)); err != nil {
+	if err := s.devotionals.Find(ctx, nil, &out, options.Find().SetSort(bson.D{{Key: "date", Value: -1}, {Key: "_id", Value: -1}}).SetSkip(skip).SetLimit(limit)); err != nil {
 		return nil, 0, err
 	}
 	total, err := s.devotionals.CountDocuments(ctx, nil)
@@ -86,7 +86,7 @@ func (s *Service) Sermons(ctx context.Context, p, l int, series string) ([]Sermo
 		filter["series"] = strings.TrimSpace(series)
 	}
 	out := []Sermon{}
-	if err := s.sermons.Find(ctx, filter, &out, options.Find().SetSort(bson.D{{Key: "date", Value: -1}}).SetSkip(skip).SetLimit(limit)); err != nil {
+	if err := s.sermons.Find(ctx, filter, &out, options.Find().SetSort(bson.D{{Key: "date", Value: -1}, {Key: "_id", Value: -1}}).SetSkip(skip).SetLimit(limit)); err != nil {
 		return nil, 0, err
 	}
 	total, err := s.sermons.CountDocuments(ctx, filter)
@@ -109,7 +109,7 @@ func (s *Service) Sermon(ctx context.Context, id string) (*Sermon, error) {
 func (s *Service) Prayers(ctx context.Context, p, l int) ([]PrayerRequest, int64, error) {
 	skip, limit := page(p, l)
 	out := []PrayerRequest{}
-	if err := s.prayers.Find(ctx, nil, &out, options.Find().SetSort(bson.D{{Key: "createdAt", Value: -1}}).SetSkip(skip).SetLimit(limit)); err != nil {
+	if err := s.prayers.Find(ctx, nil, &out, options.Find().SetSort(bson.D{{Key: "createdAt", Value: -1}, {Key: "_id", Value: -1}}).SetSkip(skip).SetLimit(limit)); err != nil {
 		return nil, 0, err
 	}
 	total, err := s.prayers.CountDocuments(ctx, nil)

@@ -14,6 +14,9 @@ export interface GivingRecord {
   channel: GivingChannel;
   grossMinor: number;
   levyMinor: number;
+  providerFeeMinor: number;
+  chargedMinor: number;
+  feeBearer: 'giver' | 'church';
   netMinor: number;
   currency: string;
   status: PaymentStatus;
@@ -32,16 +35,54 @@ export interface GiveRequest {
   email?: string;
   note?: string;
   anonymous?: boolean;
+  campaignId?: string;
+  pledgeId?: string;
   callbackUrl?: string;
   acceptedTotalMinor?: number;
 }
 
+export interface GivingCampaignOption {
+  id: string;
+  title: string;
+  description?: string;
+  targetAmount: number;
+  currentAmount: number;
+  currency: 'GHS';
+  progress: number;
+  endDate: string;
+}
+
+export interface GivingPledgeOption {
+  id: string;
+  campaignId?: string;
+  totalMinor: number;
+  paidMinor: number;
+  remainingMinor: number;
+  currency: 'GHS';
+  percent: number;
+  note?: string;
+}
+
+export interface GivingOptions {
+  campaigns: GivingCampaignOption[];
+  pledges: GivingPledgeOption[];
+}
+
 interface MoneyAmount { minor: number; currency: string }
+export interface ProviderFeeQuote {
+  gift: MoneyAmount;
+  providerFee: MoneyAmount;
+  charged: MoneyAmount;
+  bearer: 'giver' | 'church';
+  explanation: string;
+  estimated: boolean;
+}
 export interface LevyQuote {
   levy: MoneyAmount;
   total: MoneyAmount;
   exempt: boolean;
   reason: string;
+  fee: ProviderFeeQuote;
 }
 
 export interface GiveResult {
@@ -97,7 +138,21 @@ export function validateLevyQuote(value: unknown, giftAmount: string): LevyQuote
     throw new Error('The server returned an invalid payment quote.');
   }
   const quote = value as Partial<LevyQuote>;
+  const fee = quote.fee as Partial<ProviderFeeQuote> | undefined;
   const giftMinor = canonicalAmountMinor(giftAmount);
+  const validFee = fee !== undefined
+    && isMoneyAmount(fee.gift)
+    && fee.gift.minor === giftMinor
+    && isMoneyAmount(fee.providerFee)
+    && isMoneyAmount(fee.charged)
+    && (fee.bearer === 'giver' || fee.bearer === 'church')
+    && typeof fee.estimated === 'boolean'
+    && typeof fee.explanation === 'string'
+    && fee.explanation.trim().length > 0
+    && fee.explanation.length <= MAX_QUOTE_REASON_LENGTH
+    && !/[\u0000-\u001F\u007F]/.test(fee.explanation)
+    && BigInt(fee.charged.minor) === BigInt(giftMinor)
+      + (fee.bearer === 'giver' ? BigInt(fee.providerFee.minor) : 0n);
   const valid = isMoneyAmount(quote.levy)
     && isMoneyAmount(quote.total)
     && typeof quote.exempt === 'boolean'
@@ -105,9 +160,32 @@ export function validateLevyQuote(value: unknown, giftAmount: string): LevyQuote
     && quote.reason.trim().length > 0
     && quote.reason.length <= MAX_QUOTE_REASON_LENGTH
     && !/[\u0000-\u001F\u007F]/.test(quote.reason)
-    && BigInt(quote.total.minor) === BigInt(giftMinor) + BigInt(quote.levy.minor);
+    && validFee
+    && BigInt(quote.total.minor) === BigInt((fee as ProviderFeeQuote).charged.minor) + BigInt(quote.levy.minor);
   if (!valid) throw new Error('The server returned an invalid payment quote.');
-  return quote as LevyQuote;
+  return {
+    levy: quote.levy as MoneyAmount,
+    total: quote.total as MoneyAmount,
+    exempt: quote.exempt as boolean,
+    reason: quote.reason as string,
+    fee: fee as ProviderFeeQuote,
+  };
+}
+
+function checkoutPricing(value: unknown): unknown {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
+  const quote = value as {
+    fee?: unknown;
+    levy?: { levy?: unknown; exempt?: unknown; reason?: unknown };
+    total?: unknown;
+  };
+  return {
+    fee: quote.fee,
+    levy: quote.levy?.levy,
+    total: quote.total,
+    exempt: quote.levy?.exempt,
+    reason: quote.levy?.reason,
+  };
 }
 
 const GIVING_TYPES = new Set<GivingType>([
@@ -123,11 +201,13 @@ const PAYMENT_CHANNELS = new Set<PaymentChannel>([
   'mobile_money', 'card', 'bank_transfer', 'ussd',
 ]);
 const GIFT_NOTE_MAX_LENGTH = 240;
-const PAYMENT_CALLBACK_URL = 'altaros://giving/complete';
+export const MOBILE_PAYMENT_CALLBACK_URL = 'https://altaros.com/giving/complete';
 const GIVING_HISTORY_MAX_RECORDS = 500;
+export const GIVING_HISTORY_PAGE_SIZE = 50;
 const MAX_ID_LENGTH = 128;
 const MAX_DATE_LENGTH = 64;
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/;
+const MONGO_ID = /^[a-f0-9]{24}$/i;
 
 function nonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0;
@@ -183,6 +263,19 @@ export function normalizeGivingHistoryParams(
   return { ...(from ? { from } : {}), ...(to ? { to } : {}) };
 }
 
+export interface GivingHistoryPage {
+  records: GivingRecord[];
+  total: number;
+}
+
+function normalizeGivingHistoryPageParams(page: number, limit: number): { page: number; limit: number } {
+  if (!Number.isSafeInteger(page) || page < 1
+    || !Number.isSafeInteger(limit) || limit < 1 || limit > 100) {
+    throw new Error('The giving history page is not valid.');
+  }
+  return { page, limit };
+}
+
 function normalizeOptionalEmail(value: unknown): string | undefined {
   if (value === undefined || value === '') return undefined;
   if (typeof value !== 'string') throw new Error('The gift details are not valid.');
@@ -221,10 +314,19 @@ function normalizeQuoteRequest(
 /** Canonicalize member intent before it can create a transaction or charge. */
 export function normalizeGiveRequest(value: GiveRequest): GiveRequest {
   const quote = normalizeQuoteRequest(value);
+  const campaignId = value.campaignId === undefined ? undefined : value.campaignId.trim();
+  const pledgeId = value.pledgeId === undefined ? undefined : value.pledgeId.trim();
+  const validPurpose = value.type === 'campaign'
+    ? campaignId !== undefined && MONGO_ID.test(campaignId) && pledgeId === undefined
+    : value.type === 'pledge_payment'
+      ? pledgeId !== undefined && MONGO_ID.test(pledgeId)
+        && (campaignId === undefined || MONGO_ID.test(campaignId))
+      : campaignId === undefined && pledgeId === undefined;
   if (!GIVING_TYPES.has(value.type)
+    || !validPurpose
     || !safeNonNegativeMinor(value.acceptedTotalMinor)
     || value.acceptedTotalMinor < canonicalAmountMinor(quote.amount)
-    || (value.callbackUrl !== undefined && value.callbackUrl !== PAYMENT_CALLBACK_URL)) {
+    || (value.callbackUrl !== undefined && value.callbackUrl !== MOBILE_PAYMENT_CALLBACK_URL)) {
     throw new Error('The gift details are not valid.');
   }
   return {
@@ -234,7 +336,75 @@ export function normalizeGiveRequest(value: GiveRequest): GiveRequest {
     note: normalizeOptionalNote(value.note),
     callbackUrl: value.callbackUrl,
     acceptedTotalMinor: value.acceptedTotalMinor,
+    ...(campaignId ? { campaignId: campaignId.toLowerCase() } : {}),
+    ...(pledgeId ? { pledgeId: pledgeId.toLowerCase() } : {}),
   };
+}
+
+function normalizeGivingOptions(value: unknown, churchId: string, memberId: string): GivingOptions {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new Error('The server returned invalid giving options.');
+  }
+  const candidate = value as { campaigns?: unknown; pledges?: unknown };
+  if (!Array.isArray(candidate.campaigns) || candidate.campaigns.length > 200
+    || !Array.isArray(candidate.pledges) || candidate.pledges.length > 500) {
+    throw new Error('The server returned invalid giving options.');
+  }
+  const campaigns = candidate.campaigns.map((raw): GivingCampaignOption => {
+    if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+      throw new Error('The server returned invalid giving options.');
+    }
+    const item = raw as Record<string, unknown>;
+    if (typeof item.id !== 'string' || !MONGO_ID.test(item.id)
+      || item.churchId !== churchId || !nonEmptyString(item.title) || item.title.length > 160
+      || !safeNonNegativeMinor(item.targetAmount) || Number(item.targetAmount) <= 0
+      || !safeNonNegativeMinor(item.currentAmount) || item.currency !== 'GHS'
+      || !Number.isInteger(item.progress) || Number(item.progress) < 0 || Number(item.progress) > 100
+      || !validDateString(item.endDate)
+      || !boundedOptionalText(item.description, 1_000)) {
+      throw new Error('The server returned invalid giving options.');
+    }
+    return {
+      id: item.id.toLowerCase(), title: item.title.trim(),
+      ...(nonEmptyString(item.description) ? { description: item.description.trim() } : {}),
+      targetAmount: Number(item.targetAmount), currentAmount: Number(item.currentAmount),
+      currency: 'GHS', progress: Number(item.progress), endDate: item.endDate,
+    };
+  });
+  const pledges = candidate.pledges.map((raw): GivingPledgeOption => {
+    if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+      throw new Error('The server returned invalid giving options.');
+    }
+    const item = raw as { pledge?: unknown; paidMinor?: unknown; remainingMinor?: unknown; percent?: unknown; currency?: unknown };
+    if (typeof item.pledge !== 'object' || item.pledge === null || Array.isArray(item.pledge)) {
+      throw new Error('The server returned invalid giving options.');
+    }
+    const pledge = item.pledge as Record<string, unknown>;
+    const campaignId = pledge.campaignId === undefined || pledge.campaignId === ''
+      ? undefined : pledge.campaignId;
+    if (typeof pledge.id !== 'string' || !MONGO_ID.test(pledge.id)
+      || pledge.churchId !== churchId || pledge.memberId !== memberId
+      || (campaignId !== undefined && (typeof campaignId !== 'string' || !MONGO_ID.test(campaignId)))
+      || !safeNonNegativeMinor(pledge.totalMinor) || Number(pledge.totalMinor) <= 0
+      || !safeNonNegativeMinor(item.paidMinor) || !safeNonNegativeMinor(item.remainingMinor)
+      || Number(item.remainingMinor) > Number(pledge.totalMinor) || item.currency !== 'GHS'
+      || !Number.isInteger(item.percent) || Number(item.percent) < 0 || Number(item.percent) > 100
+      || !boundedOptionalText(pledge.note, GIFT_NOTE_MAX_LENGTH)) {
+      throw new Error('The server returned invalid giving options.');
+    }
+    return {
+      id: pledge.id.toLowerCase(),
+      ...(typeof campaignId === 'string' ? { campaignId: campaignId.toLowerCase() } : {}),
+      totalMinor: Number(pledge.totalMinor), paidMinor: Number(item.paidMinor),
+      remainingMinor: Number(item.remainingMinor), currency: 'GHS', percent: Number(item.percent),
+      ...(nonEmptyString(pledge.note) ? { note: pledge.note.trim() } : {}),
+    };
+  });
+  if (new Set(campaigns.map(({ id }) => id)).size !== campaigns.length
+    || new Set(pledges.map(({ id }) => id)).size !== pledges.length) {
+    throw new Error('The server returned invalid giving options.');
+  }
+  return { campaigns, pledges };
 }
 
 export function sumConfirmedGivingMinor(records: GivingRecord[]): number {
@@ -252,12 +422,32 @@ export function sumConfirmedGivingMinor(records: GivingRecord[]): number {
   return Number(total);
 }
 
+/**
+ * The extra amount the member accepted above their gift, excluding E-Levy.
+ * This deliberately does not use providerFeeMinor: that field is the
+ * provider's eventual settlement cost and may differ by a few pesewas from
+ * the estimated uplift used when checkout was initialized.
+ */
+export function memberPaymentUpliftMinor(
+  record: Pick<GivingRecord, 'grossMinor' | 'chargedMinor'>,
+): number {
+  if (!safeNonNegativeMinor(record.grossMinor)
+    || !safeNonNegativeMinor(record.chargedMinor)
+    || record.chargedMinor < record.grossMinor) {
+    throw new Error('The server returned an invalid giving record.');
+  }
+  return record.chargedMinor - record.grossMinor;
+}
+
 /** Refuse transaction data that could crash or misstate the member's ledger. */
 export function normalizeGivingRecord(value: unknown): GivingRecord {
   if (typeof value !== 'object' || value === null) {
     throw new Error('The server returned an invalid giving record.');
   }
   const record = value as Partial<GivingRecord>;
+  const providerFeeMinor = record.providerFeeMinor ?? 0;
+  const chargedMinor = record.chargedMinor || record.grossMinor;
+  const feeBearer = record.feeBearer || (chargedMinor === record.grossMinor ? 'church' : 'giver');
   const valid = validId(record.id)
     && validId(record.churchId)
     && (record.memberId === undefined || validId(record.memberId))
@@ -266,6 +456,12 @@ export function normalizeGivingRecord(value: unknown): GivingRecord {
     && safeNonNegativeMinor(record.grossMinor)
     && record.grossMinor > 0
     && safeNonNegativeMinor(record.levyMinor)
+    && safeNonNegativeMinor(providerFeeMinor)
+    && safeNonNegativeMinor(chargedMinor)
+    && chargedMinor >= record.grossMinor
+    && (feeBearer === 'giver' || feeBearer === 'church')
+    && (feeBearer !== 'church' || chargedMinor === record.grossMinor)
+    && (feeBearer !== 'giver' || providerFeeMinor === 0 || chargedMinor > record.grossMinor)
     && safeNonNegativeMinor(record.netMinor)
     && record.netMinor <= record.grossMinor
     && record.currency === 'GHS'
@@ -284,6 +480,9 @@ export function normalizeGivingRecord(value: unknown): GivingRecord {
     channel: record.channel,
     grossMinor: record.grossMinor,
     levyMinor: record.levyMinor,
+    providerFeeMinor,
+    chargedMinor,
+    feeBearer,
     netMinor: record.netMinor,
     currency: record.currency,
     status: record.status,
@@ -300,6 +499,14 @@ export function normalizePaymentReference(value: unknown): string | null {
   if (typeof value !== 'string') return null;
   const reference = value.trim();
   return /^alt_[a-z2-7]{32}$/i.test(reference) ? reference.toLowerCase() : null;
+}
+
+/** Return the existing checkout reference only when history can safely resume it. */
+export function pendingGivingRecoveryReference(
+  record: Pick<GivingRecord, 'status' | 'channel' | 'idempotencyKey'>,
+): string | null {
+  if (record.status !== 'pending' || record.channel === 'cash') return null;
+  return normalizePaymentReference(record.idempotencyKey);
 }
 
 function normalizeOwnedTransaction(
@@ -353,8 +560,8 @@ export function normalizeCheckoutResult(
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     throw new Error('The server returned an invalid checkout.');
   }
-  const checkout = value as Partial<GiveResult>;
-  const levy = validateLevyQuote(checkout.levy, payload.amount);
+  const checkout = value as Partial<GiveResult> & { quote?: unknown };
+  const levy = validateLevyQuote(checkoutPricing(checkout.quote), payload.amount);
   const transaction = normalizeGivingRecord(checkout.transaction);
   const authorizationUrl = safeCheckoutUrl(checkout.authorizationUrl);
   const paymentReference = normalizePaymentReference(transaction.idempotencyKey);
@@ -385,6 +592,18 @@ export function normalizeCheckoutResult(
 }
 
 const givingService = {
+  async getGivingOptions(churchId: string, memberId: string): Promise<GivingOptions> {
+    if (!validId(churchId) || !validId(memberId)) {
+      throw new Error('The member identity is incomplete.');
+    }
+    const { data } = await api.get<unknown>('/finance/me/giving-options');
+    return normalizeGivingOptions(
+      unwrapApiData(data, 'The server returned invalid giving options.'),
+      churchId,
+      memberId,
+    );
+  },
+
   async quote(payload: Pick<GiveRequest, 'amount' | 'currency' | 'channel' | 'anonymous'>): Promise<LevyQuote> {
     const request = normalizeQuoteRequest(payload);
     const { data } = await api.post<unknown>('/finance/give/quote', request);
@@ -423,6 +642,36 @@ const givingService = {
     }
     sumConfirmedGivingMinor(records);
     return records;
+  },
+
+  async getHistoryPage(
+    churchId: string,
+    memberId: string,
+    page: number,
+    limit = GIVING_HISTORY_PAGE_SIZE,
+  ): Promise<GivingHistoryPage> {
+    if (!validId(churchId) || !validId(memberId)) {
+      throw new Error('The member identity is incomplete.');
+    }
+    const params = normalizeGivingHistoryPageParams(page, limit);
+    const { data } = await api.get<unknown>('/finance/me/giving', { params });
+    const payload = unwrapApiData(data, 'The server returned invalid giving history.');
+    if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) {
+      throw new Error('The server returned invalid giving history.');
+    }
+    const candidate = payload as { data?: unknown; total?: unknown };
+    if (!Array.isArray(candidate.data) || candidate.data.length > limit
+      || !Number.isSafeInteger(candidate.total) || Number(candidate.total) < candidate.data.length) {
+      throw new Error('The server returned invalid giving history.');
+    }
+    const records = candidate.data.map(normalizeGivingRecord);
+    const validOwnership = records.every((record) => record.churchId === churchId
+      && (record.memberId === undefined || record.memberId === memberId));
+    if (!validOwnership || new Set(records.map((record) => record.id)).size !== records.length) {
+      throw new Error('The server returned invalid giving history.');
+    }
+    sumConfirmedGivingMinor(records);
+    return { records, total: Number(candidate.total) };
   },
 
   async getTransaction(reference: string, churchId: string, memberId: string): Promise<GivingRecord> {

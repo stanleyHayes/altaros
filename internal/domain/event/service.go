@@ -320,12 +320,15 @@ type Filter struct {
 	// From and To bound startDate. Zero means unbounded.
 	From time.Time
 	To   time.Time
+	// EndAfter excludes events that have already finished. It is separate from
+	// From so an event already in progress remains visible to the member app.
+	EndAfter time.Time
 	// Limit caps the result. Zero uses a sane default.
-	Limit int64
+	Limit  int64
+	Offset int64
 }
 
-// List returns events by start date.
-func (s *Service) List(ctx context.Context, f Filter) ([]Event, error) {
+func eventListFilter(f Filter) bson.M {
 	filter := bson.M{}
 	window := bson.M{}
 	if !f.From.IsZero() {
@@ -335,15 +338,20 @@ func (s *Service) List(ctx context.Context, f Filter) ([]Event, error) {
 		window["$lt"] = f.To.UTC()
 	}
 	if len(window) > 0 {
-		// Recurring events are matched by their SERIES start, which is in the
-		// past for anything long-running. Excluding them from a future window
-		// would hide the Sunday service from every calendar; Upcoming is what
-		// expands them into real dates.
 		filter["$or"] = []bson.M{
 			{"startDate": window},
 			{"isRecurring": true},
 		}
 	}
+	if !f.EndAfter.IsZero() {
+		filter["endDate"] = bson.M{"$gte": f.EndAfter.UTC()}
+	}
+	return filter
+}
+
+// List returns events by start date.
+func (s *Service) List(ctx context.Context, f Filter) ([]Event, error) {
+	filter := eventListFilter(f)
 
 	limit := f.Limit
 	if limit <= 0 || limit > 500 {
@@ -351,8 +359,11 @@ func (s *Service) List(ctx context.Context, f Filter) ([]Event, error) {
 	}
 
 	var out []Event
-	err := s.events.Find(ctx, filter, &out,
-		options.Find().SetSort(bson.D{{Key: "startDate", Value: 1}}).SetLimit(limit))
+	opts := options.Find().SetSort(bson.D{{Key: "startDate", Value: 1}, {Key: "_id", Value: 1}}).SetLimit(limit)
+	if f.Offset > 0 {
+		opts.SetSkip(f.Offset)
+	}
+	err := s.events.Find(ctx, filter, &out, opts)
 	if err != nil {
 		return nil, fmt.Errorf("event: list: %w", err)
 	}
@@ -360,6 +371,94 @@ func (s *Service) List(ctx context.Context, f Filter) ([]Event, error) {
 		out = []Event{}
 	}
 	return out, nil
+}
+
+// Count returns the number of events matching the same bounds as List.
+func (s *Service) Count(ctx context.Context, f Filter) (int64, error) {
+	total, err := s.events.CountDocuments(ctx, eventListFilter(f))
+	if err != nil {
+		return 0, fmt.Errorf("event: count: %w", err)
+	}
+	return total, nil
+}
+
+// UpcomingPage returns one next visible occurrence for every active event
+// series. Recurring events are stored with their original series dates, so a
+// normal endDate filter would hide a Sunday service after its first week.
+func (s *Service) UpcomingPage(ctx context.Context, page, limit int) ([]Event, int64, error) {
+	if page < 1 {
+		page = 1
+	}
+	if limit < 1 || limit > 50 {
+		limit = 25
+	}
+	now := s.now().UTC()
+	candidates := []Event{}
+	if err := s.events.Find(ctx, bson.M{"$or": []bson.M{
+		{"endDate": bson.M{"$gte": now}},
+		{"isRecurring": true},
+	}}, &candidates); err != nil {
+		return nil, 0, fmt.Errorf("event: list upcoming: %w", err)
+	}
+
+	visible := make([]Event, 0, len(candidates))
+	for i := range candidates {
+		projected, ok := projectNextOccurrence(candidates[i], now)
+		if ok {
+			visible = append(visible, projected)
+		}
+	}
+	sort.Slice(visible, func(i, j int) bool {
+		if visible[i].StartDate.Equal(visible[j].StartDate) {
+			return visible[i].ID.Hex() < visible[j].ID.Hex()
+		}
+		return visible[i].StartDate.Before(visible[j].StartDate)
+	})
+	total := int64(len(visible))
+	start := (page - 1) * limit
+	if start >= len(visible) {
+		return []Event{}, total, nil
+	}
+	end := start + limit
+	if end > len(visible) {
+		end = len(visible)
+	}
+	return visible[start:end], total, nil
+}
+
+// UpcomingByID projects a recurring series onto its next occurrence without
+// changing the stored series used by dashboard editing.
+func (s *Service) UpcomingByID(ctx context.Context, id string) (*Event, error) {
+	found, err := s.ByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if projected, ok := projectNextOccurrence(*found, s.now().UTC()); ok {
+		return &projected, nil
+	}
+	return found, nil
+}
+
+func projectNextOccurrence(found Event, now time.Time) (Event, bool) {
+	if !found.IsRecurring {
+		return found, !found.EndDate.Before(now)
+	}
+	duration := found.EndDate.Sub(found.StartDate)
+	if duration < 0 {
+		return Event{}, false
+	}
+	// Start the search one event-duration ago so an occurrence currently in
+	// progress remains the next visible one instead of jumping to next week.
+	occurrences := occurrencesOf(&found, now.Add(-duration), now.Add(occurrenceHorizon), 1)
+	if len(occurrences) == 0 {
+		return Event{}, false
+	}
+	found.StartDate = occurrences[0]
+	found.EndDate = occurrences[0].Add(duration)
+	if found.EndDate.Before(now) {
+		return Event{}, false
+	}
+	return found, true
 }
 
 // ByID returns one event within the caller's church.

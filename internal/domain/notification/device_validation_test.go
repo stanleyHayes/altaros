@@ -3,6 +3,7 @@ package notification
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -18,5 +19,16 @@ func TestRegisterDeviceRejectsInvalidInputBeforePersistence(t *testing.T) {
 		if err := svc.RegisterDevice(context.Background(), test.member, test.family, test.token, test.platform); !errors.Is(err, ErrInvalidDevice) {
 			t.Fatalf("RegisterDevice(%q, %q) error = %v", test.member, test.platform, err)
 		}
+	}
+}
+
+func TestNewestPushAddressCarriesStoredProviderRoute(t *testing.T) {
+	android := strings.Repeat("same-shape", 4)
+	ios := strings.Repeat("f", 64)
+	if got := newestPushAddress([]DeviceRegistration{{Platform: "ios", Token: ios}, {Platform: "android", Token: android}}); got != "ios:"+ios {
+		t.Fatalf("newest iOS route = %q", got)
+	}
+	if got := newestPushAddress([]DeviceRegistration{{Platform: "legacy", Token: ios}, {Platform: "android", Token: android}}); got != "android:"+android {
+		t.Fatalf("invalid legacy row should be skipped, got %q", got)
 	}
 }

@@ -2,8 +2,15 @@ import {
   createEmergencyConfirmationGate,
   expireEmergencyConfirmation,
   welfareMutationCompletionBelongsToIdentity,
+  welfareMutationFailureAlert,
+  welfareChoiceAccessibility,
+  welfareFormActionState,
+  welfareRefreshOwnsReconciliation,
+  welfareRequestActionState,
   welfareStateBelongsToIdentity,
+  welfareUnknownOutcomeCopy,
 } from './welfare-state';
+import { AxiosError, AxiosHeaders } from 'axios';
 
 describe('private welfare screen ownership', () => {
   it('renders case history and draft state only for their exact owner', () => {
@@ -67,5 +74,92 @@ describe('private welfare screen ownership', () => {
     expect(gate.consume(confirmedToken)).toBe(true);
     expect(expireEmergencyConfirmation(gate, release)).toBe(false);
     expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it('uses outcome-unknown copy that prevents blind duplicate welfare mutations', () => {
+    expect(welfareUnknownOutcomeCopy('request')).toEqual({
+      title: 'Request status unknown',
+      message: expect.stringMatching(/Refresh your care history before submitting it again/),
+    });
+    expect(welfareUnknownOutcomeCopy('emergency')).toEqual({
+      title: 'Alert status unknown',
+      message: expect.stringMatching(/Avoid sending it repeatedly/),
+    });
+    expect(welfareUnknownOutcomeCopy('emergency').message).toContain('emergency services');
+
+    const timeout = new AxiosError('timeout', 'ECONNABORTED');
+    expect(welfareMutationFailureAlert('request', timeout)).toMatchObject({
+      outcomeUnknown: true, title: 'Request status unknown',
+    });
+    expect(welfareMutationFailureAlert('emergency', timeout)).toMatchObject({
+      outcomeUnknown: true, title: 'Alert status unknown',
+    });
+
+    const rejected = new AxiosError(
+      'bad request',
+      'ERR_BAD_REQUEST',
+      { headers: new AxiosHeaders() },
+      undefined,
+      {
+        status: 400,
+        statusText: 'Bad Request',
+        headers: {},
+        config: { headers: new AxiosHeaders() },
+        data: { error: 'Please add more detail.' },
+      },
+    );
+    expect(welfareMutationFailureAlert('request', rejected)).toEqual({
+      outcomeUnknown: false,
+      title: 'Request not sent',
+      message: 'Please add more detail.',
+    });
+    expect(welfareMutationFailureAlert('emergency', rejected).title).toBe('Alert not sent');
+  });
+});
+
+describe('private welfare form transaction state', () => {
+  it('keeps one mutation lane and exposes choices as disabled radios while it is busy', () => {
+    expect(welfareFormActionState(false, false, false)).toEqual({
+      controlsDisabled: false,
+      requestDisabled: false,
+      emergencyDisabled: false,
+    });
+    expect(welfareFormActionState(false, true, false)).toEqual({
+      controlsDisabled: true,
+      requestDisabled: true,
+      emergencyDisabled: true,
+    });
+    expect(welfareFormActionState(true, false, false)).toEqual({
+      controlsDisabled: false,
+      requestDisabled: true,
+      emergencyDisabled: true,
+    });
+    expect(welfareChoiceAccessibility(true, true)).toEqual({
+      selected: true,
+      checked: true,
+      disabled: true,
+    });
+  });
+
+  it('turns an unknown result into an explicit refresh-only recovery state', () => {
+    expect(welfareFormActionState(false, false, false, true)).toEqual({
+      controlsDisabled: true,
+      requestDisabled: false,
+      emergencyDisabled: true,
+    });
+    expect(welfareRequestActionState(false, false, true)).toEqual({
+      mode: 'refresh',
+      label: 'Refresh care history',
+      disabled: false,
+      hint: 'Refreshes your private care history before another request can be submitted.',
+    });
+    expect(welfareRequestActionState(true, false, true)).toMatchObject({
+      mode: 'refresh', disabled: true, label: 'Reconnect to confirm request',
+    });
+  });
+
+  it('allows only a refresh started after the latest uncertain mutation to reconcile it', () => {
+    expect(welfareRefreshOwnsReconciliation(4, 4)).toBe(true);
+    expect(welfareRefreshOwnsReconciliation(3, 4)).toBe(false);
   });
 });

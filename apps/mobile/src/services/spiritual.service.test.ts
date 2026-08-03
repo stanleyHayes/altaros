@@ -69,6 +69,16 @@ describe('spiritual service contracts', () => {
     });
   });
 
+  it('requests an explicit prayer page and retains the authoritative total', async () => {
+    mockedApi.get.mockResolvedValueOnce({ data: { requests: [], total: 84 } } as never);
+
+    await expect(spiritualService.getPrayerRequests('church-1', { page: 2, limit: 25 }))
+      .resolves.toEqual({ requests: [], total: 84 });
+    expect(mockedApi.get).toHaveBeenCalledWith('/spiritual/prayer-requests', {
+      params: { page: 2, limit: 25 },
+    });
+  });
+
   it('normalizes a shared prayer array and missing prayer count', async () => {
     mockedApi.get.mockResolvedValueOnce({ data: [{
       id: 'prayer-1', churchId: 'church-1', memberId: 'member-1', title: 'Family', description: 'Please pray with us.',
@@ -88,6 +98,13 @@ describe('spiritual service contracts', () => {
     expect(mockedApi.get).toHaveBeenCalledWith('/spiritual/sermons', {
       params: { limit: 40 },
     });
+  });
+
+  it('requests an explicit sermon page and rejects a missing page total', async () => {
+    mockedApi.get.mockResolvedValueOnce({ data: { sermons: [] } } as never);
+
+    await expect(spiritualService.getSermons('church-1', { page: 2, limit: 25 }))
+      .rejects.toThrow('invalid sermon total');
   });
 
   it('normalizes shared devotional and sermon arrays', async () => {

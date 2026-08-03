@@ -2,8 +2,11 @@ import {
   firstInvalidRegistrationStep,
   ownsRegistrationLookup,
   registrationChurchMatchesCode,
+  registrationChurchActionState,
   registrationErrorsForStep,
   registrationRemovalDecision,
+  registrationProgressValue,
+  unknownRegistrationRecoveryParams,
   type RegistrationFormValues,
 } from './registration-state';
 
@@ -20,6 +23,26 @@ describe('registration church confirmation lifecycle', () => {
     expect(ownsRegistrationLookup(2, 2, 'Grace-Chapel', ' grace-chapel ')).toBe(true);
     expect(ownsRegistrationLookup(3, 2, 'grace-chapel', 'grace-chapel')).toBe(false);
     expect(ownsRegistrationLookup(2, 2, 'another-church', 'grace-chapel')).toBe(false);
+  });
+
+  it('shows actionable offline recovery on both final-step actions', () => {
+    expect(registrationChurchActionState(true, false, false, true, false)).toEqual({
+      lookup: {
+        label: 'Reconnect to find your church',
+        disabled: true,
+        hint: 'Reconnect to find and confirm your church.',
+      },
+      submit: {
+        label: 'Reconnect to create your account',
+        disabled: true,
+        hint: 'Reconnect to create and verify your account.',
+      },
+    });
+
+    expect(registrationChurchActionState(false, true, false, true, false).lookup)
+      .toEqual({ label: 'Finding your church…', disabled: true, hint: undefined });
+    expect(registrationChurchActionState(false, false, true, true, true).submit)
+      .toEqual({ label: 'Creating your account…', disabled: true, hint: undefined });
   });
 });
 
@@ -40,6 +63,12 @@ describe('stepwise registration validation', () => {
       .toEqual(expect.objectContaining({ password: expect.any(String), confirmPassword: 'Passwords do not match' }));
     expect(registrationErrorsForStep(3, validForm, null))
       .toEqual({ churchCode: 'Find and confirm your church before creating your account' });
+  });
+
+  it('reports each completed step as a quarter of the native progress range', () => {
+    expect(registrationProgressValue(0)).toEqual({ min: 0, max: 4, now: 1 });
+    expect(registrationProgressValue(1)).toEqual({ min: 0, max: 4, now: 2 });
+    expect(registrationProgressValue(3)).toEqual({ min: 0, max: 4, now: 4 });
   });
 
   it('routes a full submit to the earliest invalid step', () => {
@@ -71,5 +100,16 @@ describe('stepwise registration validation', () => {
     expect(registrationRemovalDecision(1, true, false)).toEqual({ kind: 'block' });
     expect(registrationRemovalDecision(0, false, false)).toEqual({ kind: 'allow' });
     expect(registrationRemovalDecision(3, true, true)).toEqual({ kind: 'allow' });
+  });
+
+  it('builds a non-committal OTP recovery route from canonical registration identity', () => {
+    expect(unknownRegistrationRecoveryParams('024 123 4567', ' Grace-Chapel-Accra '))
+      .toEqual({
+        phone: '+233241234567',
+        workspace: 'grace-chapel-accra',
+        deliveryUnconfirmed: true,
+      });
+    expect(unknownRegistrationRecoveryParams('bad', 'grace-chapel-accra')).toBeNull();
+    expect(unknownRegistrationRecoveryParams('0241234567', '../admin')).toBeNull();
   });
 });

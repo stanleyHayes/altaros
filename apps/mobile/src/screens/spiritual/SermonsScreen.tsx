@@ -11,27 +11,35 @@ import {
 import { Card } from '../../components/common/Card';
 import { colors, typography, spacing, borderRadius } from '../../theme';
 import type { Sermon } from '../../services/spiritual.service';
-import spiritualService, { sermonPlaybackAction } from '../../services/spiritual.service';
+import spiritualService, { SERMON_PAGE_SIZE, sermonPlaybackAction } from '../../services/spiritual.service';
 import { ScreenSkeleton } from '../../components/common/ScreenSkeleton';
 import { useAuth } from '../../hooks/useAuth';
 import { createLatestRequestGate } from '../../services/latest-request';
 import { connectivityErrorMessage } from '../../services/connectivity';
 import { useKnownOffline } from '../../hooks/useKnownOffline';
 import { createSubmissionLock } from '../../services/submission-lock';
-import { spiritualContentBelongsToIdentity, type SpiritualScreenOwner } from './spiritual-screen-state';
+import { spiritualContentBelongsToIdentity, spiritualPartialRecoveryAction, type SpiritualScreenOwner } from './spiritual-screen-state';
 import { StatePanel } from '../../components/common/StatePanel';
 import { Ionicons } from '@expo/vector-icons';
+import { useAnimatedRouteTop } from '../../hooks/useAnimatedRouteTop';
+import { paginationActionState } from '../../components/common/pagination-action';
+import { appendUniquePageById } from '../../services/list-reconciliation';
 
 export function SermonsScreen() {
   const { user } = useAuth();
   const offline = useKnownOffline();
+  const listRef = useRef<FlatList<Sermon>>(null);
+  useAnimatedRouteTop(listRef);
   const [sermons, setSermons] = useState<Sermon[]>([]);
   const [contentOwner, setContentOwner] = useState<SpiritualScreenOwner | null>(() => ({
     churchId: user?.churchId,
-    memberId: user?.id,
+    memberId: user?.memberId,
   }));
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const [loadedPage, setLoadedPage] = useState(0);
+  const [totalSermons, setTotalSermons] = useState(0);
   const [error, setError] = useState('');
   const [mediaError, setMediaError] = useState('');
   const [openingId, setOpeningId] = useState<string | null>(null);
@@ -40,35 +48,45 @@ export function SermonsScreen() {
   const playbackLock = useRef(createSubmissionLock());
   const mountedRef = useRef(true);
   const offlineRef = useRef(offline);
-  const activeIdentityRef = useRef<SpiritualScreenOwner>({ churchId: user?.churchId, memberId: user?.id });
+  const activeIdentityRef = useRef<SpiritualScreenOwner>({ churchId: user?.churchId, memberId: user?.memberId });
   const contentOwnerRef = useRef(contentOwner);
   const activeSermonIdsRef = useRef(new Set<string>());
   offlineRef.current = offline;
-  activeIdentityRef.current = { churchId: user?.churchId, memberId: user?.id };
+  activeIdentityRef.current = { churchId: user?.churchId, memberId: user?.memberId };
   contentOwnerRef.current = contentOwner;
   activeSermonIdsRef.current = new Set(sermons.map((sermon) => sermon.id));
 
-  const loadSermons = useCallback(async (refresh = false) => {
+  const loadSermons = useCallback(async (refresh = false, page = 1) => {
     const request = loadGate.current.begin();
-    const startedOwner = { churchId: user?.churchId, memberId: user?.id };
+    const startedOwner = { churchId: user?.churchId, memberId: user?.memberId };
     if (!spiritualContentBelongsToIdentity(contentOwnerRef.current, startedOwner)) {
       contentOwnerRef.current = startedOwner;
       setContentOwner(startedOwner);
       setSermons([]);
+      setLoadedPage(0);
+      setTotalSermons(0);
       setMediaError('');
       setOpeningId(null);
       playbackLock.current.release();
       hasLoaded.current = false;
     }
-    if (refresh) setIsRefreshing(true);
+    if (page > 1) setIsLoadingMore(true);
+    else if (refresh) setIsRefreshing(true);
     else if (!hasLoaded.current) setIsLoading(true);
     setError('');
     try {
-      if (!user?.churchId || !user.id) throw new Error('No church selected');
-      const result = await spiritualService.getSermons(user.churchId, { limit: 40 });
+      if (!user?.churchId || !user.memberId) throw new Error('No church selected');
+      const result = await spiritualService.getSermons(user.churchId, {
+        page,
+        limit: SERMON_PAGE_SIZE,
+      });
       if (loadGate.current.isLatest(request)) {
-        setSermons(result.sermons);
-        const loadedOwner = { churchId: user.churchId, memberId: user.id };
+        setSermons((current) => page === 1
+          ? result.sermons
+          : appendUniquePageById(current, result.sermons));
+        setLoadedPage(page);
+        setTotalSermons(result.total);
+        const loadedOwner = { churchId: user.churchId, memberId: user.memberId };
         contentOwnerRef.current = loadedOwner;
         setContentOwner(loadedOwner);
       }
@@ -79,9 +97,10 @@ export function SermonsScreen() {
         hasLoaded.current = true;
         setIsLoading(false);
         setIsRefreshing(false);
+        setIsLoadingMore(false);
       }
     }
-  }, [user?.churchId, user?.id]);
+  }, [user?.churchId, user?.memberId]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -92,7 +111,7 @@ export function SermonsScreen() {
 
   const openMedia = async (item: Sermon) => {
     const startedChurchId = user?.churchId;
-    const startedMemberId = user?.id;
+    const startedMemberId = user?.memberId;
     if (!startedChurchId || !startedMemberId
       || !mountedRef.current
       || !spiritualContentBelongsToIdentity(contentOwnerRef.current, activeIdentityRef.current)
@@ -170,6 +189,14 @@ export function SermonsScreen() {
 
   const ownsContent = spiritualContentBelongsToIdentity(contentOwner, activeIdentityRef.current);
   const visibleSermons = ownsContent ? sermons : [];
+  const hasMoreSermons = visibleSermons.length < totalSermons;
+  const paginationAction = paginationActionState('older sermons', {
+    offline,
+    loading: isLoadingMore,
+    refreshing: isRefreshing,
+    requiresRefresh: Boolean(error),
+  });
+  const partialRecovery = spiritualPartialRecoveryAction(offline);
 
   if (isLoading || !ownsContent) {
     return <ScreenSkeleton cards={4} />;
@@ -177,6 +204,7 @@ export function SermonsScreen() {
 
   return (
     <FlatList
+      ref={listRef}
       style={styles.container}
       data={visibleSermons}
       keyExtractor={(item) => item.id}
@@ -190,8 +218,16 @@ export function SermonsScreen() {
           {error && visibleSermons.length > 0 ? (
             <View style={styles.errorBanner}>
               <Text style={styles.errorText} accessibilityRole="alert">{error} Showing the last loaded messages.</Text>
-              <TouchableOpacity onPress={() => void loadSermons(true)} accessibilityRole="button" disabled={offline} accessibilityState={{ disabled: offline }} accessibilityHint={offline ? 'Reconnect to refresh sermons.' : undefined} style={offline && styles.actionDisabled}>
-                <Text style={styles.bannerRetry}>Try again</Text>
+              <TouchableOpacity
+                onPress={() => void loadSermons(true)}
+                accessibilityRole="button"
+                accessibilityLabel={partialRecovery.label}
+                disabled={partialRecovery.disabled}
+                accessibilityState={{ disabled: partialRecovery.disabled }}
+                accessibilityHint={partialRecovery.hint}
+                style={[styles.retryAction, partialRecovery.disabled && styles.actionDisabled]}
+              >
+                <Text style={styles.bannerRetry}>{partialRecovery.label}</Text>
               </TouchableOpacity>
             </View>
           ) : null}
@@ -209,6 +245,25 @@ export function SermonsScreen() {
           onAction={error ? () => void loadSermons() : undefined}
         />
       }
+      ListFooterComponent={visibleSermons.length > 0 ? (
+        <View style={styles.footer}>
+          {hasMoreSermons ? (
+            <TouchableOpacity
+              style={[styles.loadMore, paginationAction.disabled && styles.actionDisabled]}
+              onPress={() => void loadSermons(false, loadedPage + 1)}
+              disabled={paginationAction.disabled}
+              accessibilityRole="button"
+              accessibilityLabel={paginationAction.label}
+              accessibilityHint={paginationAction.hint}
+              accessibilityState={{ disabled: paginationAction.disabled, busy: paginationAction.busy }}
+            >
+              <Text style={styles.loadMoreText}>{paginationAction.label}</Text>
+            </TouchableOpacity>
+          ) : (
+            <Text style={styles.endText}>You’ve reached the beginning of the sermon library.</Text>
+          )}
+        </View>
+      ) : null}
     />
   );
 }
@@ -293,4 +348,9 @@ const styles = StyleSheet.create({
   errorBanner: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: spacing.md, backgroundColor: '#FFF7F5', borderRadius: borderRadius.lg, padding: spacing.md, marginBottom: spacing.md },
   errorText: { color: colors.error, fontSize: typography.sizes.sm, lineHeight: 19, flex: 1 },
   bannerRetry: { color: colors.primary, fontFamily: typography.families.semibold, fontSize: typography.sizes.sm, paddingVertical: spacing.xs },
+  retryAction: { minHeight: 44, justifyContent: 'center' },
+  footer: { alignItems: 'center', paddingTop: spacing.sm, paddingBottom: spacing.xl },
+  loadMore: { minHeight: 48, minWidth: 220, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: colors.primary, borderRadius: borderRadius.full, paddingHorizontal: spacing.xl },
+  loadMoreText: { color: colors.primaryDark, fontFamily: typography.families.semibold, fontSize: typography.sizes.sm },
+  endText: { color: colors.muted, fontFamily: typography.families.medium, fontSize: typography.sizes.sm, textAlign: 'center' },
 });

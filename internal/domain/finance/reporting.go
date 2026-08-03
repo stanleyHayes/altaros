@@ -23,6 +23,7 @@ type Query struct {
 	CampaignID string
 	From, To   time.Time
 	Limit      int64
+	Offset     int64
 }
 
 func (q Query) filter() bson.M {
@@ -70,6 +71,9 @@ func (s *Service) List(ctx context.Context, q Query) ([]Transaction, error) {
 	opts := options.Find().
 		SetSort(bson.D{{Key: "occurredAt", Value: -1}, {Key: "_id", Value: -1}}).
 		SetLimit(limit)
+	if q.Offset > 0 {
+		opts.SetSkip(q.Offset)
+	}
 
 	var out []Transaction
 	if err := s.coll.Find(ctx, q.filter(), &out, opts); err != nil {
@@ -228,7 +232,7 @@ func (s *Service) GivingFor(ctx context.Context, memberID string, from, to time.
 			continue
 		}
 		out.Total.Minor += tx.GrossMinor
-		out.Debited.Minor += tx.GrossMinor + tx.LevyMinor
+		out.Debited.Minor += tx.TotalDebited().Minor
 		out.Count++
 
 		existing := out.ByType[tx.Type]

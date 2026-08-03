@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"go.mongodb.org/mongo-driver/v2/bson"
+
 	"github.com/hayfordstanley/altar-os/internal/platform/config"
 	"github.com/hayfordstanley/altar-os/internal/platform/mongodb"
 	"github.com/hayfordstanley/altar-os/internal/platform/tenancy"
@@ -132,6 +134,54 @@ func TestBulkImportOfMixedFormatsProducesNoDuplicates(t *testing.T) {
 		if !isE164(m.PhoneE164) {
 			t.Fatalf("member %s stored a non-E.164 number: %q", m.FullName(), m.PhoneE164)
 		}
+	}
+}
+
+func TestSelfSignupLinksExistingRosterIdentityWithoutDuplicatingIt(t *testing.T) {
+	svc, pub, ctx := newService(t)
+	existing, err := svc.Create(ctx, Input{
+		FirstName: "Ama", LastName: "Mensah", Phone: "024 123 4567",
+		Email: "ama@example.com", Status: StatusActive,
+	})
+	if err != nil {
+		t.Fatalf("create roster member: %v", err)
+	}
+	userID := bson.NewObjectID().Hex()
+	linked, err := svc.LinkOrCreateForUser(ctx, userID, Input{
+		FirstName: "Ama", LastName: "Mensah", Phone: "+233241234567",
+		Email: "AMA@example.com", Status: StatusActive,
+	})
+	if err != nil {
+		t.Fatalf("link existing member: %v", err)
+	}
+	if linked.ID != existing.ID || linked.UserID.String() != userID {
+		t.Fatalf("link created the wrong identity: %+v", linked)
+	}
+	if pub.countOf(TopicMemberCreated) != 1 {
+		t.Fatalf("link emitted a duplicate member-created event: %d", pub.countOf(TopicMemberCreated))
+	}
+	if _, err := svc.LinkOrCreateForUser(ctx, bson.NewObjectID().Hex(), Input{
+		FirstName: "Ama", Phone: "0241234567", Email: "ama@example.com",
+	}); !errors.Is(err, ErrDuplicate) {
+		t.Fatalf("second account took an already-linked member: %v", err)
+	}
+}
+
+func TestSelfSignupCreatesLinkedRosterIdentityWhenNoneExists(t *testing.T) {
+	svc, pub, ctx := newService(t)
+	userID := bson.NewObjectID().Hex()
+	created, err := svc.LinkOrCreateForUser(ctx, userID, Input{
+		FirstName: "Esi", LastName: "Boateng", Phone: "0555000199",
+		Email: "esi@example.com", Status: StatusActive,
+	})
+	if err != nil {
+		t.Fatalf("create linked member: %v", err)
+	}
+	if created.UserID.String() != userID || created.Status != StatusActive {
+		t.Fatalf("created member is not linked and active: %+v", created)
+	}
+	if pub.countOf(TopicMemberCreated) != 1 {
+		t.Fatalf("created member emitted %d events, want one", pub.countOf(TopicMemberCreated))
 	}
 }
 

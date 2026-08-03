@@ -11,7 +11,6 @@ import {
   AccordionDetails,
   Chip,
   InputAdornment,
-  Grid,
 } from "@mui/material";
 import SEO from "@/components/ui/SEO";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";

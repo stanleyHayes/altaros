@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
+import type { ReactNode } from "react";
 import {
   Box,
   Typography,
@@ -12,16 +13,21 @@ import {
   Chip,
   Avatar,
   TablePagination,
-  CircularProgress,
+  Skeleton,
   TextField,
   InputAdornment,
   MenuItem,
   Select,
   FormControl,
   InputLabel,
+  Alert,
+  Drawer,
+  Divider,
+  IconButton,
 } from "@mui/material";
-import { Search } from "@mui/icons-material";
+import { CloseRounded, EmailRounded, PhoneRounded, Search, VerifiedUserRounded } from "@mui/icons-material";
 import AdminService, { type UserRow } from "@/services/admin.service";
+import PageIntro from "@/components/ui/PageIntro";
 
 const roleColors: Record<string, "error" | "primary" | "info" | "default"> = {
   SUPER_ADMIN: "error",
@@ -38,9 +44,12 @@ export default function UsersPage() {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [roleFilter, setRoleFilter] = useState("");
+  const [error, setError] = useState("");
+  const [selectedUser, setSelectedUser] = useState<UserRow | null>(null);
 
   const fetchUsers = useCallback(async () => {
     setLoading(true);
+    setError("");
     try {
       const res = await AdminService.getUsers(
         page + 1,
@@ -50,8 +59,8 @@ export default function UsersPage() {
       );
       setUsers(res.items);
       setTotal(res.pagination.total);
-    } catch {
-      // ignore
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Users could not be loaded");
     } finally {
       setLoading(false);
     }
@@ -64,11 +73,10 @@ export default function UsersPage() {
 
   return (
     <Box>
-      <Typography variant="h4" sx={{ fontWeight: 700, mb: 3 }}>
-        Users
-      </Typography>
+      <PageIntro eyebrow="Identity operations" title="Platform users" copy="Search identities across tenants and inspect the roles entrusted with church and platform access." action={<Chip label={`${total.toLocaleString()} identities`} color="primary" />} />
+      {error && <Alert severity="error" sx={{ mb: 2.5 }}>User data is unavailable. {error}</Alert>}
 
-      <Box sx={{ display: "flex", gap: 2, mb: 3 }}>
+      <Box sx={{ display: "flex", flexWrap: "wrap", gap: 1.5, mb: 2.5, p: 1.5, border: "1px solid", borderColor: "divider", bgcolor: "background.paper", borderRadius: 1.25 }}>
         <TextField
           placeholder="Search by name or email..."
           value={search}
@@ -77,7 +85,7 @@ export default function UsersPage() {
             setPage(0);
           }}
           size="small"
-          sx={{ width: 300 }}
+          sx={{ width: { xs: "100%", sm: 330 } }}
           slotProps={{
             input: {
               startAdornment: (
@@ -109,9 +117,7 @@ export default function UsersPage() {
 
       <Card>
         {loading ? (
-          <Box sx={{ display: "flex", justifyContent: "center", py: 6 }}>
-            <CircularProgress />
-          </Box>
+          <Box sx={{ p: 2 }}>{Array.from({ length: 6 }, (_, index) => <Skeleton key={index} height={56} sx={{ mb: .5 }} />)}</Box>
         ) : (
           <>
             <TableContainer>
@@ -127,7 +133,7 @@ export default function UsersPage() {
                 </TableHead>
                 <TableBody>
                   {users.map((user) => (
-                    <TableRow key={user.id} hover>
+                    <TableRow key={user.id} hover onClick={() => setSelectedUser(user)} sx={{ cursor: "pointer" }}>
                       <TableCell>
                         <Box sx={{ display: "flex", alignItems: "center", gap: 1.5 }}>
                           <Avatar
@@ -193,6 +199,13 @@ export default function UsersPage() {
           </>
         )}
       </Card>
+      <Drawer anchor="right" open={Boolean(selectedUser)} onClose={() => setSelectedUser(null)} slotProps={{ paper: { sx: { width: { xs: "100%", sm: 440 }, p: 0, bgcolor: "background.paper" } } }}>
+        {selectedUser && <Box><Box sx={{ p: 2.5, display: "flex", justifyContent: "space-between", alignItems: "start", borderBottom: "1px solid", borderColor: "divider" }}><Box><Typography variant="overline" color="primary.main">Identity record</Typography><Typography variant="h4" sx={{ mt: .8 }}>{selectedUser.name || "Unnamed user"}</Typography><Typography sx={{ mt: .5, fontSize: ".7rem", color: "text.secondary" }}>Joined {new Date(selectedUser.createdAt).toLocaleDateString()}</Typography></Box><IconButton onClick={() => setSelectedUser(null)} aria-label="Close user details"><CloseRounded /></IconButton></Box><Box sx={{ p: 2.5 }}><Box sx={{ display: "flex", alignItems: "center", gap: 1.5, p: 2, bgcolor: "rgba(113,215,197,.07)", borderRadius: 1 }}><Avatar variant="rounded" src={selectedUser.avatarUrl} sx={{ width: 52, height: 52, borderRadius: 1, bgcolor: "primary.main", color: "primary.contrastText" }}>{(selectedUser.name || "?").charAt(0)}</Avatar><Box><Chip label={selectedUser.role.replaceAll("_", " ")} color="primary" /><Typography sx={{ mt: .6, fontSize: ".68rem", color: selectedUser.isActive ? "success.main" : "error.main", fontWeight: 700 }}>{selectedUser.isActive ? "Active account" : "Inactive account"}</Typography></Box></Box><Typography variant="overline" sx={{ display: "block", mt: 3, color: "text.secondary" }}>Contact</Typography><DetailRow icon={<EmailRounded />} label="Email" value={selectedUser.email || "Not provided"} /><DetailRow icon={<PhoneRounded />} label="Phone" value={selectedUser.phone || "Not provided"} /><Divider sx={{ my: 2 }} /><Typography variant="overline" sx={{ color: "text.secondary" }}>Access scope</Typography><DetailRow icon={<VerifiedUserRounded />} label="Church tenant" value={selectedUser.churchId || "Platform-wide"} /><DetailRow icon={<VerifiedUserRounded />} label="User ID" value={selectedUser.id} /></Box></Box>}
+      </Drawer>
     </Box>
   );
+}
+
+function DetailRow({ icon, label, value }: { icon: ReactNode; label: string; value: string }) {
+  return <Box sx={{ display: "grid", gridTemplateColumns: "28px 100px minmax(0,1fr)", gap: 1, alignItems: "start", py: 1.3, borderBottom: "1px solid", borderColor: "divider" }}><Box sx={{ color: "primary.main", "& .MuiSvgIcon-root": { fontSize: 17 } }}>{icon}</Box><Typography sx={{ fontSize: ".68rem", color: "text.secondary" }}>{label}</Typography><Typography sx={{ fontSize: ".72rem", fontWeight: 620, overflowWrap: "anywhere" }}>{value}</Typography></Box>;
 }

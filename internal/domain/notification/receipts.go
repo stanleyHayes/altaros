@@ -120,5 +120,6 @@ func (s *Service) SendGivingReceipt(ctx context.Context, e GivingCompleted) (*No
 		Subject:   "Giving receipt",
 		Body:      ReceiptFor(e),
 		DedupeKey: "receipt:" + e.TransactionID,
+		DeepLink:  "altaros://giving/history",
 	})
 }

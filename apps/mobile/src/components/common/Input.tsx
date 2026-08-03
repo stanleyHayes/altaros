@@ -3,11 +3,13 @@ import {
   View,
   Text,
   TextInput,
+  TouchableOpacity,
   StyleSheet,
   TextInputProps,
   ViewStyle,
   type AccessibilityState,
 } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { colors, typography, spacing, borderRadius } from '../../theme';
 
 interface InputProps extends TextInputProps {
@@ -30,6 +32,23 @@ export function mergeInputAccessibility(
   };
 }
 
+export function passwordVisibilityState(
+  isPasswordInput: boolean,
+  passwordVisible: boolean,
+): {
+  secureTextEntry: boolean | undefined;
+  label: 'Show password' | 'Hide password';
+  hint: string;
+} {
+  return {
+    secureTextEntry: isPasswordInput ? !passwordVisible : undefined,
+    label: passwordVisible ? 'Hide password' : 'Show password',
+    hint: passwordVisible
+      ? 'Masks the password in this field.'
+      : 'Reveals the password in this field.',
+  };
+}
+
 export const Input = forwardRef<TextInput, InputProps>(function Input({
   label,
   error,
@@ -38,6 +57,9 @@ export const Input = forwardRef<TextInput, InputProps>(function Input({
   ...props
 }: InputProps, ref) {
   const [isFocused, setIsFocused] = useState(false);
+  const [passwordVisible, setPasswordVisible] = useState(false);
+  const isPasswordInput = props.secureTextEntry === true;
+  const passwordVisibility = passwordVisibilityState(isPasswordInput, passwordVisible);
   const accessibility = mergeInputAccessibility(
     props.accessibilityState,
     props.editable,
@@ -48,29 +70,51 @@ export const Input = forwardRef<TextInput, InputProps>(function Input({
   return (
     <View style={[styles.container, containerStyle]}>
       {label && <Text style={styles.label}>{label}</Text>}
-      <TextInput
-        ref={ref}
-        {...props}
-        style={[
-          styles.input,
-          isFocused && styles.inputFocused,
-          error && styles.inputError,
-          style,
-        ]}
-        placeholderTextColor={colors.muted}
-        accessibilityLabel={props.accessibilityLabel ?? label ?? props.placeholder}
-        accessibilityHint={accessibility.hint}
-        accessibilityState={accessibility.state}
-        aria-invalid={Boolean(error)}
-        onFocus={(e) => {
-          setIsFocused(true);
-          props.onFocus?.(e);
-        }}
-        onBlur={(e) => {
-          setIsFocused(false);
-          props.onBlur?.(e);
-        }}
-      />
+      <View style={styles.inputShell}>
+        <TextInput
+          ref={ref}
+          {...props}
+          secureTextEntry={passwordVisibility.secureTextEntry}
+          style={[
+            styles.input,
+            isPasswordInput && styles.passwordInput,
+            isFocused && styles.inputFocused,
+            error && styles.inputError,
+            style,
+          ]}
+          placeholderTextColor={colors.muted}
+          accessibilityLabel={props.accessibilityLabel ?? label ?? props.placeholder}
+          accessibilityHint={accessibility.hint}
+          accessibilityState={accessibility.state}
+          aria-invalid={Boolean(error)}
+          onFocus={(e) => {
+            setIsFocused(true);
+            props.onFocus?.(e);
+          }}
+          onBlur={(e) => {
+            setIsFocused(false);
+            props.onBlur?.(e);
+          }}
+        />
+        {isPasswordInput ? (
+          <TouchableOpacity
+            style={styles.passwordToggle}
+            onPress={() => setPasswordVisible((visible) => !visible)}
+            disabled={props.editable === false}
+            accessibilityRole="button"
+            accessibilityLabel={passwordVisibility.label}
+            accessibilityHint={passwordVisibility.hint}
+            accessibilityState={{ disabled: props.editable === false }}
+          >
+            <Ionicons
+              name={passwordVisible ? 'eye-off-outline' : 'eye-outline'}
+              size={21}
+              color={props.editable === false ? colors.border : colors.muted}
+              importantForAccessibility="no-hide-descendants"
+            />
+          </TouchableOpacity>
+        ) : null}
+      </View>
       {error && (
         <Text style={styles.error} accessibilityRole="alert" accessibilityLiveRegion="polite">
           {error}
@@ -90,6 +134,9 @@ const styles = StyleSheet.create({
     color: colors.text,
     marginBottom: spacing.xs,
   },
+  inputShell: {
+    position: 'relative',
+  },
   input: {
     borderWidth: 1,
     borderColor: colors.border,
@@ -100,6 +147,19 @@ const styles = StyleSheet.create({
     fontSize: typography.sizes.base,
     color: colors.text,
     backgroundColor: colors.surface,
+  },
+  passwordInput: {
+    paddingRight: 60,
+  },
+  passwordToggle: {
+    position: 'absolute',
+    right: 4,
+    top: 4,
+    width: 44,
+    minHeight: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: borderRadius.md,
   },
   inputFocused: {
     borderColor: colors.primary,

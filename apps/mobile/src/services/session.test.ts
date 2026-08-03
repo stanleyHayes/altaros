@@ -162,6 +162,54 @@ describe('native secure session storage', () => {
     expect(values['altar.refreshToken']).toBeUndefined();
   });
 
+  it('migrates the pre-SecureStore native session and removes backup-eligible credentials', async () => {
+    await AsyncStorage.setItem('accessToken', 'async-access');
+    await AsyncStorage.setItem('refreshToken', 'async-refresh');
+    await AsyncStorage.setItem('user', JSON.stringify({ id: 'member-1', churchId: 'church-1' }));
+
+    await expect(session.getAccessToken()).resolves.toBe('async-access');
+    await expect(session.getUser()).resolves.toEqual({ id: 'member-1', churchId: 'church-1' });
+    expect(JSON.parse(values['altar.session'])).toEqual({
+      accessToken: 'async-access', refreshToken: 'async-refresh',
+    });
+    await expect(AsyncStorage.getItem('accessToken')).resolves.toBeNull();
+    await expect(AsyncStorage.getItem('refreshToken')).resolves.toBeNull();
+    await expect(AsyncStorage.getItem('user')).resolves.toBeNull();
+  });
+
+  it('cleans an incomplete pre-SecureStore session without accepting it', async () => {
+    await AsyncStorage.setItem('accessToken', 'orphaned-async-access');
+    await AsyncStorage.setItem('user', JSON.stringify({ id: 'member-stale' }));
+
+    await expect(session.getAccessToken()).resolves.toBeNull();
+    await expect(AsyncStorage.getItem('accessToken')).resolves.toBeNull();
+    await expect(AsyncStorage.getItem('user')).resolves.toBeNull();
+    expect(values['altar.session']).toBeUndefined();
+  });
+
+  it('keeps the current secure family while deleting stale AsyncStorage credentials', async () => {
+    await seedSession('secure-access', 'secure-refresh');
+    await AsyncStorage.setItem('accessToken', 'stale-async-access');
+    await AsyncStorage.setItem('refreshToken', 'stale-async-refresh');
+
+    await expect(session.getAccessToken()).resolves.toBe('secure-access');
+    await expect(session.getRefreshToken()).resolves.toBe('secure-refresh');
+    await expect(AsyncStorage.getItem('accessToken')).resolves.toBeNull();
+    await expect(AsyncStorage.getItem('refreshToken')).resolves.toBeNull();
+  });
+
+  it('prefers an intermediate SecureStore family over an older AsyncStorage backup', async () => {
+    values['altar.accessToken'] = 'secure-legacy-access';
+    values['altar.refreshToken'] = 'secure-legacy-refresh';
+    await AsyncStorage.setItem('accessToken', 'older-async-access');
+    await AsyncStorage.setItem('refreshToken', 'older-async-refresh');
+
+    await expect(session.getAccessToken()).resolves.toBe('secure-legacy-access');
+    await expect(session.getRefreshToken()).resolves.toBe('secure-legacy-refresh');
+    await expect(AsyncStorage.getItem('accessToken')).resolves.toBeNull();
+    await expect(AsyncStorage.getItem('refreshToken')).resolves.toBeNull();
+  });
+
   it('rejects a partial legacy pair instead of mixing token families', async () => {
     values['altar.accessToken'] = 'orphaned-access';
     await expect(session.getAccessToken()).resolves.toBeNull();

@@ -1,8 +1,9 @@
 import { Navigate, Outlet } from "react-router-dom";
 import Box from "@mui/material/Box";
-import CircularProgress from "@mui/material/CircularProgress";
+import Skeleton from "@mui/material/Skeleton";
 import TopBar from "./TopBar";
 import BottomNav from "./BottomNav";
+import MemberSidebar from "./MemberSidebar";
 import { useAuth } from "@/hooks/useAuth";
 
 export default function MainLayout() {
@@ -15,10 +16,10 @@ export default function MainLayout() {
           display: "flex",
           justifyContent: "center",
           alignItems: "center",
-          height: "100vh",
+          minHeight: "100dvh",
         }}
       >
-        <CircularProgress color="primary" />
+        <Box sx={{ width: "min(88vw, 520px)" }}><Skeleton variant="rounded" height={72} /><Skeleton variant="rounded" height={220} sx={{ mt: 2 }} /></Box>
       </Box>
     );
   }
@@ -28,21 +29,22 @@ export default function MainLayout() {
   }
 
   return (
-    <Box sx={{ display: "flex", flexDirection: "column", minHeight: "100vh" }}>
-      <TopBar />
-      <Box
-        component="main"
-        data-route-scroll-container
-        sx={{
-          flexGrow: 1,
-          pt: "64px",
-          pb: "76px",
-          px: 2,
-          bgcolor: "background.default",
-          overflowY: "auto",
-        }}
-      >
-        <Outlet />
+    <Box sx={{ display: "flex", minHeight: "100dvh", bgcolor: "background.default" }}>
+      <MemberSidebar />
+      <Box sx={{ display: "flex", flexDirection: "column", flex: 1, minWidth: 0 }}>
+        <TopBar />
+        <Box
+          component="main"
+          data-route-scroll-container
+          sx={{
+            flexGrow: 1,
+            pb: { xs: "104px", md: 6 },
+            px: { xs: 2, sm: 3, lg: 4 },
+            bgcolor: "background.default",
+          }}
+        >
+          <Box sx={{ width: "100%", maxWidth: 1320, mx: "auto" }}><Outlet /></Box>
+        </Box>
       </Box>
       <BottomNav />
     </Box>

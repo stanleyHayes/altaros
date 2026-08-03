@@ -3,6 +3,12 @@ export type NavigationIdentity = {
   memberId?: string | null;
 };
 
+export function navigationIdentityForUser(
+  user: { churchId?: string | null; memberId?: string | null } | null | undefined,
+): NavigationIdentity {
+  return { churchId: user?.churchId, memberId: user?.memberId };
+}
+
 function encodeKeyPart(value: string): string {
   return `${value.length}:${value}`;
 }

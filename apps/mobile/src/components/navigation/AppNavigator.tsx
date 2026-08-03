@@ -32,13 +32,13 @@ import {
   safeNotificationUrl,
 } from '../../services/notification-linking';
 import notificationService, { supportsNativePush } from '../../services/notification.service';
-import { navigationSessionKey } from './navigation-session';
+import { navigationIdentityForUser, navigationSessionKey } from './navigation-session';
 import { createPushRegistrationSyncGate } from '../../services/push-registration-sync';
 
 export type AuthStackParamList = {
   Login: undefined;
   Register: undefined;
-  Otp: { phone: string; codeRequested?: boolean; deliveryUnconfirmed?: boolean };
+  Otp: { phone: string; workspace: string; codeRequested?: boolean; deliveryUnconfirmed?: boolean };
 };
 
 export type RootStackParamList = {
@@ -211,12 +211,12 @@ function MainNavigator() {
 
 export function AppNavigator() {
   const { isAuthenticated, isLoading, user } = useAuth();
-  const activeIdentityRef = useRef({ churchId: user?.churchId, memberId: user?.id });
-  activeIdentityRef.current = { churchId: user?.churchId, memberId: user?.id };
+  const activeIdentityRef = useRef(navigationIdentityForUser(user));
+  activeIdentityRef.current = navigationIdentityForUser(user);
 
   useEffect(() => {
     const startedChurchId = user?.churchId;
-    const startedMemberId = user?.id;
+    const startedMemberId = user?.memberId;
     if (!isAuthenticated || !startedChurchId || !startedMemberId) return;
     let active = true;
     const stillOwnsSession = () => active
@@ -254,7 +254,7 @@ export function AppNavigator() {
       connectivitySubscription();
       tokenSubscription?.remove();
     };
-  }, [isAuthenticated, user?.churchId, user?.id]);
+  }, [isAuthenticated, user?.churchId, user?.memberId]);
 
   useEffect(() => {
     if (isAuthenticated) return;
@@ -299,10 +299,7 @@ export function AppNavigator() {
 
   return (
     <NavigationContainer
-      key={navigationSessionKey(isAuthenticated, {
-        churchId: user?.churchId,
-        memberId: user?.id,
-      })}
+      key={navigationSessionKey(isAuthenticated, navigationIdentityForUser(user))}
       linking={isAuthenticated ? linking : undefined}
     >
       {isAuthenticated ? <MainNavigator /> : <AuthNavigator />}

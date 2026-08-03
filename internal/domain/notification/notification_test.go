@@ -306,7 +306,7 @@ func TestTransactionalMessagesDoNotRequireConsent(t *testing.T) {
 
 	n, err := h.svc.Send(h.ctx, Message{
 		MemberID: "member_1", Channel: ChannelSMS, Kind: KindTransactional,
-		Body: "Your giving receipt.",
+		Body: "Your giving receipt.", DeepLink: "altaros://giving/history",
 	})
 	if err != nil {
 		t.Fatalf("Send: %v", err)
@@ -315,9 +315,30 @@ func TestTransactionalMessagesDoNotRequireConsent(t *testing.T) {
 		t.Fatalf("status = %s (%s); transactional messages must not need consent",
 			n.Status, n.Reason)
 	}
+	if n.DeepLink != "altaros://giving/history" {
+		t.Fatalf("stored deep link = %q", n.DeepLink)
+	}
 	// And the consent service should not even have been asked.
 	if h.cc.calls != 0 {
 		t.Errorf("consent was checked %d times for a transactional message", h.cc.calls)
+	}
+}
+
+func TestNotificationDeepLinksAreRestrictedToMemberAppRoutes(t *testing.T) {
+	base := Message{MemberID: "member_1", Channel: ChannelPush, Kind: KindTransactional, Body: "Update"}
+	for _, allowed := range []string{"", "altaros://giving/history", "altaros://events/event_1", "altaros://community/posts/post-1"} {
+		msg := base
+		msg.DeepLink = allowed
+		if err := mustValid(msg); err != nil {
+			t.Errorf("allowed deep link %q failed: %v", allowed, err)
+		}
+	}
+	for _, rejected := range []string{"https://example.com", "altaros://giving/history?x=1", "altaros://events/a/b", " altaros://profile", "altaros://unknown"} {
+		msg := base
+		msg.DeepLink = rejected
+		if !errors.Is(mustValid(msg), ErrInvalidDeepLink) {
+			t.Errorf("unsafe deep link %q was accepted", rejected)
+		}
 	}
 }
 
@@ -998,6 +1019,22 @@ func TestHistoryRecordsSuppressionsToo(t *testing.T) {
 	}
 	if !found {
 		t.Error("the suppressed message and its reason must appear in history")
+	}
+
+	first, err := h.svc.HistoryPage(h.ctx, "member_1", 1, 0)
+	if err != nil {
+		t.Fatalf("HistoryPage first: %v", err)
+	}
+	second, err := h.svc.HistoryPage(h.ctx, "member_1", 1, 1)
+	if err != nil {
+		t.Fatalf("HistoryPage second: %v", err)
+	}
+	if len(first) != 1 || len(second) != 1 || first[0].ID == second[0].ID {
+		t.Fatalf("paged history did not reach distinct records: first=%#v second=%#v", first, second)
+	}
+	total, err := h.svc.HistoryCount(h.ctx, "member_1")
+	if err != nil || total != 2 {
+		t.Fatalf("HistoryCount = %d, %v; want 2", total, err)
 	}
 }
 

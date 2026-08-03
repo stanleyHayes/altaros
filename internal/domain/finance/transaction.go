@@ -119,8 +119,8 @@ type Transaction struct {
 	Direction   Direction  `bson:"direction" json:"direction"`
 	Channel     string     `bson:"channel"   json:"channel"`
 
-	// GrossMinor is what the giver was debited, excluding the levy their
-	// operator adds on top.
+	// GrossMinor is the gift the member intended the church to receive. It does
+	// not grow when the giver covers a provider fee.
 	GrossMinor int64 `bson:"grossMinor" json:"grossMinor"`
 	// LevyMinor is the E-Levy quoted to the giver before confirmation. It is
 	// recorded so the church can explain the difference between what a member
@@ -129,6 +129,10 @@ type Transaction struct {
 	LevyMinor int64 `bson:"levyMinor" json:"levyMinor"`
 	// ProviderFeeMinor is what the payment provider charged.
 	ProviderFeeMinor int64 `bson:"providerFeeMinor" json:"providerFeeMinor"`
+	// ChargedMinor is what the provider was instructed to debit before levy.
+	// It equals GrossMinor unless the giver bears the provider fee.
+	ChargedMinor int64           `bson:"chargedMinor" json:"chargedMinor"`
+	FeeBearer    money.FeeBearer `bson:"feeBearer" json:"feeBearer"`
 	// PlatformFeeMinor is the ALTAR OS commission (ADR-002).
 	PlatformFeeMinor int64 `bson:"platformFeeMinor" json:"platformFeeMinor"`
 	// NetMinor is what the church actually receives, and the only figure that
@@ -167,6 +171,16 @@ func (t *Transaction) Gross() money.Amount {
 	return money.Amount{Minor: t.GrossMinor, Currency: t.Currency}
 }
 
+// Charged is the provider-side amount that settlement must verify. Older
+// records predate chargedMinor, so their gift remains the only safe fallback.
+func (t *Transaction) Charged() money.Amount {
+	minor := t.ChargedMinor
+	if minor == 0 {
+		minor = t.GrossMinor
+	}
+	return money.Amount{Minor: minor, Currency: t.Currency}
+}
+
 // Net is what the church receives.
 func (t *Transaction) Net() money.Amount {
 	return money.Amount{Minor: t.NetMinor, Currency: t.Currency}
@@ -181,5 +195,5 @@ func (t *Transaction) Levy() money.Amount {
 // levy their operator applied. This is the number to show on a receipt,
 // because it is the number the giver will see on their own statement.
 func (t *Transaction) TotalDebited() money.Amount {
-	return money.Amount{Minor: t.GrossMinor + t.LevyMinor, Currency: t.Currency}
+	return money.Amount{Minor: t.Charged().Minor + t.LevyMinor, Currency: t.Currency}
 }

@@ -50,3 +50,8 @@ export function apiErrorMessage(error: unknown, fallback: string): string {
     ?? safeClientErrorCopy(error.response?.data?.message)
     ?? fallback;
 }
+
+/** A mutation may have reached the gateway when Axios received no response. */
+export function isAmbiguousMutationFailure(error: unknown): boolean {
+  return axios.isAxiosError(error) && error.response === undefined;
+}

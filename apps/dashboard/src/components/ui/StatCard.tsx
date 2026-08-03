@@ -21,46 +21,44 @@ export default function StatCard({
   icon,
   change,
   changeLabel,
-  iconBgColor = "primary.light",
-  iconColor = "primary.main",
   sx,
 }: StatCardProps) {
   const isPositive = change !== undefined && change >= 0;
 
   return (
-    <Card sx={{ height: "100%", ...sx }}>
-      <CardContent sx={{ p: 3, "&:last-child": { pb: 3 } }}>
+    <Card sx={{ height: "100%", bgcolor: "rgba(251,253,252,.82)", boxShadow: "none", ...sx }}>
+      <CardContent sx={{ p: 2.4, "&:last-child": { pb: 2.6 } }}>
         <Box
           sx={{
             display: "flex",
             justifyContent: "space-between",
             alignItems: "flex-start",
-            mb: 2,
+            mb: 2.5,
           }}
         >
           <Box>
             <Typography
-              variant="body2"
+              variant="overline"
               color="text.secondary"
               gutterBottom
-              sx={{ fontWeight: 500 }}
+              sx={{ fontWeight: 700, color: "text.secondary", letterSpacing: ".11em" }}
             >
               {title}
             </Typography>
-            <Typography variant="h4" sx={{ fontWeight: 700 }}>
+            <Typography sx={{ mt: .6, fontSize: "2rem", lineHeight: 1, fontWeight: 750, letterSpacing: "-.05em", fontVariantNumeric: "tabular-nums" }}>
               {value}
             </Typography>
           </Box>
           <Box
             sx={{
-              width: 48,
-              height: 48,
-              borderRadius: 2,
+              width: 44,
+              height: 44,
+              borderRadius: "14px 14px 24px 14px",
               display: "flex",
               alignItems: "center",
               justifyContent: "center",
-              bgcolor: iconBgColor,
-              color: iconColor,
+              bgcolor: "#E1F2ED",
+              color: "primary.main",
             }}
           >
             {icon}

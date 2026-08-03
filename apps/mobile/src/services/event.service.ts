@@ -49,8 +49,9 @@ interface WireRsvp {
 }
 
 const RSVP_STATUSES = new Set<WireRsvp['status']>(['GOING', 'MAYBE', 'NOT_GOING']);
-const MAX_EVENT_PAGE_SIZE = 100;
+const MAX_EVENT_PAGE_SIZE = 50;
 const DEFAULT_EVENT_PAGE_SIZE = 20;
+export const EVENT_PAGE_SIZE = 25;
 const MAX_EVENT_ID_LENGTH = 128;
 const MAX_EVENT_TITLE_LENGTH = 200;
 const MAX_EVENT_DESCRIPTION_LENGTH = 5_000;
@@ -263,7 +264,18 @@ const eventService = {
       ...(upcoming ? { upcoming: true, sortOrder: params?.sortOrder ?? 'asc' } : {}),
     };
     const { data } = await api.get<unknown>(`/events/church/${encodeURIComponent(churchId)}`, { params: query });
-    const payload = unwrapEventData(data, 'The server returned invalid events.');
+    const canonical = unwrapApiData(data, 'The server returned invalid events.');
+    let payload: unknown = canonical;
+    let pagedTotal: unknown;
+    if (params?.page !== undefined) {
+      if (typeof canonical !== 'object' || canonical === null || Array.isArray(canonical)) {
+        throw new Error('The server returned invalid events.');
+      }
+      payload = (canonical as { data?: unknown }).data;
+      pagedTotal = (canonical as { total?: unknown }).total;
+    } else {
+      payload = unwrapEventData(data, 'The server returned invalid events.');
+    }
     if (!Array.isArray(payload)) throw new Error('The server returned invalid events.');
     if (payload.length > pageSize) throw new Error('The server returned too many events.');
     const normalized = payload.map((wire) => normalizeEvent(wire, churchId));
@@ -281,13 +293,16 @@ const eventService = {
         .filter((event) => new Date(event.endDate).getTime() >= Date.now())
         .sort((first, second) => new Date(first.startDate).getTime() - new Date(second.startDate).getTime())
       : events;
-    const reportedTotal = envelopeTotal(data) ?? payload.length;
+    if (params?.page !== undefined && pagedTotal === undefined) {
+      throw new Error('The server returned an invalid event total.');
+    }
+    const reportedTotal = pagedTotal ?? envelopeTotal(data) ?? payload.length;
     if (!Number.isSafeInteger(reportedTotal) || Number(reportedTotal) < normalized.length) {
       throw new Error('The server returned an invalid event total.');
     }
     return {
       events: visibleEvents,
-      total: upcoming ? visibleEvents.length : Number(reportedTotal),
+      total: params?.page === undefined && upcoming ? visibleEvents.length : Number(reportedTotal),
     };
   },
 
@@ -296,7 +311,9 @@ const eventService = {
     if (!validEventId(churchId) || !validEventId(memberId)) {
       throw new Error('The member identity is incomplete.');
     }
-    const { data } = await api.get<unknown>(`/events/${encodeURIComponent(id)}`);
+    const { data } = await api.get<unknown>(`/events/${encodeURIComponent(id)}`, {
+      params: { upcoming: true },
+    });
     const event = normalizeEvent(
       unwrapEventData(data, 'The server returned an invalid event.'),
       churchId,
@@ -337,7 +354,7 @@ const eventService = {
     if (!Number.isSafeInteger(requestedLimit) || requestedLimit < 1 || requestedLimit > 50) {
       throw new Error('The requested upcoming-event count is invalid.');
     }
-    const result = await this.getEvents(churchId, memberId, { limit: Math.max(requestedLimit, 50), upcoming: true });
+    const result = await this.getEvents(churchId, memberId, { limit: 50, upcoming: true });
     return result.events.slice(0, requestedLimit);
   },
 

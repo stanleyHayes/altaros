@@ -1,2 +1,6 @@
 .expo/
 dist/
+android/
+ios/
+google-services.json
+GoogleService-Info.plist

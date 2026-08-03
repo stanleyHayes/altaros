@@ -17,6 +17,32 @@ describe('welfare service contract', () => {
     expect(mockedApi.get).toHaveBeenCalledWith('/welfare/my-requests');
   });
 
+  it('loads a bounded private-history page with its authoritative total', async () => {
+    const request = {
+      id: 'case-1', churchId: 'church-1', memberId: 'member-1', category: 'housing',
+      description: 'Temporary accommodation support', urgency: 'high', isAnonymous: true,
+      status: 'under_review', createdAt: '2026-08-01T08:00:00Z',
+    };
+    mockedApi.get.mockResolvedValueOnce({ data: {
+      success: true, data: { data: [request], total: 26 },
+    } } as never);
+    await expect(welfareService.listMinePage('church-1', 'member-1', 2, 25))
+      .resolves.toEqual({ requests: [request], total: 26 });
+    expect(mockedApi.get).toHaveBeenCalledWith('/welfare/my-requests', {
+      params: { page: 2, limit: 25 },
+    });
+  });
+
+  it.each([[0, 25], [1.5, 25], [1, 0], [1, 51]])(
+    'rejects an unsafe welfare history page before transport: %s/%s',
+    async (page, limit) => {
+      const callsBefore = mockedApi.get.mock.calls.length;
+      await expect(welfareService.listMinePage('church-1', 'member-1', page, limit))
+        .rejects.toThrow('page is invalid');
+      expect(mockedApi.get).toHaveBeenCalledTimes(callsBefore);
+    },
+  );
+
   it('preserves category, urgency, description, and anonymity on submission', async () => {
     const payload: CreateWelfareRequest = {
       category: 'housing',

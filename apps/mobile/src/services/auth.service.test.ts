@@ -4,12 +4,16 @@ import authService, {
   normalizeAuthResponse,
   normalizeCurrentChurch,
   normalizeOtpDispatch,
+  normalizeLogoutAcknowledgement,
   normalizePhone,
   normalizeRegistrationChurch,
   normalizeRegistrationResponse,
   resolveChurchCode,
+  RegistrationOutcomeUnknownError,
+  OtpDeliveryUnknownError,
   normalizeUser,
 } from './auth.service';
+import { AxiosError } from 'axios';
 import { session } from './session';
 import { isTerminalMemberSessionError, MemberSessionIdentityError } from './api-error';
 
@@ -41,20 +45,20 @@ describe('auth wire normalization', () => {
 
   it('normalizes the Go result shape and name fields', () => {
     expect(normalizeAuthResponse({
-      user: { id: 'member-1', name: 'Ama Mensah', email: 'ama@example.com', phone: '+233241234567', avatarUrl: 'https://example.com/ama.jpg', churchId: 'church-1', role: 'MEMBER' },
+      user: { id: 'member-1', memberId: 'profile-1', name: 'Ama Mensah', email: 'ama@example.com', phone: '+233241234567', avatarUrl: 'https://example.com/ama.jpg', churchId: 'church-1', role: 'MEMBER' },
       tokens: { accessToken: 'access', refreshToken: 'refresh' },
     })).toEqual({
       accessToken: 'access',
       refreshToken: 'refresh',
       user: {
-        id: 'member-1', firstName: 'Ama', lastName: 'Mensah', email: 'ama@example.com', phone: '+233241234567', avatar: 'https://example.com/ama.jpg', churchId: 'church-1', churchName: undefined, role: 'MEMBER',
+        id: 'member-1', memberId: 'profile-1', firstName: 'Ama', lastName: 'Mensah', email: 'ama@example.com', phone: '+233241234567', avatar: 'https://example.com/ama.jpg', churchId: 'church-1', churchName: undefined, role: 'MEMBER',
       },
     });
   });
 
   it('keeps compatibility with the legacy flat token response', () => {
     expect(normalizeAuthResponse({
-      user: { id: 'member-2', churchId: 'church-1', firstName: 'Kojo', lastName: 'Asare' },
+      user: { id: 'member-2', memberId: 'profile-2', churchId: 'church-1', firstName: 'Kojo', lastName: 'Asare' },
       accessToken: 'legacy-access',
       refreshToken: 'legacy-refresh',
     }).user).toMatchObject({ firstName: 'Kojo', lastName: 'Asare', role: 'MEMBER' });
@@ -64,7 +68,7 @@ describe('auth wire normalization', () => {
     expect(normalizeAuthResponse({
       success: true,
       data: {
-        user: { id: 'member-2', churchId: 'church-1', name: 'Kojo Asare' },
+        user: { id: 'member-2', memberId: 'profile-2', churchId: 'church-1', name: 'Kojo Asare' },
         tokens: { accessToken: 'access', refreshToken: 'refresh' },
       },
     })).toMatchObject({ user: { firstName: 'Kojo' }, accessToken: 'access' });
@@ -79,6 +83,24 @@ describe('auth wire normalization', () => {
     expect(() => normalizeOtpDispatch({ success: false, data: { message: 'No' } })).toThrow();
   });
 
+  it('requires an exact session-revocation acknowledgement', () => {
+    expect(normalizeLogoutAcknowledgement({
+      message: 'Signed out on all devices.', deviceCleanupConfirmed: true,
+    }, 'all')).toEqual({
+      message: 'Signed out on all devices.', deviceCleanupConfirmed: true,
+    });
+    expect(normalizeLogoutAcknowledgement({
+      success: true,
+      data: { message: 'Signed out.', deviceCleanupConfirmed: false },
+    }, 'current')).toEqual({
+      message: 'Signed out.', deviceCleanupConfirmed: false,
+    });
+    expect(() => normalizeLogoutAcknowledgement({ message: 'Signed out.' }, 'all'))
+      .toThrow('did not confirm');
+    expect(() => normalizeLogoutAcknowledgement('<html>ok</html>', 'all'))
+      .toThrow('did not confirm');
+  });
+
   it('rejects an incomplete session response', () => {
     expect(() => normalizeAuthResponse({ user: { id: 'member-3' } })).toThrow('invalid session');
   });
@@ -88,22 +110,22 @@ describe('auth wire normalization', () => {
     {},
     { id: '', churchId: 'church-1' },
     { id: 'member-1' },
-    { id: 'member-1', churchId: 'church-1', email: 42 },
-    { id: 'member-1', churchId: 'church-1', role: 'PASTOR' },
+    { id: 'member-1', memberId: 'profile-1', churchId: 'church-1', email: 42 },
+    { id: 'member-1', memberId: 'profile-1', churchId: 'church-1', role: 'PASTOR' },
     { id: 'member/unsafe', churchId: 'church-1' },
-    { id: 'member-1', churchId: 'church-1', email: 'not-an-email' },
-    { id: 'member-1', churchId: 'church-1', phone: '+123' },
-    { id: 'member-1', churchId: 'church-1', firstName: 'Ama\nAdmin' },
-    { id: 'member-1', churchId: 'church-1', churchName: 'c'.repeat(161) },
+    { id: 'member-1', memberId: 'profile-1', churchId: 'church-1', email: 'not-an-email' },
+    { id: 'member-1', memberId: 'profile-1', churchId: 'church-1', phone: '+123' },
+    { id: 'member-1', memberId: 'profile-1', churchId: 'church-1', firstName: 'Ama\nAdmin' },
+    { id: 'member-1', memberId: 'profile-1', churchId: 'church-1', churchName: 'c'.repeat(161) },
   ])('rejects a malformed member identity before it can mount private navigation', (user) => {
     expect(() => normalizeUser(user)).toThrow('invalid member identity');
   });
 
   it.each([
-    { user: { id: 'member-1', churchId: 'church-1' }, tokens: { accessToken: 42, refreshToken: 'refresh' } },
-    { user: { id: 'member-1', churchId: 'church-1' }, tokens: { accessToken: 'access', refreshToken: ' ' } },
-    { user: { id: 'member-1', churchId: 'church-1' }, tokens: { accessToken: 'access\nunsafe', refreshToken: 'refresh' } },
-    { user: { id: 'member-1', churchId: 'church-1' }, tokens: { accessToken: 'same', refreshToken: 'same' } },
+    { user: { id: 'member-1', memberId: 'profile-1', churchId: 'church-1' }, tokens: { accessToken: 42, refreshToken: 'refresh' } },
+    { user: { id: 'member-1', memberId: 'profile-1', churchId: 'church-1' }, tokens: { accessToken: 'access', refreshToken: ' ' } },
+    { user: { id: 'member-1', memberId: 'profile-1', churchId: 'church-1' }, tokens: { accessToken: 'access\nunsafe', refreshToken: 'refresh' } },
+    { user: { id: 'member-1', memberId: 'profile-1', churchId: 'church-1' }, tokens: { accessToken: 'same', refreshToken: 'same' } },
     { user: {}, tokens: { accessToken: 'access', refreshToken: 'refresh' } },
   ])('rejects a malformed authentication envelope', (response) => {
     expect(() => normalizeAuthResponse(response)).toThrow();
@@ -114,22 +136,29 @@ describe('auth wire normalization', () => {
     await expect(authService.getStoredUser()).rejects.toThrow('invalid member identity');
   });
 
+  it('reconciles an account-only legacy cache instead of discarding its valid token', async () => {
+    (session.getUser as jest.Mock).mockResolvedValueOnce({
+      id: 'account-legacy', churchId: 'church-1', role: 'MEMBER',
+    });
+    await expect(authService.getStoredUser()).resolves.toBeNull();
+  });
+
   it('gives unnamed users a stable member label', () => {
-    expect(normalizeUser({ id: 'member-4', churchId: 'church-1' }).firstName).toBe('Member');
+    expect(normalizeUser({ id: 'member-4', memberId: 'profile-4', churchId: 'church-1' }).firstName).toBe('Member');
   });
 
   it('canonicalizes returned email and phone before caching member identity', () => {
     expect(normalizeUser({
-      id: 'member-4', churchId: 'church-1', email: ' AMA@EXAMPLE.COM ', phone: '024 123 4567',
+      id: 'member-4', memberId: 'profile-4', churchId: 'church-1', email: ' AMA@EXAMPLE.COM ', phone: '024 123 4567',
     })).toMatchObject({ email: 'ama@example.com', phone: '+233241234567' });
   });
 
   it('drops an unsafe avatar URL instead of fetching it after sign-in', () => {
     expect(normalizeUser({
-      id: 'member-4', churchId: 'church-1', avatarUrl: 'http://tracker.example/avatar.jpg',
+      id: 'member-4', memberId: 'profile-4', churchId: 'church-1', avatarUrl: 'http://tracker.example/avatar.jpg',
     }).avatar).toBeUndefined();
     expect(normalizeUser({
-      id: 'member-4', churchId: 'church-1', avatarUrl: 'https://cdn.example/avatar.jpg',
+      id: 'member-4', memberId: 'profile-4', churchId: 'church-1', avatarUrl: 'https://cdn.example/avatar.jpg',
     }).avatar).toBe('https://cdn.example/avatar.jpg');
   });
 
@@ -177,25 +206,25 @@ describe('auth wire normalization', () => {
 
   it('enriches the current profile with the validated current church name', async () => {
     mockedApi.get
-      .mockResolvedValueOnce({ data: { success: true, data: { id: 'member-1', churchId: 'church-1', name: 'Ama Mensah', role: 'MEMBER' } } } as never)
+      .mockResolvedValueOnce({ data: { success: true, data: { id: 'member-1', memberId: 'profile-1', churchId: 'church-1', name: 'Ama Mensah', role: 'MEMBER' } } } as never)
       .mockResolvedValueOnce({ data: { id: 'church-1', name: 'Grace Chapel', isActive: true } } as never);
 
-    await expect(authService.getCurrentUser({ id: 'member-1', churchId: 'church-1' }))
+    await expect(authService.getCurrentUser({ id: 'member-1', memberId: 'profile-1', churchId: 'church-1' }))
       .resolves.toMatchObject({
-      id: 'member-1', churchId: 'church-1', churchName: 'Grace Chapel',
+      id: 'member-1', memberId: 'profile-1', churchId: 'church-1', churchName: 'Grace Chapel',
     });
     expect(session.commitAuthenticatedSessionIf).not.toHaveBeenCalled();
   });
 
   it.each([
-    [{ id: 'member-2', churchId: 'church-1' }, 'another member'],
-    [{ id: 'member-1', churchId: 'church-2' }, 'another church'],
+    [{ id: 'member-2', memberId: 'profile-2', churchId: 'church-1' }, 'another member'],
+    [{ id: 'member-1', memberId: 'profile-1', churchId: 'church-2' }, 'another church'],
   ])('rejects a current-profile response for %s', async (returnedUser) => {
     mockedApi.get.mockResolvedValueOnce({ data: {
       ...returnedUser, name: 'Other Member', role: 'MEMBER',
     } } as never);
 
-    const result = authService.getCurrentUser({ id: 'member-1', churchId: 'church-1' });
+    const result = authService.getCurrentUser({ id: 'member-1', memberId: 'profile-1', churchId: 'church-1' });
     await expect(result).rejects.toBeInstanceOf(MemberSessionIdentityError);
     await expect(result).rejects.toThrow('another member');
     expect(session.commitAuthenticatedSessionIf).not.toHaveBeenCalled();
@@ -208,7 +237,7 @@ describe('auth wire normalization', () => {
   it('uses the just-issued token to enrich a new login before secure persistence', async () => {
     mockedApi.post.mockResolvedValueOnce({
       data: {
-        user: { id: 'member-1', churchId: 'church-1', name: 'Ama Mensah', email: 'ama@example.com', role: 'MEMBER' },
+        user: { id: 'member-1', memberId: 'profile-1', churchId: 'church-1', name: 'Ama Mensah', email: 'ama@example.com', role: 'MEMBER' },
         tokens: { accessToken: 'new-access', refreshToken: 'new-refresh' },
       },
     } as never);
@@ -216,7 +245,7 @@ describe('auth wire normalization', () => {
       data: { id: 'church-1', name: 'Grace Chapel', isActive: true },
     } as never);
 
-    await expect(authService.login({ email: 'ama@example.com', password: 'secret' }))
+    await expect(authService.login({ email: 'ama@example.com', password: 'secret', workspace: 'grace-chapel-accra' }))
       .resolves.toMatchObject({ user: { churchName: 'Grace Chapel' } });
     expect(mockedApi.get).toHaveBeenCalledWith('/churches/current', {
       headers: { Authorization: 'Bearer new-access' },
@@ -237,6 +266,33 @@ describe('auth wire normalization', () => {
     expect(normalizePhone('+2348012345678')).toBe('+2348012345678');
   });
 
+  it('keeps the canonical church workspace on OTP dispatch', async () => {
+    mockedApi.post.mockResolvedValueOnce({ data: { message: 'Code sent' } } as never);
+
+    await expect(authService.requestOtp('024 123 4567', ' Grace-Chapel-Accra '))
+      .resolves.toEqual({ message: 'Code sent' });
+    expect(mockedApi.post).toHaveBeenCalledWith('/auth/request-otp', {
+      phone: '+233241234567',
+      workspace: 'grace-chapel-accra',
+    });
+  });
+
+  it('classifies only response-less OTP dispatch as delivery unknown', async () => {
+    mockedApi.post.mockRejectedValueOnce(new AxiosError('timeout', 'ECONNABORTED'));
+    await expect(authService.requestOtp('0241234567', 'grace-chapel'))
+      .rejects.toBeInstanceOf(OtpDeliveryUnknownError);
+
+    const rejection = new AxiosError('rejected', 'ERR_BAD_REQUEST', undefined, undefined, { status: 429 } as never);
+    mockedApi.post.mockRejectedValueOnce(rejection);
+    await expect(authService.requestOtp('0241234567', 'grace-chapel')).rejects.toBe(rejection);
+  });
+
+  it.each(['../admin', 'grace chapel', '-grace', 'grace-', 'grace--chapel', 'grace/church'])('rejects invalid workspace selector %s', async (workspace) => {
+    await expect(authService.requestOtp('0241234567', workspace))
+      .rejects.toThrow('church workspace provided by your church');
+    expect(mockedApi.post).not.toHaveBeenCalled();
+  });
+
   it.each(['', '024', '024123456789', '+123', 'phone 0241234567'])('rejects unusable phone input %s', (value) => {
     expect(canonicalPhone(value)).toBeNull();
   });
@@ -247,19 +303,19 @@ describe('auth wire normalization', () => {
 
   it('normalizes password-login input and rejects invalid credentials before transport', async () => {
     mockedApi.post.mockResolvedValueOnce({ data: {
-      user: { id: 'member-1', churchId: 'church-1', email: 'ama@example.com' },
+      user: { id: 'member-1', memberId: 'profile-1', churchId: 'church-1', email: 'ama@example.com' },
       tokens: { accessToken: 'access', refreshToken: 'refresh' },
     } } as never);
-    await authService.login({ email: ' AMA@EXAMPLE.COM ', password: 'secret', method: 'PASSWORD' });
+    await authService.login({ email: ' AMA@EXAMPLE.COM ', password: 'secret', method: 'PASSWORD', workspace: ' Grace-Chapel-Accra ' });
     expect(mockedApi.post).toHaveBeenCalledWith('/auth/login', {
-      email: 'ama@example.com', password: 'secret', method: 'PASSWORD',
+      email: 'ama@example.com', password: 'secret', method: 'PASSWORD', workspace: 'grace-chapel-accra',
     });
 
     jest.clearAllMocks();
-    await expect(authService.login({ email: 'not-an-email', password: 'secret', method: 'PASSWORD' }))
-      .rejects.toThrow('valid email and password');
-    await expect(authService.login({ email: 'ama@example.com', password: 'x'.repeat(73), method: 'PASSWORD' }))
-      .rejects.toThrow('valid email and password');
+    await expect(authService.login({ email: 'not-an-email', password: 'secret', method: 'PASSWORD', workspace: 'grace' }))
+      .rejects.toThrow('valid church workspace');
+    await expect(authService.login({ email: 'ama@example.com', password: 'x'.repeat(73), method: 'PASSWORD', workspace: 'grace' }))
+      .rejects.toThrow('valid church workspace');
     expect(mockedApi.post).not.toHaveBeenCalled();
   });
 
@@ -273,40 +329,40 @@ describe('auth wire normalization', () => {
   });
 
   it('rejects malformed OTP input before verification transport', async () => {
-    await expect(authService.verifyOtp({ phone: '0241234567', otp: '12345a' }))
+    await expect(authService.verifyOtp({ phone: '0241234567', otp: '12345a', workspace: 'grace-chapel-accra' }))
       .rejects.toThrow('full 6-digit code');
     expect(mockedApi.post).not.toHaveBeenCalled();
   });
 
   it('does not persist a password session returned for another email', async () => {
     mockedApi.post.mockResolvedValueOnce({ data: {
-      user: { id: 'member-2', churchId: 'church-1', email: 'other@example.com' },
+      user: { id: 'member-2', memberId: 'profile-2', churchId: 'church-1', email: 'other@example.com' },
       tokens: { accessToken: 'access', refreshToken: 'refresh' },
     } } as never);
 
-    await expect(authService.login({ email: 'ama@example.com', password: 'secret' }))
+    await expect(authService.login({ email: 'ama@example.com', password: 'secret', workspace: 'grace-chapel-accra' }))
       .rejects.toThrow('another member');
     expect(session.commitAuthenticatedSessionIf).not.toHaveBeenCalled();
     expect(mockedApi.get).not.toHaveBeenCalled();
   });
 
   it('binds OTP verification to the canonical phone and strips injected fields', async () => {
-    const input = { phone: '024 123 4567', otp: '123456', churchId: 'other-church' } as {
-      phone: string; otp: string; churchId: string;
+    const input = { phone: '024 123 4567', otp: '123456', workspace: ' Grace-Chapel-Accra ', churchId: 'other-church' } as {
+      phone: string; otp: string; workspace: string; churchId: string;
     };
     mockedApi.post.mockResolvedValueOnce({ data: {
       user: {
-        id: 'member-1', churchId: 'church-1', churchName: 'Grace Chapel',
+        id: 'member-1', memberId: 'profile-1', churchId: 'church-1', churchName: 'Grace Chapel',
         phone: '+233241234567', role: 'MEMBER',
       },
       tokens: { accessToken: 'access', refreshToken: 'refresh' },
     } } as never);
 
     await expect(authService.verifyOtp(input)).resolves.toMatchObject({
-      user: { id: 'member-1', phone: '+233241234567' },
+      user: { id: 'member-1', memberId: 'profile-1', phone: '+233241234567' },
     });
     expect(mockedApi.post).toHaveBeenCalledWith('/auth/verify-otp', {
-      otp: '123456', phone: '+233241234567',
+      otp: '123456', phone: '+233241234567', workspace: 'grace-chapel-accra',
     });
     expect(session.commitAuthenticatedSessionIf).toHaveBeenCalledWith(
       'access', 'refresh', expect.objectContaining({ id: 'member-1' }), expect.any(Function),
@@ -315,25 +371,25 @@ describe('auth wire normalization', () => {
 
   it('does not accept a valid login after its owning screen invalidates the attempt', async () => {
     mockedApi.post.mockResolvedValueOnce({ data: {
-      user: { id: 'member-1', churchId: 'church-1', email: 'ama@example.com', role: 'MEMBER' },
+      user: { id: 'member-1', memberId: 'profile-1', churchId: 'church-1', email: 'ama@example.com', role: 'MEMBER' },
       tokens: { accessToken: 'access', refreshToken: 'refresh' },
     } } as never);
     mockedApi.get.mockResolvedValueOnce({ data: { id: 'church-1', name: 'Grace Chapel' } } as never);
     (session.commitAuthenticatedSessionIf as jest.Mock).mockResolvedValueOnce(false);
 
     await expect(authService.login(
-      { email: 'ama@example.com', password: 'secret' },
+      { email: 'ama@example.com', password: 'secret', workspace: 'grace-chapel-accra' },
       () => false,
     )).rejects.toThrow('no longer active');
   });
 
   it('does not persist an OTP session returned for another phone', async () => {
     mockedApi.post.mockResolvedValueOnce({ data: {
-      user: { id: 'member-2', churchId: 'church-1', phone: '+233501234567' },
+      user: { id: 'member-2', memberId: 'profile-2', churchId: 'church-1', phone: '+233501234567' },
       tokens: { accessToken: 'access', refreshToken: 'refresh' },
     } } as never);
 
-    await expect(authService.verifyOtp({ phone: '0241234567', otp: '123456' }))
+    await expect(authService.verifyOtp({ phone: '0241234567', otp: '123456', workspace: 'grace-chapel-accra' }))
       .rejects.toThrow('another member');
     expect(session.commitAuthenticatedSessionIf).not.toHaveBeenCalled();
     expect(mockedApi.get).not.toHaveBeenCalled();
@@ -356,7 +412,7 @@ describe('auth wire normalization', () => {
         success: true,
         data: {
           user: {
-            id: 'user-1', name: 'Ama Mensah', churchId: 'church-1',
+            id: 'user-1', memberId: 'member-1', name: 'Ama Mensah', churchId: 'church-1',
             email: 'ama@example.com', phone: '+233241234567', role: 'MEMBER',
           },
           message: 'Account created. Verify your phone to continue.',
@@ -375,8 +431,28 @@ describe('auth wire normalization', () => {
       name: 'Ama Mensah', email: 'ama@example.com', phone: '+233241234567',
       password: 'password123', churchId: 'church-1',
     });
-    expect(result.user).toMatchObject({ id: 'user-1', firstName: 'Ama', churchId: 'church-1' });
+    expect(result.user).toMatchObject({ id: 'user-1', memberId: 'member-1', firstName: 'Ama', churchId: 'church-1' });
     expect(session.commitAuthenticatedSessionIf).not.toHaveBeenCalled();
+  });
+
+  it('marks only a response-less account-creation request as outcome-unknown', async () => {
+    mockedApi.get.mockResolvedValue({
+      data: { id: 'church-1', name: 'Grace Chapel', slug: 'grace-chapel-accra' },
+    } as never);
+    mockedApi.post.mockRejectedValueOnce(new AxiosError('timeout', 'ECONNABORTED'));
+
+    await expect(authService.register({
+      firstName: 'Ama', lastName: 'Mensah', email: 'ama@example.com',
+      phone: '0241234567', password: 'password123', churchCode: 'grace-chapel-accra',
+      confirmedChurchId: 'church-1',
+    })).rejects.toBeInstanceOf(RegistrationOutcomeUnknownError);
+
+    mockedApi.post.mockRejectedValueOnce(new Error('local validation boundary'));
+    await expect(authService.register({
+      firstName: 'Ama', lastName: 'Mensah', email: 'ama@example.com',
+      phone: '0241234567', password: 'password123', churchCode: 'grace-chapel-accra',
+      confirmedChurchId: 'church-1',
+    })).rejects.toThrow('local validation boundary');
   });
 
   it.each([
@@ -385,7 +461,7 @@ describe('auth wire normalization', () => {
   ])('rejects a registration acknowledgement with changed %s', (_label, changed) => {
     expect(() => normalizeRegistrationResponse({
       user: {
-        id: 'user-1', name: 'Ama Mensah', email: 'ama@example.com',
+        id: 'user-1', memberId: 'member-1', name: 'Ama Mensah', email: 'ama@example.com',
         churchId: 'church-1', phone: '+233241234567', role: 'MEMBER', ...changed,
       },
     }, 'church-1', '+233241234567', 'ama@example.com', 'Ama Mensah'))
@@ -398,7 +474,7 @@ describe('auth wire normalization', () => {
     } as never);
     mockedApi.post.mockResolvedValueOnce({ data: {
       user: {
-        id: 'user-1', name: 'Ama Mensah', churchId: 'church-2',
+        id: 'user-1', memberId: 'member-1', name: 'Ama Mensah', churchId: 'church-2',
         phone: '+233241234567', role: 'CHURCH_ADMIN',
       },
     } } as never);
@@ -428,7 +504,9 @@ describe('auth wire normalization', () => {
     (session.getAccessToken as jest.Mock)
       .mockResolvedValueOnce('access-token')
       .mockResolvedValueOnce('access-token');
-    mockedApi.post.mockResolvedValueOnce({ data: { message: 'Signed out.' } } as never);
+    mockedApi.post.mockResolvedValueOnce({ data: {
+      message: 'Signed out on all devices.', deviceCleanupConfirmed: true,
+    } } as never);
 
     await expect(authService.logoutEverywhere()).resolves.toBe(true);
 
@@ -447,6 +525,14 @@ describe('auth wire normalization', () => {
     expect(clearTokens).not.toHaveBeenCalled();
   });
 
+  it('keeps the current session when global revocation returns a malformed success body', async () => {
+    (session.getAccessToken as jest.Mock).mockResolvedValueOnce('access-token');
+    mockedApi.post.mockResolvedValueOnce({ data: { message: 'Signed out.' } } as never);
+
+    await expect(authService.logoutEverywhere()).rejects.toThrow('did not confirm');
+    expect(clearTokens).not.toHaveBeenCalled();
+  });
+
   it('does not clear this device while global revocation is still pending', async () => {
     (session.getAccessToken as jest.Mock)
       .mockResolvedValueOnce('access-token')
@@ -459,7 +545,9 @@ describe('auth wire normalization', () => {
     await Promise.resolve();
     expect(clearTokens).not.toHaveBeenCalled();
 
-    resolveRemote({ data: { message: 'Signed out.' } });
+    resolveRemote({ data: {
+      message: 'Signed out on all devices.', deviceCleanupConfirmed: true,
+    } });
     await expect(logout).resolves.toBe(true);
     expect(clearTokens).toHaveBeenCalledTimes(1);
   });
@@ -468,7 +556,9 @@ describe('auth wire normalization', () => {
     (session.getAccessToken as jest.Mock)
       .mockResolvedValueOnce('old-access-token')
       .mockResolvedValueOnce('new-access-token');
-    mockedApi.post.mockResolvedValueOnce({ data: { message: 'Signed out.' } } as never);
+    mockedApi.post.mockResolvedValueOnce({ data: {
+      message: 'Signed out on all devices.', deviceCleanupConfirmed: true,
+    } } as never);
 
     await expect(authService.logoutEverywhere()).resolves.toBe(false);
     expect(clearTokens).not.toHaveBeenCalled();
@@ -484,7 +574,7 @@ describe('auth wire normalization', () => {
     await Promise.resolve();
     expect(clearTokens).toHaveBeenCalled();
 
-    resolveRemote({ data: { message: 'Signed out.' } });
+    resolveRemote({ data: { message: 'Signed out.', deviceCleanupConfirmed: true } });
     await expect(logout).resolves.toBeUndefined();
   });
 

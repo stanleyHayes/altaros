@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 import { Box, Typography } from "@mui/material";
 import { ChurchRounded, Groups2Outlined, LockOutlined, PaymentsOutlined } from "@mui/icons-material";
 
-interface AuthLayoutProps { title: string; subtitle?: string; children: ReactNode }
+interface AuthLayoutProps { title: string; subtitle?: string; children: ReactNode; wide?: boolean }
 
 const signals = [
   { icon: Groups2Outlined, text: "Know who needs attention this week" },
@@ -10,7 +10,7 @@ const signals = [
   { icon: LockOutlined, text: "Role-based access for every ministry team" },
 ];
 
-export default function AuthLayout({ title, subtitle, children }: AuthLayoutProps) {
+export default function AuthLayout({ title, subtitle, children, wide = false }: AuthLayoutProps) {
   return (
     <Box sx={{ minHeight: "100dvh", display: "grid", gridTemplateColumns: { xs: "1fr", md: "minmax(0, 1.08fr) minmax(440px, .92fr)" }, bgcolor: "#F4F8F5" }}>
       <Box sx={{ display: { xs: "none", md: "flex" }, flexDirection: "column", justifyContent: "space-between", bgcolor: "#102A27", color: "#F5FAF7", p: { md: 6, lg: 8 }, minHeight: "100dvh" }}>
@@ -40,7 +40,7 @@ export default function AuthLayout({ title, subtitle, children }: AuthLayoutProp
           <Box sx={{ width: 38, height: 38, borderRadius: "13px", bgcolor: "#CFEFE6", color: "#102A27", display: "grid", placeItems: "center" }}><ChurchRounded sx={{ fontSize: 21 }} /></Box>
           <Typography sx={{ fontWeight: 800, color: "#102A27" }}>ALTAR OS</Typography>
         </Box>
-        <Box sx={{ width: "100%", maxWidth: 480, m: "auto" }}>
+        <Box sx={{ width: "100%", maxWidth: wide ? 720 : 480, m: "auto" }}>
           <Typography sx={{ color: "#197665", fontSize: ".72rem", fontWeight: 800, letterSpacing: ".14em", mb: 1.5 }}>CHURCH DASHBOARD</Typography>
           <Typography variant="h3" component="h2" sx={{ color: "#102A27", fontWeight: 750, fontSize: { xs: "2rem", sm: "2.45rem" }, letterSpacing: "-.04em", mb: 1 }}>{title}</Typography>
           {subtitle ? <Typography sx={{ color: "#58706C", mb: 4 }}>{subtitle}</Typography> : null}

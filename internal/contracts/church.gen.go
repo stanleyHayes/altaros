@@ -19,23 +19,27 @@ const (
 )
 
 type Church struct {
-	ID        string     `json:"id"`
-	Name      string     `json:"name"`
-	Slug      string     `json:"slug"`
-	Address   string     `json:"address"`
-	City      string     `json:"city"`
-	Country   string     `json:"country"`
-	Phone     string     `json:"phone"`
-	Email     string     `json:"email"`
-	Website   *string    `json:"website,omitempty"`
-	LogoURL   *string    `json:"logoUrl,omitempty"`
-	BannerURL *string    `json:"bannerUrl,omitempty"`
-	Timezone  string     `json:"timezone"`
-	Currency  string     `json:"currency"`
-	Plan      ChurchPlan `json:"plan"`
-	IsActive  bool       `json:"isActive"`
-	CreatedAt time.Time  `json:"createdAt"`
-	UpdatedAt time.Time  `json:"updatedAt"`
+	ID                      string      `json:"id"`
+	Name                    string      `json:"name"`
+	Slug                    string      `json:"slug"`
+	Address                 string      `json:"address"`
+	City                    string      `json:"city"`
+	Country                 string      `json:"country"`
+	Phone                   string      `json:"phone"`
+	Email                   string      `json:"email"`
+	Website                 *string     `json:"website,omitempty"`
+	LogoURL                 *string     `json:"logoUrl,omitempty"`
+	BannerURL               *string     `json:"bannerUrl,omitempty"`
+	Timezone                string      `json:"timezone"`
+	Currency                string      `json:"currency"`
+	Plan                    ChurchPlan  `json:"plan"`
+	RequestedPlan           *ChurchPlan `json:"requestedPlan,omitempty"`
+	Denomination            *string     `json:"denomination,omitempty"`
+	AverageWeeklyAttendance *float64    `json:"averageWeeklyAttendance,omitempty"`
+	MinistryPriorities      []string    `json:"ministryPriorities,omitempty"`
+	IsActive                bool        `json:"isActive"`
+	CreatedAt               time.Time   `json:"createdAt"`
+	UpdatedAt               time.Time   `json:"updatedAt"`
 }
 
 type ChurchSettings struct {

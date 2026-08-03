@@ -19,12 +19,12 @@ export function setNotificationHandler(): void {
   // subscription and delivery contract exists.
 }
 
-export async function getPermissionsAsync(): Promise<{ status: PermissionStatus }> {
-  return { status: 'denied' };
+export async function getPermissionsAsync(): Promise<{ status: PermissionStatus; canAskAgain: boolean }> {
+  return { status: 'denied', canAskAgain: false };
 }
 
-export async function requestPermissionsAsync(): Promise<{ status: PermissionStatus }> {
-  return { status: 'denied' };
+export async function requestPermissionsAsync(): Promise<{ status: PermissionStatus; canAskAgain: boolean }> {
+  return { status: 'denied', canAskAgain: false };
 }
 
 export async function getDevicePushTokenAsync(): Promise<never> {

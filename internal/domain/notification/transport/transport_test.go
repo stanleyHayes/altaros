@@ -252,13 +252,17 @@ func TestPushSuccessReturnsMessageName(t *testing.T) {
 		if !strings.Contains(r.URL.Path, "/v1/projects/altar/messages:send") {
 			t.Errorf("unexpected path %q", r.URL.Path)
 		}
+		raw, _ := io.ReadAll(r.Body)
+		if !strings.Contains(string(raw), `"deepLink":"altaros://events/event_1"`) {
+			t.Errorf("push omitted deep link data: %s", raw)
+		}
 		w.WriteHeader(200)
 		_, _ = w.Write([]byte(`{"name":"projects/altar/messages/0:1234"}`))
 	})
 
 	push := NewPush(PushConfig{ProjectID: "altar", TokenSource: StaticToken("tok"), BaseURL: srv.URL})
 	name, err := push.Send(context.Background(), "device", notification.Message{
-		Subject: "Grace Chapel", Body: "Service moves to 9am.",
+		Subject: "Grace Chapel", Body: "Service moves to 9am.", DeepLink: "altaros://events/event_1",
 	})
 	if err != nil {
 		t.Fatalf("Send: %v", err)

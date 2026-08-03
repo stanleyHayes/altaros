@@ -15,6 +15,10 @@ export interface Church {
   timezone: string;
   currency: string;
   plan: ChurchPlan;
+  requestedPlan?: ChurchPlan;
+  denomination?: string;
+  averageWeeklyAttendance?: number;
+  ministryPriorities?: string[];
   isActive: boolean;
   createdAt: Date;
   updatedAt: Date;

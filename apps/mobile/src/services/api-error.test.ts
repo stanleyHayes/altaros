@@ -1,6 +1,7 @@
 import { AxiosError, AxiosHeaders } from 'axios';
 import {
   apiErrorMessage,
+  isAmbiguousMutationFailure,
   httpStatus,
   isAuthenticationRejection,
   isTerminalMemberSessionError,
@@ -25,6 +26,13 @@ describe('API error classification', () => {
 
   it('does not invent a status for non-Axios failures', () => {
     expect(httpStatus(new Error('offline'))).toBeUndefined();
+  });
+
+  it('classifies only response-less Axios mutations as outcome-unknown', () => {
+    expect(isAmbiguousMutationFailure(new AxiosError('timeout', 'ECONNABORTED'))).toBe(true);
+    expect(isAmbiguousMutationFailure(new AxiosError('Network Error', 'ERR_NETWORK'))).toBe(true);
+    expect(isAmbiguousMutationFailure(responseError(500))).toBe(false);
+    expect(isAmbiguousMutationFailure(new Error('offline'))).toBe(false);
   });
 
   it('ends a cached member session only for an authoritative rejection or missing member', () => {

@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Outlet, Navigate } from "react-router-dom";
-import { Box, CircularProgress } from "@mui/material";
+import { Box, Skeleton } from "@mui/material";
 import { useAuth } from "@/hooks/useAuth";
 import Sidebar from "./Sidebar";
 import Header from "./Header";
@@ -13,14 +13,14 @@ export default function MainLayout() {
     return (
       <Box
         sx={{
-          height: "100vh",
+          minHeight: "100dvh",
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
           bgcolor: "background.default",
         }}
       >
-        <CircularProgress />
+        <Box sx={{ width: 320 }}><Skeleton variant="rounded" height={72} /><Skeleton sx={{ mt: 2 }} /><Skeleton width="65%" /></Box>
       </Box>
     );
   }
@@ -30,7 +30,7 @@ export default function MainLayout() {
   }
 
   return (
-    <Box sx={{ display: "flex", minHeight: "100vh" }}>
+    <Box sx={{ display: "flex", minHeight: "100dvh", bgcolor: "background.default" }}>
       <Sidebar
         open={sidebarOpen}
         onClose={() => setSidebarOpen(false)}
@@ -40,6 +40,7 @@ export default function MainLayout() {
           flex: 1,
           display: "flex",
           flexDirection: "column",
+          minWidth: 0,
           overflow: "hidden",
         }}
       >
@@ -49,12 +50,12 @@ export default function MainLayout() {
           data-route-scroll-container
           sx={{
             flex: 1,
-            p: { xs: 2, sm: 3 },
+            p: { xs: 2, sm: 3, xl: 4 },
             bgcolor: "background.default",
             overflow: "auto",
           }}
         >
-          <Outlet />
+          <Box sx={{ width: "100%", maxWidth: 1540, mx: "auto" }}><Outlet /></Box>
         </Box>
       </Box>
     </Box>

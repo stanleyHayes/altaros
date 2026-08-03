@@ -86,28 +86,28 @@ export const NAV_ITEMS: NavItem[] = [
     path: '/departments',
     icon: <DepartmentsIcon />,
     requires: ['church:read'],
-    inSidebar: false,
+    inSidebar: true,
   },
   {
     label: 'Families',
     path: '/families',
     icon: <FamiliesIcon />,
     requires: ['member:read'],
-    inSidebar: false,
+    inSidebar: true,
   },
   {
     label: 'AI Assistant',
     path: '/ai',
     icon: <AiIcon />,
     requires: ['member:read'],
-    inSidebar: false,
+    inSidebar: true,
   },
   {
     label: 'Inter-church',
     path: '/inter-church',
     icon: <InterChurchIcon />,
     requires: ['church:read'],
-    inSidebar: false,
+    inSidebar: true,
   },
   {
     label: 'People & Roles',
@@ -121,7 +121,7 @@ export const NAV_ITEMS: NavItem[] = [
     path: '/settings',
     icon: <SettingsIcon />,
     requires: ['settings:read'],
-    inSidebar: false,
+    inSidebar: true,
   },
 ];
 

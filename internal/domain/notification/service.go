@@ -193,13 +193,11 @@ func (s *Service) Send(ctx context.Context, msg Message) (*Notification, error) 
 	address := msg.Address
 	if address == "" {
 		if msg.Channel == ChannelPush {
-			tokens, tokenErr := s.DeviceTokens(ctx, msg.MemberID)
+			devices, tokenErr := s.DeviceRegistrations(ctx, msg.MemberID)
 			if tokenErr != nil {
 				return nil, fmt.Errorf("notification: resolve device tokens: %w", tokenErr)
 			}
-			if len(tokens) > 0 {
-				address = tokens[0]
-			}
+			address = newestPushAddress(devices)
 		}
 	}
 	if address == "" {
@@ -252,6 +250,15 @@ func (s *Service) Send(ctx context.Context, msg Message) (*Notification, error) 
 	return s.attempt(ctx, queued, msg)
 }
 
+func newestPushAddress(devices []DeviceRegistration) string {
+	for _, device := range devices {
+		if address, err := PushAddress(device.Platform, device.Token); err == nil {
+			return address
+		}
+	}
+	return ""
+}
+
 // attempt calls the transport and records the outcome.
 func (s *Service) attempt(ctx context.Context, n *Notification, msg Message) (*Notification, error) {
 	transport, ok := s.transports[n.Channel]
@@ -267,7 +274,11 @@ func (s *Service) attempt(ctx context.Context, n *Notification, msg Message) (*N
 		return s.finish(ctx, n.ID, StatusSent, ref, "")
 	}
 	if n.Channel == ChannelPush && errors.Is(err, ErrUnregisteredDevice) {
-		if _, pruneErr := s.devices.DeleteOne(ctx, bson.M{"token": n.Address}); pruneErr != nil {
+		_, token, parseErr := ParsePushAddress(n.Address)
+		if parseErr != nil {
+			return nil, fmt.Errorf("notification: parse rejected device: %w", parseErr)
+		}
+		if _, pruneErr := s.devices.DeleteOne(ctx, bson.M{"token": token}); pruneErr != nil {
 			return nil, fmt.Errorf("notification: prune unregistered device: %w", pruneErr)
 		}
 	}
@@ -318,6 +329,7 @@ func (s *Service) Retry(ctx context.Context, limit int64) (int, error) {
 			Subject:   n.Subject,
 			Body:      n.Body,
 			DedupeKey: n.DedupeKey,
+			DeepLink:  n.DeepLink,
 		})
 		if err != nil {
 			// One undeliverable message must not stop the queue.
@@ -391,6 +403,9 @@ func (s *Service) record(ctx context.Context, msg Message, address string, statu
 	}
 	if msg.DedupeKey != "" {
 		doc["dedupeKey"] = msg.DedupeKey
+	}
+	if msg.DeepLink != "" {
+		doc["deepLink"] = msg.DeepLink
 	}
 
 	res, err := s.coll.InsertOne(ctx, doc)
@@ -512,18 +527,36 @@ func (s *Service) byDedupeKey(ctx context.Context, key string) (*Notification, e
 // History returns a member's messages, newest first, so a church can answer
 // "did they get told?".
 func (s *Service) History(ctx context.Context, memberID string, limit int64) ([]Notification, error) {
+	return s.HistoryPage(ctx, memberID, limit, 0)
+}
+
+// HistoryPage returns a stable window of a member's messages, newest first.
+func (s *Service) HistoryPage(ctx context.Context, memberID string, limit, offset int64) ([]Notification, error) {
 	if limit <= 0 || limit > 500 {
 		limit = 100
+	}
+	if offset < 0 {
+		offset = 0
 	}
 	var out []Notification
 	err := s.coll.Find(ctx, bson.M{"memberId": memberID}, &out,
 		options.Find().
 			SetSort(bson.D{{Key: "createdAt", Value: -1}, {Key: "_id", Value: -1}}).
-			SetLimit(limit))
+			SetLimit(limit).
+			SetSkip(offset))
 	if err != nil {
 		return nil, fmt.Errorf("notification: history: %w", err)
 	}
 	return out, nil
+}
+
+// HistoryCount is the authoritative size of a member's tenant-scoped inbox.
+func (s *Service) HistoryCount(ctx context.Context, memberID string) (int64, error) {
+	total, err := s.coll.CountDocuments(ctx, bson.M{"memberId": memberID})
+	if err != nil {
+		return 0, fmt.Errorf("notification: count history: %w", err)
+	}
+	return total, nil
 }
 
 // MarkRead records inbox state without rewriting transport delivery status.
@@ -615,6 +648,19 @@ func (s *Service) RemoveDevices(ctx context.Context, memberID, family string) er
 
 // DeviceTokens returns the newest native registrations for a member.
 func (s *Service) DeviceTokens(ctx context.Context, memberID string) ([]string, error) {
+	devices, err := s.DeviceRegistrations(ctx, memberID)
+	if err != nil {
+		return nil, err
+	}
+	tokens := make([]string, 0, len(devices))
+	for _, device := range devices {
+		tokens = append(tokens, device.Token)
+	}
+	return tokens, nil
+}
+
+// DeviceRegistrations returns immutable provider routing alongside each token.
+func (s *Service) DeviceRegistrations(ctx context.Context, memberID string) ([]DeviceRegistration, error) {
 	if memberID == "" {
 		return nil, ErrNoRecipient
 	}
@@ -623,11 +669,7 @@ func (s *Service) DeviceTokens(ctx context.Context, memberID string) ([]string, 
 		options.Find().SetSort(bson.D{{Key: "updatedAt", Value: -1}}).SetLimit(20)); err != nil {
 		return nil, fmt.Errorf("notification: list devices: %w", err)
 	}
-	tokens := make([]string, 0, len(devices))
-	for _, device := range devices {
-		tokens = append(tokens, device.Token)
-	}
-	return tokens, nil
+	return devices, nil
 }
 
 // Count returns how many notifications match a filter.

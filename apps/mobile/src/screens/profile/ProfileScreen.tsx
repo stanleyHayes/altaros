@@ -14,6 +14,7 @@ import { sessionPlatform, sessionStorageLabel } from '../../services/session-cop
 import { connectivityErrorMessage } from '../../services/connectivity';
 import { useAnimatedRouteTop } from '../../hooks/useAnimatedRouteTop';
 import { Ionicons } from '@expo/vector-icons';
+import * as Application from 'expo-application';
 
 type ProfileNav = NativeStackNavigationProp<RootStackParamList>;
 
@@ -52,6 +53,48 @@ export function profileExternalActionState(
   return { disabled, busy, ...(hint ? { hint } : {}) };
 }
 
+export function profileSessionActionState(
+  offline: boolean,
+  globalSigningOut: boolean,
+): {
+  local: { disabled: boolean; hint: string };
+  global: { disabled: boolean; busy: boolean; hint: string };
+} {
+  return {
+    local: {
+      disabled: globalSigningOut,
+      hint: globalSigningOut
+        ? 'Wait while every session is being ended.'
+        : 'Signs out this device immediately, including while offline.',
+    },
+    global: {
+      disabled: offline || globalSigningOut,
+      busy: globalSigningOut,
+      hint: offline
+        ? 'Reconnect to end your sessions on every device.'
+        : globalSigningOut
+          ? 'Every session is being ended.'
+          : 'Ends every session after the server confirms revocation.',
+    },
+  };
+}
+
+export function installedVersionLabel(
+  nativeVersion: string | null,
+  nativeBuildVersion: string | null,
+  configuredVersion = '1.0.0',
+): string {
+  const safe = (value: string | null, fallback = '') => {
+    const normalized = value?.trim() ?? '';
+    return normalized && normalized.length <= 64 && !/[\u0000-\u001F\u007F]/.test(normalized)
+      ? normalized
+      : fallback;
+  };
+  const version = safe(nativeVersion, safe(configuredVersion, 'Unknown version'));
+  const build = safe(nativeBuildVersion);
+  return `ALTAR OS · ${version}${build ? ` (${build})` : ''}`;
+}
+
 export function ProfileScreen() {
   const navigation = useNavigation<ProfileNav>();
   const { user, logout, logoutEverywhere, refreshUser } = useAuth();
@@ -61,17 +104,20 @@ export function ProfileScreen() {
   const [actionError, setActionError] = useState('');
   const [globalSigningOut, setGlobalSigningOut] = useState(false);
   const [openingUrl, setOpeningUrl] = useState<string | null>(null);
-  const logoutLock = useRef(createSubmissionLock());
-  const logoutEverywhereLock = useRef(createSubmissionLock());
+  const sessionActionLock = useRef(createSubmissionLock());
   const externalActionLock = useRef(createSubmissionLock());
   const refreshLock = useRef(createSubmissionLock());
   const scrollRef = useRef<ScrollView>(null);
   useAnimatedRouteTop(scrollRef);
   const mountedRef = useRef(true);
-  const activeIdentityRef = useRef<ProfileIdentity>({ churchId: user?.churchId, memberId: user?.id });
-  const previousIdentityRef = useRef<ProfileIdentity>({ churchId: user?.churchId, memberId: user?.id });
-  activeIdentityRef.current = { churchId: user?.churchId, memberId: user?.id };
+  const activeIdentityRef = useRef<ProfileIdentity>({ churchId: user?.churchId, memberId: user?.memberId });
+  const previousIdentityRef = useRef<ProfileIdentity>({ churchId: user?.churchId, memberId: user?.memberId });
+  activeIdentityRef.current = { churchId: user?.churchId, memberId: user?.memberId };
   const fullName = `${user?.firstName || 'Member'} ${user?.lastName || ''}`.trim();
+  const versionLabel = installedVersionLabel(
+    Application.nativeApplicationVersion,
+    Application.nativeBuildVersion,
+  );
 
   useEffect(() => {
     mountedRef.current = true;
@@ -83,8 +129,7 @@ export function ProfileScreen() {
     const current = activeIdentityRef.current;
     if (previous.churchId === current.churchId && previous.memberId === current.memberId) return;
     previousIdentityRef.current = current;
-    logoutLock.current = createSubmissionLock();
-    logoutEverywhereLock.current = createSubmissionLock();
+    sessionActionLock.current = createSubmissionLock();
     externalActionLock.current = createSubmissionLock();
     refreshLock.current = createSubmissionLock();
     setRefreshing(false);
@@ -92,17 +137,17 @@ export function ProfileScreen() {
     setActionError('');
     setGlobalSigningOut(false);
     setOpeningUrl(null);
-  }, [user?.churchId, user?.id]);
+  }, [user?.churchId, user?.memberId]);
 
   const ownsActiveIdentity = (churchId: string, memberId: string) => ownsMountedProfileAction(
     mountedRef.current, activeIdentityRef.current, churchId, memberId,
   );
 
   const handleLogout = () => {
-    const actionLock = logoutLock.current;
+    const actionLock = sessionActionLock.current;
     if (!actionLock.acquire()) return;
     const startedChurchId = user?.churchId;
-    const startedMemberId = user?.id;
+    const startedMemberId = user?.memberId;
     if (!startedChurchId || !startedMemberId
       || !ownsActiveIdentity(startedChurchId, startedMemberId)) {
       actionLock.release();
@@ -123,10 +168,10 @@ export function ProfileScreen() {
   };
 
   const handleLogoutEverywhere = () => {
-    const actionLock = logoutEverywhereLock.current;
+    const actionLock = sessionActionLock.current;
     if (!actionLock.acquire()) return;
     const startedChurchId = user?.churchId;
-    const startedMemberId = user?.id;
+    const startedMemberId = user?.memberId;
     if (!startedChurchId || !startedMemberId
       || !ownsActiveIdentity(startedChurchId, startedMemberId)) {
       actionLock.release();
@@ -166,7 +211,7 @@ export function ProfileScreen() {
     const actionLock = refreshLock.current;
     if (!actionLock.acquire()) return;
     const startedChurchId = user?.churchId;
-    const startedMemberId = user?.id;
+    const startedMemberId = user?.memberId;
     if (!startedChurchId || !startedMemberId
       || !ownsActiveIdentity(startedChurchId, startedMemberId)) {
       actionLock.release();
@@ -190,7 +235,7 @@ export function ProfileScreen() {
     const actionLock = externalActionLock.current;
     if (offline || !actionLock.acquire()) return;
     const startedChurchId = user?.churchId;
-    const startedMemberId = user?.id;
+    const startedMemberId = user?.memberId;
     if (!startedChurchId || !startedMemberId
       || !ownsActiveIdentity(startedChurchId, startedMemberId)) {
       actionLock.release();
@@ -219,6 +264,7 @@ export function ProfileScreen() {
     { label: 'Privacy', detail: 'How Altar OS handles your data', icon: 'finger-print-outline' as const, external: true, url: 'https://altaros.com/privacy', action: () => { void openExternal('https://altaros.com/privacy', 'Privacy information'); } },
     { label: 'Help centre', detail: 'Get support from our team', icon: 'chatbubble-ellipses-outline' as const, external: true, url: 'https://altaros.com/help', action: () => { void openExternal('https://altaros.com/help', 'Help centre'); } },
   ];
+  const sessionActions = profileSessionActionState(offline, globalSigningOut);
 
   return (
     <ScrollView
@@ -263,19 +309,26 @@ export function ProfileScreen() {
       </Card>
 
       <View style={styles.logout}>
-        <Button title="Sign out" variant="outline" onPress={handleLogout} fullWidth />
+        <Button
+          title="Sign out"
+          variant="outline"
+          onPress={handleLogout}
+          disabled={sessionActions.local.disabled}
+          accessibilityHint={sessionActions.local.hint}
+          fullWidth
+        />
         <TouchableOpacity
           onPress={handleLogoutEverywhere}
           accessibilityRole="button"
-          accessibilityHint={offline ? 'Reconnect to end your sessions on every device.' : 'Ends every session after the server confirms revocation.'}
-          accessibilityState={{ disabled: offline || globalSigningOut, busy: globalSigningOut }}
-          disabled={offline || globalSigningOut}
-          style={[styles.logoutEverywhere, (offline || globalSigningOut) && styles.actionDisabled]}
+          accessibilityHint={sessionActions.global.hint}
+          accessibilityState={{ disabled: sessionActions.global.disabled, busy: sessionActions.global.busy }}
+          disabled={sessionActions.global.disabled}
+          style={[styles.logoutEverywhere, sessionActions.global.disabled && styles.actionDisabled]}
         >
           <Text style={styles.logoutEverywhereText}>{globalSigningOut ? 'Ending all sessions…' : 'Sign out on all devices'}</Text>
         </TouchableOpacity>
         <Text style={styles.profileNote}>To change your name or contact details, ask your church office to update your member record.</Text>
-        <Text style={styles.version}>ALTAR OS · 1.0.0</Text>
+        <Text style={styles.version}>{versionLabel}</Text>
       </View>
     </ScrollView>
   );

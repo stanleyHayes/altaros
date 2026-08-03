@@ -5,6 +5,7 @@ import {
   ScrollView,
   StyleSheet,
   KeyboardAvoidingView,
+  AccessibilityInfo,
   Platform,
   Alert,
   TextInput,
@@ -21,18 +22,23 @@ import { Card } from '../../components/common/Card';
 import { useAuth } from '../../hooks/useAuth';
 import { colors, typography, spacing } from '../../theme';
 import type { AuthStackParamList } from '../../components/navigation/AppNavigator';
-import authService, { canonicalPhone, MAX_AUTH_EMAIL_LENGTH, MAX_AUTH_NAME_LENGTH, MAX_AUTH_PASSWORD_LENGTH, MAX_AUTH_PHONE_INPUT_LENGTH, MAX_CHURCH_CODE_LENGTH, type RegistrationChurch } from '../../services/auth.service';
+import authService, { canonicalPhone, MAX_AUTH_EMAIL_LENGTH, MAX_AUTH_NAME_LENGTH, MAX_AUTH_PASSWORD_LENGTH, MAX_AUTH_PHONE_INPUT_LENGTH, MAX_CHURCH_CODE_LENGTH, OtpDeliveryUnknownError, RegistrationOutcomeUnknownError, type RegistrationChurch } from '../../services/auth.service';
 import { apiErrorMessage } from '../../services/api-error';
 import { createSubmissionLock } from '../../services/submission-lock';
 import { shouldUseInlineRegistrationNameFields } from './auth-layout';
 import { useKnownOffline } from '../../hooks/useKnownOffline';
+import { routeScrollShouldAnimate } from '../../hooks/useAnimatedRouteTop';
+import { formKeyboardProps } from '../../components/common/form-keyboard';
 import {
   canonicalChurchCodeInput,
   firstInvalidRegistrationStep,
   ownsRegistrationLookup,
   REGISTRATION_STEPS,
+  registrationChurchActionState,
   registrationErrorsForStep,
+  registrationProgressValue,
   registrationRemovalDecision,
+  unknownRegistrationRecoveryParams,
   type RegistrationFormValues,
   type RegistrationStep,
 } from './registration-state';
@@ -81,6 +87,13 @@ export function RegisterScreen() {
   );
 
   churchCodeRef.current = form.churchCode;
+  const churchActions = registrationChurchActionState(
+    offline,
+    isResolvingChurch,
+    isLoading,
+    Boolean(form.churchCode.trim()),
+    Boolean(resolvedChurch),
+  );
 
   useEffect(() => {
     mountedRef.current = true;
@@ -99,10 +112,23 @@ export function RegisterScreen() {
     }
   };
 
+  const scrollStepToTop = () => {
+    void AccessibilityInfo.isReduceMotionEnabled()
+      .catch(() => false)
+      .then((reduceMotionEnabled) => {
+        if (mountedRef.current) {
+          scrollRef.current?.scrollTo({
+            y: 0,
+            animated: routeScrollShouldAnimate(reduceMotionEnabled),
+          });
+        }
+      });
+  };
+
   const goToStep = (nextStep: RegistrationStep) => {
     setStep(nextStep);
     setErrors({});
-    scrollRef.current?.scrollTo({ y: 0, animated: true });
+    scrollStepToTop();
   };
 
   const handleContinue = () => {
@@ -165,7 +191,7 @@ export function RegisterScreen() {
     if (invalid) {
       setStep(invalid.step);
       setErrors(invalid.errors);
-      scrollRef.current?.scrollTo({ y: 0, animated: true });
+      scrollStepToTop();
       submissionLock.current.release();
       return;
     }
@@ -183,23 +209,53 @@ export function RegisterScreen() {
       });
       const phone = canonicalPhone(registeredPhone);
       if (!phone) throw new Error('The server returned an invalid phone number.');
+      const workspace = canonicalChurchCodeInput(form.churchCode);
       if (!mountedRef.current) return;
       try {
-        await authService.requestOtp(phone);
+        await authService.requestOtp(phone, workspace);
         if (mountedRef.current) {
           explicitExitRef.current = true;
-          navigation.replace('Otp', { phone, codeRequested: true });
+          navigation.replace('Otp', { phone, workspace, codeRequested: true });
         }
-      } catch {
+      } catch (dispatchError) {
         // The account already exists at this point. Keep the member in the
-        // verification journey and let them retry instead of presenting a
-        // misleading registration failure or encouraging a duplicate signup.
+        // verification journey instead of presenting a misleading registration
+        // failure or encouraging a duplicate signup. Unknown delivery starts
+        // the cooldown; explicit rejection leaves the request action available.
         if (mountedRef.current) {
           explicitExitRef.current = true;
-          navigation.replace('Otp', { phone, codeRequested: false });
+          navigation.replace('Otp', {
+            phone,
+            workspace,
+            codeRequested: dispatchError instanceof OtpDeliveryUnknownError,
+            deliveryUnconfirmed: dispatchError instanceof OtpDeliveryUnknownError,
+          });
         }
       }
     } catch (error: unknown) {
+      if (error instanceof RegistrationOutcomeUnknownError) {
+        const recovery = unknownRegistrationRecoveryParams(form.phone, form.churchCode);
+        if (recovery) {
+          let codeRequested = false;
+          let deliveryUnconfirmed = false;
+          try {
+            await authService.requestOtp(recovery.phone, recovery.workspace);
+            codeRequested = true;
+          } catch (dispatchError) {
+            if (dispatchError instanceof OtpDeliveryUnknownError) {
+              codeRequested = true;
+              deliveryUnconfirmed = true;
+            }
+            // Explicit rejection keeps the request action immediately available;
+            // unknown delivery starts the normal cooldown.
+          }
+          if (mountedRef.current) {
+            explicitExitRef.current = true;
+            navigation.replace('Otp', { ...recovery, codeRequested, deliveryUnconfirmed });
+          }
+          return;
+        }
+      }
       const message = apiErrorMessage(error, 'Registration failed. Please try again.');
       if (mountedRef.current) Alert.alert('Registration Failed', message);
     } finally {
@@ -217,7 +273,7 @@ export function RegisterScreen() {
       <ScrollView
         ref={scrollRef}
         contentContainerStyle={styles.container}
-        keyboardShouldPersistTaps="handled"
+        {...formKeyboardProps(Platform.OS)}
         bounces={false}
       >
         <View style={styles.ambientTop} importantForAccessibility="no-hide-descendants" />
@@ -241,7 +297,7 @@ export function RegisterScreen() {
                 accessible
                 accessibilityRole="progressbar"
                 accessibilityLabel={`Create account, step ${step + 1} of ${REGISTRATION_STEPS.length}: ${REGISTRATION_STEPS[step].title}`}
-                accessibilityValue={{ min: 1, max: REGISTRATION_STEPS.length, now: step + 1 }}
+                accessibilityValue={registrationProgressValue(step)}
               >
                 <Text style={styles.progressLabel}>STEP {step + 1} OF {REGISTRATION_STEPS.length}</Text>
                 <View style={styles.progressTrack} importantForAccessibility="no-hide-descendants">
@@ -402,12 +458,12 @@ export function RegisterScreen() {
                   </Card>
                 ) : (
                   <Button
-                    title="Find my church"
+                    title={churchActions.lookup.label}
                     variant="outline"
                     onPress={() => void handleResolveChurch()}
                     loading={isResolvingChurch}
-                    disabled={offline || isLoading || !form.churchCode.trim()}
-                    accessibilityHint={offline ? 'Reconnect to find and confirm your church.' : undefined}
+                    disabled={churchActions.lookup.disabled}
+                    accessibilityHint={churchActions.lookup.hint}
                     fullWidth
                   />
                 )}
@@ -421,12 +477,12 @@ export function RegisterScreen() {
                     style={styles.backButton}
                   />
                   <Button
-                    title="Create account"
+                    title={churchActions.submit.label}
                     onPress={handleRegister}
                     loading={isLoading}
                     size="lg"
-                    disabled={offline || !resolvedChurch || isResolvingChurch}
-                    accessibilityHint={offline ? 'Reconnect to create and verify your account.' : undefined}
+                    disabled={churchActions.submit.disabled}
+                    accessibilityHint={churchActions.submit.hint}
                     style={styles.primaryButton}
                   />
                 </View>

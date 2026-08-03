@@ -22,6 +22,7 @@ import LocationOnRoundedIcon from "@mui/icons-material/LocationOnRounded";
 import PeopleRoundedIcon from "@mui/icons-material/PeopleRounded";
 import AccessTimeRoundedIcon from "@mui/icons-material/AccessTimeRounded";
 import type { ChurchListing } from "@altar-os/shared-types";
+import PageIntro from "@/components/ui/PageIntro";
 
 // ---------- Mock Data ----------
 
@@ -162,15 +163,7 @@ export default function DiscoverPage() {
 
   return (
     <Box sx={{ py: 2 }}>
-      {/* Header */}
-      <Box sx={{ mb: 2.5 }}>
-        <Typography variant="h5" sx={{ fontWeight: 700 }}>
-          Discover Churches
-        </Typography>
-        <Typography variant="body2" color="text.secondary">
-          Find and connect with churches in your area
-        </Typography>
-      </Box>
+      <PageIntro eyebrow="Across the network" title="Discover churches" copy="Find Altar OS church communities near you and understand where you may belong." />
 
       {/* Search */}
       <TextField

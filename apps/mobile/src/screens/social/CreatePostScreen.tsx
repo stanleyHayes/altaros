@@ -18,6 +18,8 @@ import { borderRadius, colors, typography, spacing } from '../../theme';
 import socialService, { type PostType } from '../../services/social.service';
 import { createSubmissionLock } from '../../services/submission-lock';
 import { Ionicons } from '@expo/vector-icons';
+import { communityMutationFailure } from './community-mutation';
+import { socialAuthoringActionState } from './social-authoring-state';
 
 export function createPostCompletionBelongsToIdentity(
   mounted: boolean,
@@ -37,11 +39,12 @@ export function CreatePostScreen() {
   const [content, setContent] = useState('');
   const [postType, setPostType] = useState<PostType>('general');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [outcomeUnknown, setOutcomeUnknown] = useState(false);
   const submissionLock = useRef(createSubmissionLock());
   const mountedRef = useRef(true);
-  const activeIdentityRef = useRef({ churchId: user?.churchId, memberId: user?.id });
+  const activeIdentityRef = useRef({ churchId: user?.churchId, memberId: user?.memberId });
   const previousIdentityRef = useRef(activeIdentityRef.current);
-  activeIdentityRef.current = { churchId: user?.churchId, memberId: user?.id };
+  activeIdentityRef.current = { churchId: user?.churchId, memberId: user?.memberId };
 
   useEffect(() => {
     mountedRef.current = true;
@@ -55,10 +58,11 @@ export function CreatePostScreen() {
       setContent('');
       setPostType('general');
       setIsSubmitting(false);
+      setOutcomeUnknown(false);
       submissionLock.current = createSubmissionLock();
       previousIdentityRef.current = current;
     }
-  }, [user?.churchId, user?.id]);
+  }, [user?.churchId, user?.memberId]);
 
   const ownsActiveIdentity = (churchId: string, memberId: string) => (
     createPostCompletionBelongsToIdentity(
@@ -75,7 +79,7 @@ export function CreatePostScreen() {
       return;
     }
     const startedChurchId = user?.churchId;
-    const startedMemberId = user?.id;
+    const startedMemberId = user?.memberId;
     if (!startedChurchId || !startedMemberId) {
       Alert.alert('Post not shared', 'Your member session is incomplete. Sign in again and retry.');
       return;
@@ -95,9 +99,11 @@ export function CreatePostScreen() {
           },
         },
       ]);
-    } catch {
+    } catch (error) {
       if (startedChurchId && startedMemberId && ownsActiveIdentity(startedChurchId, startedMemberId)) {
-        Alert.alert('Post not shared', 'Check your connection and try again.');
+        const copy = communityMutationFailure('post', error);
+        setOutcomeUnknown(copy.outcomeUnknown);
+        Alert.alert(copy.title, copy.message);
       }
     } finally {
       actionLock.release();
@@ -106,6 +112,14 @@ export function CreatePostScreen() {
   };
 
   const fullName = `${user?.firstName || 'User'} ${user?.lastName || ''}`.trim();
+  const postAction = socialAuthoringActionState(
+    'post',
+    content,
+    offline,
+    isSubmitting,
+    outcomeUnknown,
+    Boolean(user?.churchId && user?.memberId),
+  );
 
   return (
     <KeyboardAvoidingView
@@ -131,10 +145,11 @@ export function CreatePostScreen() {
           return (
             <TouchableOpacity
               key={value}
-              style={[styles.typeChip, selected && styles.typeChipSelected]}
+              style={[styles.typeChip, selected && styles.typeChipSelected, (isSubmitting || outcomeUnknown) && styles.draftDisabled]}
               onPress={() => setPostType(value)}
+              disabled={isSubmitting || outcomeUnknown}
               accessibilityRole="radio"
-              accessibilityState={{ selected, checked: selected }}
+              accessibilityState={{ selected, checked: selected, disabled: isSubmitting || outcomeUnknown }}
               accessibilityLabel={label}
             >
               <Text style={[styles.typeText, selected && styles.typeTextSelected]}>{label}</Text>
@@ -144,7 +159,7 @@ export function CreatePostScreen() {
       </View>
 
       <TextInput
-        style={styles.input}
+        style={[styles.input, (isSubmitting || outcomeUnknown) && styles.draftDisabled]}
         placeholder="What's on your heart today?"
         placeholderTextColor={colors.muted}
         value={content}
@@ -155,6 +170,7 @@ export function CreatePostScreen() {
         maxLength={500}
         accessibilityLabel="Post content"
         accessibilityHint="Share a message of up to 500 characters with your church community"
+        editable={!isSubmitting && !outcomeUnknown}
       />
 
       <View style={styles.charCount}>
@@ -172,13 +188,13 @@ export function CreatePostScreen() {
 
       <View style={styles.footer}>
         <Button
-          title="Post"
-          onPress={handlePost}
+          title={postAction.label}
+          onPress={postAction.mode === 'recover' ? () => navigation.goBack() : handlePost}
           loading={isSubmitting}
           fullWidth
           size="lg"
-          disabled={offline || !content.trim() || content.length > 500}
-          accessibilityHint={offline ? 'Reconnect to share this post.' : undefined}
+          disabled={postAction.disabled}
+          accessibilityHint={postAction.hint}
         />
       </View>
     </KeyboardAvoidingView>
@@ -242,4 +258,5 @@ const styles = StyleSheet.create({
     padding: spacing.base,
     backgroundColor: colors.background,
   },
+  draftDisabled: { opacity: 0.55 },
 });

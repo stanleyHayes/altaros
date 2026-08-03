@@ -281,6 +281,77 @@ func (s *Service) Create(ctx context.Context, in Input) (*Member, error) {
 	return created, nil
 }
 
+// LinkOrCreateForUser gives a login account its church-roster identity. An
+// existing roster row is reused by canonical phone/email, so self-signup does
+// not duplicate a person the church already entered. The authenticated user id
+// is never accepted from a public request body; callers derive it from the
+// account they just created or verified.
+func (s *Service) LinkOrCreateForUser(ctx context.Context, userID string, in Input) (*Member, error) {
+	userOID, err := bson.ObjectIDFromHex(strings.TrimSpace(userID))
+	if err != nil {
+		return nil, ErrNotFound
+	}
+	doc, err := s.buildDoc(in)
+	if err != nil {
+		return nil, err
+	}
+	identity := bson.A{}
+	if value, ok := doc["phoneE164"]; ok {
+		identity = append(identity, bson.M{"phoneE164": value})
+	}
+	if value, ok := doc["email"]; ok {
+		identity = append(identity, bson.M{"email": value})
+	}
+	if len(identity) == 0 {
+		return nil, ErrNotFound
+	}
+
+	var existing Member
+	err = s.coll.FindOne(ctx, bson.M{"$or": identity}, &existing)
+	if err == nil {
+		if existing.UserID != "" && existing.UserID.String() != userOID.Hex() {
+			return nil, ErrDuplicate
+		}
+		res, updateErr := s.coll.UpdateOne(ctx, bson.M{
+			"_id": existing.ID,
+			"$or": bson.A{
+				bson.M{"userId": bson.M{"$exists": false}},
+				bson.M{"userId": mongodb.ID(userOID.Hex())},
+			},
+		}, bson.M{"$set": bson.M{"userId": mongodb.ID(userOID.Hex()), "updatedAt": time.Now().UTC()}})
+		if updateErr != nil {
+			return nil, fmt.Errorf("member: link user: %w", updateErr)
+		}
+		if res.MatchedCount == 0 {
+			return nil, ErrDuplicate
+		}
+		return s.ByID(ctx, existing.ID.Hex())
+	}
+	if !errors.Is(err, mongo.ErrNoDocuments) {
+		return nil, fmt.Errorf("member: find registration identity: %w", err)
+	}
+
+	doc["userId"] = mongodb.ID(userOID.Hex())
+	res, err := s.coll.InsertOne(ctx, doc)
+	if mongo.IsDuplicateKeyError(err) {
+		return nil, ErrDuplicate
+	}
+	if err != nil {
+		return nil, fmt.Errorf("member: create linked member: %w", err)
+	}
+	created, err := s.ByID(ctx, res.InsertedID.(bson.ObjectID).Hex())
+	if err != nil {
+		return nil, err
+	}
+	if s.pub != nil {
+		_ = s.pub.Publish(ctx, TopicMemberCreated, created.ID.Hex(), map[string]any{
+			"memberId": created.ID.Hex(), "churchId": created.ChurchID.String(),
+			"status": string(created.Status),
+		})
+	}
+	return created, nil
+}
+
 func (s *Service) buildDoc(in Input) (bson.M, error) {
 	first := strings.TrimSpace(in.FirstName)
 	last := strings.TrimSpace(in.LastName)

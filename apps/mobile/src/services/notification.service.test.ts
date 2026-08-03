@@ -146,6 +146,18 @@ describe('notification device registration', () => {
     expect(mockedApi.post).not.toHaveBeenCalled();
   });
 
+  it('returns whether the operating system can show the permission prompt again', async () => {
+    mockedNotifications.requestPermissionsAsync.mockReset().mockResolvedValueOnce({
+      status: 'denied', canAskAgain: false,
+    } as never);
+
+    await expect(notificationService.enablePush(Platform.OS)).resolves.toEqual({
+      status: 'denied', canAskAgain: false,
+    });
+    expect(mockedNotifications.getDevicePushTokenAsync).not.toHaveBeenCalled();
+    expect(mockedApi.post).not.toHaveBeenCalled();
+  });
+
   it('rechecks session ownership after native token retrieval and before transport', async () => {
     mockedNotifications.getPermissionsAsync.mockResolvedValueOnce({ status: 'granted' } as never);
     mockedNotifications.getDevicePushTokenAsync.mockResolvedValueOnce({
@@ -260,6 +272,36 @@ describe('notification member contract', () => {
     }]);
     expect(mockedApi.get).toHaveBeenCalledWith('/notifications');
   });
+
+  it('loads a bounded notification page with its authoritative total', async () => {
+    const item = {
+      id: 'notification-2', title: 'Giving receipt', body: 'Thank you for giving.',
+      churchId: 'church-1', recipientId: 'member-1', channel: 'SMS', type: 'CUSTOM',
+      status: 'SENT', createdAt: '2026-08-01T09:00:00Z', metadata: {},
+    };
+    mockedApi.get.mockResolvedValueOnce({ data: {
+      success: true, data: { data: [item], total: 51 },
+    } } as never);
+
+    await expect(notificationService.listPage('church-1', 'member-1', 2, 50))
+      .resolves.toEqual({ items: [{
+        id: 'notification-2', title: 'Giving receipt', body: 'Thank you for giving.',
+        createdAt: '2026-08-01T09:00:00Z',
+      }], total: 51 });
+    expect(mockedApi.get).toHaveBeenCalledWith('/notifications', {
+      params: { page: 2, limit: 50 },
+    });
+  });
+
+  it.each([[0, 50], [1.5, 50], [1, 0], [1, 101]])(
+    'rejects an unsafe notification page before transport: %s/%s',
+    async (page, limit) => {
+      const callsBefore = mockedApi.get.mock.calls.length;
+      await expect(notificationService.listPage('church-1', 'member-1', page, limit))
+        .rejects.toThrow('page is not valid');
+      expect(mockedApi.get).toHaveBeenCalledTimes(callsBefore);
+    },
+  );
 
   it('retains compatibility with a mobile-shaped array', async () => {
     const item = {

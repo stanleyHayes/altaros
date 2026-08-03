@@ -18,3 +18,7 @@ test-output.txt
 # Seeded development logins, rewritten by `make seed`. Never real secrets,
 # but a file with this name attracts them, so it stays out of git.
 credentials.txt
+
+# Raven tooling scratch. Timestamped event stubs written on every compaction —
+# transient state, not project history.
+.raven/.cache/

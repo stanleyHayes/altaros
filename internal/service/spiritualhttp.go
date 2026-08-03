@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -13,6 +14,33 @@ import (
 	"github.com/hayfordstanley/altar-os/internal/platform/deps"
 	"github.com/hayfordstanley/altar-os/internal/platform/httpx"
 )
+
+type memberPrayerResponse struct {
+	ID          string    `json:"id"`
+	ChurchID    string    `json:"churchId"`
+	MemberID    string    `json:"memberId,omitempty"`
+	Title       string    `json:"title"`
+	Description string    `json:"description"`
+	IsAnonymous bool      `json:"isAnonymous"`
+	PrayerCount int64     `json:"prayerCount"`
+	AuthorName  *string   `json:"authorName,omitempty"`
+	CreatedAt   time.Time `json:"createdAt"`
+}
+
+func prayerForMember(item spiritual.PrayerRequest, includeOwner bool) memberPrayerResponse {
+	view := memberPrayerResponse{
+		ID: item.ID.Hex(), ChurchID: item.ChurchID.String(), Title: item.Title,
+		Description: item.Description, IsAnonymous: item.IsAnonymous,
+		PrayerCount: item.PrayerCount, CreatedAt: item.CreatedAt,
+	}
+	if includeOwner {
+		view.MemberID = item.MemberID.String()
+	}
+	if !item.IsAnonymous {
+		view.AuthorName = item.AuthorName
+	}
+	return view
+}
 
 func buildSpiritual(d *deps.Deps) http.Handler { return standalone(spiritualRoutes(d)) }
 
@@ -106,7 +134,11 @@ func handlePrayers(s *spiritual.Service) http.HandlerFunc {
 			writeSpiritualError(w, err)
 			return
 		}
-		httpx.JSON(w, http.StatusOK, map[string]any{"requests": items, "total": total})
+		views := make([]memberPrayerResponse, len(items))
+		for i := range items {
+			views[i] = prayerForMember(items[i], false)
+		}
+		httpx.JSON(w, http.StatusOK, map[string]any{"requests": views, "total": total})
 	}
 }
 
@@ -131,7 +163,7 @@ func handleCreatePrayer(s *spiritual.Service, members *member.Service) http.Hand
 			writeSpiritualError(w, err)
 			return
 		}
-		httpx.JSON(w, http.StatusCreated, item)
+		httpx.JSON(w, http.StatusCreated, prayerForMember(*item, true))
 	}
 }
 

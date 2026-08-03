@@ -1,8 +1,8 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { FlatList, Linking, Platform, RefreshControl, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { AppState, FlatList, Linking, Platform, RefreshControl, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import * as Notifications from '../../services/notification-platform';
 import { Card } from '../../components/common/Card';
-import notificationService, { rollbackNotificationReadAt, type MemberNotification, supportsNativePush } from '../../services/notification.service';
+import notificationService, { NOTIFICATION_PAGE_SIZE, rollbackNotificationReadAt, type MemberNotification, supportsNativePush } from '../../services/notification.service';
 import { borderRadius, colors, spacing, typography } from '../../theme';
 import { safeNotificationUrl } from '../../services/notification-linking';
 import { ScreenSkeleton } from '../../components/common/ScreenSkeleton';
@@ -13,38 +13,52 @@ import { createLatestRequestGate } from '../../services/latest-request';
 import { connectivityErrorMessage } from '../../services/connectivity';
 import {
   notificationActionAccessibility,
+  notificationBannerState,
   notificationInboxBelongsToIdentity,
   notificationMutationCompletionBelongsToIdentity,
+  notificationReadFailure,
   runNotificationActions,
   type NotificationInboxOwner,
 } from '../../services/notification-action';
 import { apiErrorMessage } from '../../services/api-error';
 import { StatePanel } from '../../components/common/StatePanel';
 import { Ionicons } from '@expo/vector-icons';
+import { useAnimatedRouteTop } from '../../hooks/useAnimatedRouteTop';
+import { paginationActionState } from '../../components/common/pagination-action';
+import { appendUniquePageById } from '../../services/list-reconciliation';
+import { pushPermissionAction, type PushPermissionState } from './notification-permission-state';
 
 export function NotificationsScreen() {
   const { user } = useAuth();
   const offline = useKnownOffline();
+  const listRef = useRef<FlatList<MemberNotification>>(null);
+  useAnimatedRouteTop(listRef);
   const [items, setItems] = useState<MemberNotification[]>([]);
   const [itemsOwner, setItemsOwner] = useState<NotificationInboxOwner | null>(() => ({
     churchId: user?.churchId,
-    memberId: user?.id,
+    memberId: user?.memberId,
   }));
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [loadedPage, setLoadedPage] = useState(0);
+  const [totalItems, setTotalItems] = useState(0);
   const [loadError, setLoadError] = useState('');
   const [actionError, setActionError] = useState('');
-  const [permission, setPermission] = useState<Notifications.PermissionStatus | null>(null);
+  const [actionNeedsRefresh, setActionNeedsRefresh] = useState(false);
+  const [permission, setPermission] = useState<PushPermissionState | null>(null);
+  const [permissionCheckFailed, setPermissionCheckFailed] = useState(false);
   const [enablingPush, setEnablingPush] = useState(false);
   const [markingIds, setMarkingIds] = useState<Set<string>>(() => new Set());
   const permissionLock = useRef(createSubmissionLock());
   const readLock = useRef(createKeyedSubmissionLock());
   const loadGate = useRef(createLatestRequestGate());
+  const permissionCheckGate = useRef(createLatestRequestGate());
   const mountedRef = useRef(true);
-  const activeIdentityRef = useRef<NotificationInboxOwner>({ churchId: user?.churchId, memberId: user?.id });
+  const activeIdentityRef = useRef<NotificationInboxOwner>({ churchId: user?.churchId, memberId: user?.memberId });
   const itemsOwnerRef = useRef(itemsOwner);
   const activeItemIdsRef = useRef(new Set<string>());
-  activeIdentityRef.current = { churchId: user?.churchId, memberId: user?.id };
+  activeIdentityRef.current = { churchId: user?.churchId, memberId: user?.memberId };
   itemsOwnerRef.current = itemsOwner;
   activeItemIdsRef.current = new Set(items.map((item) => item.id));
   const pushSupported = supportsNativePush(Platform.OS);
@@ -63,30 +77,43 @@ export function NotificationsScreen() {
     )
   );
 
-  const load = useCallback(async (refresh = false) => {
+  const load = useCallback(async (refresh = false, page = 1) => {
     const request = loadGate.current.begin();
-    const startedOwner = { churchId: user?.churchId, memberId: user?.id };
+    const startedOwner = { churchId: user?.churchId, memberId: user?.memberId };
     if (!notificationInboxBelongsToIdentity(itemsOwnerRef.current, startedOwner)) {
       itemsOwnerRef.current = startedOwner;
       setItemsOwner(startedOwner);
       setItems([]);
+      setLoadedPage(0);
+      setTotalItems(0);
       setActionError('');
+      setActionNeedsRefresh(false);
       setMarkingIds(new Set());
       readLock.current = createKeyedSubmissionLock();
       permissionLock.current = createSubmissionLock();
       setEnablingPush(false);
     }
-    if (refresh) setRefreshing(true);
+    if (page > 1) setLoadingMore(true);
+    else if (refresh) setRefreshing(true);
     else setLoading(true);
     setLoadError('');
     try {
-      if (!user?.churchId || !user.id) throw new Error('Member identity is incomplete');
-      const result = await notificationService.list(user.churchId, user.id);
+      if (!user?.churchId || !user.memberId) throw new Error('Member identity is incomplete');
+      const result = await notificationService.listPage(
+        user.churchId,
+        user.memberId,
+        page,
+        NOTIFICATION_PAGE_SIZE,
+      );
       if (loadGate.current.isLatest(request)) {
-        setItems(result);
-        const loadedOwner = { churchId: user.churchId, memberId: user.id };
+        setItems((current) => page === 1 ? result.items : appendUniquePageById(current, result.items));
+        setLoadedPage(page);
+        setTotalItems(result.total);
+        const loadedOwner = { churchId: user.churchId, memberId: user.memberId };
         itemsOwnerRef.current = loadedOwner;
         setItemsOwner(loadedOwner);
+        setActionError('');
+        setActionNeedsRefresh(false);
       }
     } catch (cause) {
       if (loadGate.current.isLatest(request)) {
@@ -96,25 +123,54 @@ export function NotificationsScreen() {
       if (loadGate.current.isLatest(request)) {
         setLoading(false);
         setRefreshing(false);
+        setLoadingMore(false);
       }
     }
-  }, [user?.churchId, user?.id]);
+  }, [user?.churchId, user?.memberId]);
+
+  const checkPushPermission = useCallback(async () => {
+    if (!pushSupported) return;
+    const request = permissionCheckGate.current.begin();
+    setPermissionCheckFailed(false);
+    setPermission(null);
+    try {
+      const result = await Notifications.getPermissionsAsync();
+      if (mountedRef.current && permissionCheckGate.current.isLatest(request)) {
+        setPermission({
+          status: result.status,
+          canAskAgain: result.canAskAgain !== false,
+        });
+      }
+    } catch {
+      if (mountedRef.current && permissionCheckGate.current.isLatest(request)) {
+        setPermissionCheckFailed(true);
+      }
+    }
+  }, [pushSupported]);
 
   useEffect(() => {
     const gate = loadGate.current;
-    let active = true;
+    const permissionGate = permissionCheckGate.current;
     void load();
-    if (pushSupported) {
-      void Notifications.getPermissionsAsync()
-        .then((result) => { if (active && mountedRef.current) setPermission(result.status); })
-        .catch(() => { if (active && mountedRef.current) setPermission(null); });
-    }
-    return () => { active = false; gate.invalidate(); };
-  }, [load, pushSupported]);
+    void checkPushPermission();
+    return () => {
+      gate.invalidate();
+      permissionGate.invalidate();
+    };
+  }, [checkPushPermission, load]);
+
+  useEffect(() => {
+    if (!pushSupported) return undefined;
+    const subscription = AppState.addEventListener('change', (state) => {
+      if (state !== 'active') return;
+      void checkPushPermission();
+    });
+    return () => subscription.remove();
+  }, [checkPushPermission, pushSupported]);
 
   const enablePush = async () => {
     const startedChurchId = user?.churchId;
-    const startedMemberId = user?.id;
+    const startedMemberId = user?.memberId;
     if (!startedChurchId || !startedMemberId
       || !ownsActiveIdentity(startedChurchId, startedMemberId)) return;
     const actionLock = permissionLock.current;
@@ -122,13 +178,14 @@ export function NotificationsScreen() {
     setEnablingPush(true);
     setActionError('');
     try {
-      const status = await notificationService.enablePush(
+      const result = await notificationService.enablePush(
         Platform.OS,
         () => ownsActiveIdentity(startedChurchId, startedMemberId),
       );
       if (!ownsActiveIdentity(startedChurchId, startedMemberId)) return;
-      setPermission(status);
-      if (status !== 'granted') {
+      setPermission(result);
+      setPermissionCheckFailed(false);
+      if (result.status !== 'granted') {
         setActionError('Notifications are off. You can enable them later in device settings.');
       }
     } catch (cause) {
@@ -141,11 +198,32 @@ export function NotificationsScreen() {
     }
   };
 
+  const openNotificationSettings = async () => {
+    const startedChurchId = user?.churchId;
+    const startedMemberId = user?.memberId;
+    if (!startedChurchId || !startedMemberId
+      || !ownsActiveIdentity(startedChurchId, startedMemberId)) return;
+    const actionLock = permissionLock.current;
+    if (!actionLock.acquire()) return;
+    setEnablingPush(true);
+    setActionError('');
+    try {
+      await Linking.openSettings();
+    } catch {
+      if (ownsActiveIdentity(startedChurchId, startedMemberId)) {
+        setActionError('Device notification settings could not be opened.');
+      }
+    } finally {
+      actionLock.release();
+      if (ownsActiveIdentity(startedChurchId, startedMemberId)) setEnablingPush(false);
+    }
+  };
+
   const markRead = async (item: MemberNotification) => {
     const actionLock = readLock.current;
     if (!actionLock.acquire(item.id)) return;
     const startedChurchId = user?.churchId;
-    const startedMemberId = user?.id;
+    const startedMemberId = user?.memberId;
     if (!startedChurchId || !startedMemberId
       || !ownsActiveIdentity(startedChurchId, startedMemberId)
       || !notificationInboxBelongsToIdentity(itemsOwnerRef.current, activeIdentityRef.current)
@@ -175,11 +253,16 @@ export function NotificationsScreen() {
             ? { ...value, readAt: optimisticReadAt }
             : value));
         } else {
-          setItems((current) => current.map((value) => value.id === item.id ? {
-            ...value,
-            readAt: rollbackNotificationReadAt(value.readAt, optimisticReadAt, item.readAt),
-          } : value));
-          errors.push('That notification could not be marked as read. Try again.');
+          const failure = notificationReadFailure(result.readError);
+          if (failure.outcomeUnknown) {
+            setActionNeedsRefresh(true);
+          } else {
+            setItems((current) => current.map((value) => value.id === item.id ? {
+              ...value,
+              readAt: rollbackNotificationReadAt(value.readAt, optimisticReadAt, item.readAt),
+            } : value));
+          }
+          errors.push(failure.message);
         }
       }
       if (result.openFailed) errors.push('The related screen could not be opened.');
@@ -199,11 +282,26 @@ export function NotificationsScreen() {
 
   const ownsItems = notificationInboxBelongsToIdentity(itemsOwner, activeIdentityRef.current);
   const visibleItems = ownsItems ? items : [];
+  const hasOlderItems = visibleItems.length < totalItems;
+  const paginationAction = paginationActionState('older notifications', {
+    offline,
+    loading: loadingMore,
+    refreshing,
+    requiresRefresh: actionNeedsRefresh || Boolean(loadError),
+  });
+  const permissionAction = pushPermissionAction(permission, permissionCheckFailed);
+  const banner = notificationBannerState(
+    actionError,
+    visibleItems.length > 0 ? loadError : '',
+    actionNeedsRefresh,
+    offline,
+  );
 
   if (loading || (!ownsItems && !loadError)) return <ScreenSkeleton cards={4} />;
 
   return (
     <FlatList
+      ref={listRef}
       style={styles.container}
       data={visibleItems}
       keyExtractor={(item) => item.id}
@@ -216,28 +314,49 @@ export function NotificationsScreen() {
               <View style={styles.permissionHeader}><View style={styles.permissionIcon}><Ionicons name="phone-portrait-outline" size={21} color={colors.primaryDark} /></View><View style={styles.permissionCopy}><Text style={styles.permissionEyebrow}>ON YOUR PHONE</Text><Text style={styles.permissionTitle}>Push alerts</Text></View></View>
               <Text style={styles.permissionBody}>Install ALTAR OS on iOS or Android to receive event reminders, pastoral messages, and giving receipts.</Text>
             </Card>
-          ) : permission !== 'granted' ? (
+          ) : permissionAction !== 'enabled' ? (
             <Card style={styles.permissionCard}>
               <View style={styles.permissionHeader}><View style={styles.permissionIcon}><Ionicons name="notifications-outline" size={21} color={colors.primaryDark} /></View><View style={styles.permissionCopy}><Text style={styles.permissionEyebrow}>TIMELY, NOT NOISY</Text><Text style={styles.permissionTitle}>Stay in step with your church</Text></View></View>
-              <Text style={styles.permissionBody}>Enable push alerts for event reminders, pastoral messages, and giving receipts.</Text>
+              <Text style={styles.permissionBody}>{permissionAction === 'retry'
+                ? 'Notification access could not be checked. Try the device check again.'
+                : 'Enable push alerts for event reminders, pastoral messages, and giving receipts.'}</Text>
               <TouchableOpacity
-                style={[styles.textAction, (offline || enablingPush) && styles.actionDisabled]}
-                onPress={() => void enablePush()}
-                disabled={offline || enablingPush}
+                style={[styles.textAction, ((offline && permissionAction === 'prompt') || enablingPush || permissionAction === 'checking') && styles.actionDisabled]}
+                onPress={() => {
+                  if (permissionAction === 'settings') void openNotificationSettings();
+                  else if (permissionAction === 'retry') void checkPushPermission();
+                  else void enablePush();
+                }}
+                disabled={(offline && permissionAction === 'prompt') || enablingPush || permissionAction === 'checking'}
                 accessibilityRole="button"
-                accessibilityHint={offline ? 'Reconnect to register this device for push alerts.' : undefined}
-                accessibilityState={{ disabled: offline || enablingPush, busy: enablingPush }}
+                accessibilityHint={permissionAction === 'settings'
+                  ? 'Opens this app’s notification permissions in device settings.'
+                  : permissionAction === 'retry' ? 'Checks this device’s notification permission again.'
+                  : offline ? 'Reconnect to register this device for push alerts.' : undefined}
+                accessibilityState={{ disabled: (offline && permissionAction === 'prompt') || enablingPush || permissionAction === 'checking', busy: enablingPush || permissionAction === 'checking' }}
               >
-                <Text style={styles.enable}>{enablingPush ? 'Enabling notifications…' : 'Enable notifications'}</Text>
+                <Text style={styles.enable}>{enablingPush
+                  ? permissionAction === 'settings' ? 'Opening settings…' : 'Enabling notifications…'
+                  : permissionAction === 'settings' ? 'Open device settings'
+                    : permissionAction === 'retry' ? 'Retry notification check'
+                      : permissionAction === 'checking' ? 'Checking notification access…' : 'Enable notifications'}</Text>
               </TouchableOpacity>
             </Card>
           ) : null}
-          {actionError || (loadError && visibleItems.length > 0) ? (
+          {banner ? (
             <View style={styles.errorBanner}>
-              <Text style={styles.errorText} accessibilityRole="alert">{actionError || loadError}</Text>
-              {loadError ? (
-                <TouchableOpacity style={[styles.textAction, offline && styles.actionDisabled]} onPress={() => void load(true)} accessibilityRole="button" disabled={offline} accessibilityState={{ disabled: offline }} accessibilityHint={offline ? 'Reconnect to refresh notifications.' : undefined}>
-                  <Text style={styles.retry}>{offline ? 'Reconnect to retry' : 'Try again'}</Text>
+              <Text style={styles.errorText} accessibilityRole="alert">{banner.message}</Text>
+              {banner.action ? (
+                <TouchableOpacity
+                  style={[styles.textAction, banner.action.disabled && styles.actionDisabled]}
+                  onPress={() => void load(true)}
+                  accessibilityRole="button"
+                  accessibilityLabel={banner.action.label}
+                  disabled={banner.action.disabled}
+                  accessibilityState={{ disabled: banner.action.disabled }}
+                  accessibilityHint={banner.action.hint}
+                >
+                  <Text style={styles.retry}>{banner.action.label}</Text>
                 </TouchableOpacity>
               ) : null}
             </View>
@@ -285,6 +404,25 @@ export function NotificationsScreen() {
           onAction={loadError ? () => void load() : undefined}
         />
       )}
+      ListFooterComponent={visibleItems.length > 0 ? (
+        <View style={styles.footer}>
+          {hasOlderItems ? (
+            <TouchableOpacity
+              style={[styles.loadMore, paginationAction.disabled && styles.actionDisabled]}
+              onPress={() => void load(false, loadedPage + 1)}
+              disabled={paginationAction.disabled}
+              accessibilityRole="button"
+              accessibilityLabel={paginationAction.label}
+              accessibilityHint={paginationAction.hint}
+              accessibilityState={{ disabled: paginationAction.disabled, busy: paginationAction.busy }}
+            >
+              <Text style={styles.loadMoreText}>{paginationAction.label}</Text>
+            </TouchableOpacity>
+          ) : (
+            <Text style={styles.endText}>You’ve reached the beginning of your notification history.</Text>
+          )}
+        </View>
+      ) : null}
     />
   );
 }
@@ -317,4 +455,8 @@ const styles = StyleSheet.create({
   dot: { width: 8, height: 8, borderRadius: 4, backgroundColor: colors.primary, marginLeft: spacing.sm },
   body: { color: colors.textSecondary, fontSize: typography.sizes.md, lineHeight: 20, marginTop: spacing.sm },
   date: { color: colors.muted, fontSize: typography.sizes.xs, marginTop: spacing.md },
+  footer: { alignItems: 'center', paddingTop: spacing.sm, paddingBottom: spacing.xl },
+  loadMore: { minHeight: 48, minWidth: 230, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: colors.primary, borderRadius: borderRadius.full, paddingHorizontal: spacing.xl },
+  loadMoreText: { color: colors.primaryDark, fontFamily: typography.families.semibold, fontSize: typography.sizes.sm },
+  endText: { color: colors.muted, fontFamily: typography.families.medium, fontSize: typography.sizes.sm, textAlign: 'center' },
 });

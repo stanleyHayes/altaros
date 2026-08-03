@@ -1,4 +1,4 @@
-import type { Church, PaginationQuery } from "@altar-os/shared-types";
+import type { Church, ChurchPlan, PaginationQuery } from "@altar-os/shared-types";
 
 export interface CreateChurchData {
   name: string;
@@ -13,6 +13,10 @@ export interface CreateChurchData {
   bannerUrl?: string;
   timezone: string;
   currency: string;
+  requestedPlan?: ChurchPlan;
+  denomination?: string;
+  averageWeeklyAttendance?: number;
+  ministryPriorities?: string[];
 }
 
 export type UpdateChurchData = Partial<CreateChurchData>;

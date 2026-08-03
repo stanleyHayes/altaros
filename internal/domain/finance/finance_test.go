@@ -349,6 +349,41 @@ func TestGivingEndToEnd(t *testing.T) {
 	}
 }
 
+func TestGiverBorneProviderFeeSettlesAgainstChargedAmount(t *testing.T) {
+	h := newHarness(t)
+	h.dir.schedule = money.FeeSchedule{BasisPoints: 195}
+	h.dir.payout.FeeBearer = money.BearerGiver
+
+	result, err := h.svc.StartGiving(h.ctx, GiveRequest{
+		MemberID: "member_1",
+		Type:     TypeOffering,
+		Amount:   money.MustNew(10000, "GHS"),
+		Channel:  money.ChannelMobileMoney,
+		Email:    "giver@example.com",
+	})
+	if err != nil {
+		t.Fatalf("StartGiving: %v", err)
+	}
+	if result.Transaction.ChargedMinor != 10195 {
+		t.Fatalf("charged amount = %d, want 10195", result.Transaction.ChargedMinor)
+	}
+	if got := h.gw.lastCharge().Amount.Minor; got != 10195 {
+		t.Fatalf("provider initialized for %d, want 10195", got)
+	}
+
+	h.gw.willSucceed(result.Transaction.IdempotencyKey, 10195, 199, 150)
+	settled, err := h.svc.Settle(h.ctx, result.Transaction.IdempotencyKey)
+	if err != nil {
+		t.Fatalf("fee-bearing settlement: %v", err)
+	}
+	if settled.Status != StatusSuccess {
+		t.Fatalf("status = %s, want success", settled.Status)
+	}
+	if got := settled.TotalDebited().Minor; got != result.Quote.Total.Minor {
+		t.Fatalf("stored debit = %d, quoted debit = %d", got, result.Quote.Total.Minor)
+	}
+}
+
 // The acceptance criterion carried over from WP-13: replaying settlement must
 // produce exactly one transaction and exactly one completion event.
 func TestSettlingThreeTimesRecordsOneTransaction(t *testing.T) {
@@ -690,6 +725,33 @@ func TestCashOfferingIsRecordedWithoutFees(t *testing.T) {
 	// Entered on Tuesday, but it happened on Sunday.
 	if !tx.OccurredAt.Equal(sunday) {
 		t.Errorf("occurredAt = %v, want the Sunday it was counted", tx.OccurredAt)
+	}
+}
+
+func TestListCanPagePastTheNewestTransactions(t *testing.T) {
+	h := newHarness(t)
+	base := time.Date(2026, 8, 2, 8, 0, 0, 0, time.UTC)
+	for i := 0; i < 3; i++ {
+		if _, err := h.svc.RecordCash(h.ctx, CashRequest{
+			MemberID:   "member_1",
+			Type:       TypeOffering,
+			Amount:     money.MustNew(int64(1000+i), "GHS"),
+			OccurredAt: base.Add(time.Duration(i) * time.Hour),
+		}); err != nil {
+			t.Fatalf("RecordCash %d: %v", i, err)
+		}
+	}
+
+	page, err := h.svc.List(h.ctx, Query{OwnerID: "member_1", Limit: 1, Offset: 1})
+	if err != nil {
+		t.Fatalf("List second page: %v", err)
+	}
+	if len(page) != 1 || page[0].GrossMinor != 1001 {
+		t.Fatalf("second page = %#v, want middle transaction", page)
+	}
+	total, err := h.svc.Count(h.ctx, Query{OwnerID: "member_1"})
+	if err != nil || total != 3 {
+		t.Fatalf("Count = %d, %v; want 3", total, err)
 	}
 }
 

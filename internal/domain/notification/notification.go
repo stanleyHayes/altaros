@@ -16,7 +16,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
+	"strings"
 	"time"
+	"unicode"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
 
@@ -124,6 +127,8 @@ var (
 	ErrInvalidKind = errors.New("notification: unrecognised kind")
 	// ErrNoBody means a message with nothing to say.
 	ErrNoBody = errors.New("notification: body is required")
+	// ErrInvalidDeepLink means a message tried to navigate outside the member app allowlist.
+	ErrInvalidDeepLink = errors.New("notification: invalid in-app destination")
 	// ErrNoRecipient means no member to send to.
 	ErrNoRecipient = errors.New("notification: recipient is required")
 	// ErrInvalidDevice means a native push registration is malformed.
@@ -167,6 +172,7 @@ type Notification struct {
 	CreatedAt     time.Time  `bson:"createdAt"               json:"createdAt"`
 	UpdatedAt     time.Time  `bson:"updatedAt"               json:"updatedAt"`
 	ReadAt        *time.Time `bson:"readAt,omitempty"        json:"readAt,omitempty"`
+	DeepLink      string     `bson:"deepLink,omitempty"      json:"deepLink,omitempty"`
 }
 
 // DeviceRegistration binds one native APNs/FCM token to one signed-in session
@@ -181,6 +187,33 @@ type DeviceRegistration struct {
 	Platform  string        `bson:"platform"      json:"platform"`
 	CreatedAt time.Time     `bson:"createdAt"     json:"createdAt"`
 	UpdatedAt time.Time     `bson:"updatedAt"     json:"updatedAt"`
+}
+
+const pushAddressSeparator = ":"
+
+// PushAddress persists the native platform with the token in a delivery row.
+// Retries may run long after the device lookup, so provider selection cannot
+// depend on mutable registration state or on guessing from token shape.
+func PushAddress(platform, token string) (string, error) {
+	platform = strings.ToLower(strings.TrimSpace(platform))
+	token = strings.TrimSpace(token)
+	if (platform != "ios" && platform != "android") || len(token) < 32 || len(token) > 4096 || strings.IndexFunc(token, unicode.IsControl) >= 0 {
+		return "", ErrInvalidDevice
+	}
+	return platform + pushAddressSeparator + token, nil
+}
+
+// ParsePushAddress recovers the immutable provider route and raw native token.
+func ParsePushAddress(address string) (platform, token string, err error) {
+	platform, token, ok := strings.Cut(address, pushAddressSeparator)
+	if !ok {
+		return "", "", ErrInvalidDevice
+	}
+	canonical, err := PushAddress(platform, token)
+	if err != nil || canonical != address {
+		return "", "", ErrInvalidDevice
+	}
+	return platform, token, nil
 }
 
 // Preference is a member's per-channel opt-in state and quiet hours.
@@ -274,6 +307,40 @@ type Message struct {
 	Address string
 	// DedupeKey makes redelivery of a domain event produce one message.
 	DedupeKey string
+	// DeepLink is an allowlisted member-app destination carried into inbox and push payloads.
+	DeepLink string
+}
+
+var safeDeepLinkID = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
+
+func validDeepLink(value string) bool {
+	if value == "" {
+		return true
+	}
+	if value != strings.TrimSpace(value) || len(value) > 2048 || !strings.HasPrefix(value, "altaros://") {
+		return false
+	}
+	for _, r := range value {
+		if r <= 0x20 || r == 0x7f {
+			return false
+		}
+	}
+	route := strings.TrimSuffix(strings.TrimPrefix(value, "altaros://"), "/")
+	if strings.ContainsAny(route, "?#") {
+		return false
+	}
+	static := map[string]bool{
+		"notifications": true, "events": true, "community": true,
+		"community/new": true, "give": true, "giving/history": true,
+		"profile": true, "devotional": true, "sermons": true,
+		"prayer": true, "welfare": true,
+	}
+	if static[route] {
+		return true
+	}
+	parts := strings.Split(route, "/")
+	return (len(parts) == 2 && parts[0] == "events" && safeDeepLinkID.MatchString(parts[1])) ||
+		(len(parts) == 3 && parts[0] == "community" && parts[1] == "posts" && safeDeepLinkID.MatchString(parts[2]))
 }
 
 // Recipient is what a transport needs to reach a member.
@@ -374,6 +441,9 @@ func mustValid(msg Message) error {
 	}
 	if msg.Body == "" {
 		return ErrNoBody
+	}
+	if !validDeepLink(msg.DeepLink) {
+		return ErrInvalidDeepLink
 	}
 	return nil
 }

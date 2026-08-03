@@ -74,6 +74,10 @@ var (
 // context exists.
 type User struct {
 	ID bson.ObjectID `bson:"_id,omitempty"    json:"id"`
+	// MemberID is the linked church-roster identity used by member-owned
+	// domains. It is enriched at the HTTP boundary and never stored on the
+	// account document, where it would duplicate the member's userId link.
+	MemberID string `bson:"-" json:"memberId,omitempty"`
 	// mongodb.ID, not string: the legacy TypeScript API stores these as
 	// Mongoose ObjectIds while shared-types declares them as strings.
 	ChurchID                  mongodb.ID `bson:"churchId"                 json:"churchId"`
@@ -290,6 +294,21 @@ func (s *Service) Register(ctx context.Context, req RegisterRequest) (*User, err
 	}
 	user.ID = result.InsertedID.(bson.ObjectID)
 	return user, nil
+}
+
+// RollbackRegistration removes only a still-unverified self-registration.
+// Used when the companion member-roster link cannot be created; without this
+// compensation a retry hits AccountExists forever while every member feature
+// remains unusable.
+func (s *Service) RollbackRegistration(ctx context.Context, userID string) error {
+	oid, err := bson.ObjectIDFromHex(strings.TrimSpace(userID))
+	if err != nil {
+		return ErrRegistrationInvalid
+	}
+	_, err = s.users.DeleteOne(ctx, bson.M{
+		"_id": oid, "selfRegistered": true, "phoneVerified": false,
+	})
+	return err
 }
 
 // --- password login ---

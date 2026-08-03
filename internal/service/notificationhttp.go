@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"strings"
@@ -8,6 +9,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/hayfordstanley/altar-os/internal/domain/member"
 	"github.com/hayfordstanley/altar-os/internal/domain/notification"
 	"github.com/hayfordstanley/altar-os/internal/platform/deps"
 	"github.com/hayfordstanley/altar-os/internal/platform/httpx"
@@ -20,14 +22,27 @@ func buildNotification(d *deps.Deps) http.Handler { return standalone(notificati
 
 func notificationRoutes(d *deps.Deps) routeSet {
 	svc := newNotificationService(d)
+	members := member.NewService(d.Mongo, d.Events, d.Config.DataRegion)
 	return func(r chi.Router) {
 		r.Group(func(r chi.Router) {
 			r.Use(authenticated(d))
-			r.Get("/notifications", handleNotificationInbox(svc))
-			r.With(throttleUser(d, ratelimit.Write)).Put("/notifications/{id}/read", handleNotificationRead(svc))
-			r.With(throttleUser(d, ratelimit.Write)).Post("/notifications/devices", handleNotificationDevice(d, svc))
+			r.Get("/notifications", handleNotificationInbox(svc, members))
+			r.With(throttleUser(d, ratelimit.Write)).Put("/notifications/{id}/read", handleNotificationRead(svc, members))
+			r.With(throttleUser(d, ratelimit.Write)).Post("/notifications/devices", handleNotificationDevice(d, svc, members))
 		})
 	}
+}
+
+type memberAccountResolver interface {
+	ByUserID(context.Context, string) (*member.Member, error)
+}
+
+func memberIDForUser(ctx context.Context, resolver memberAccountResolver, userID string) (string, error) {
+	linked, err := resolver.ByUserID(ctx, userID)
+	if err != nil || linked == nil || linked.ID.IsZero() {
+		return "", member.ErrNotFound
+	}
+	return linked.ID.Hex(), nil
 }
 
 type memberNotificationResponse struct {
@@ -64,18 +79,46 @@ func notificationForMember(n notification.Notification) memberNotificationRespon
 		ID: n.ID.Hex(), ChurchID: n.ChurchID.String(), RecipientID: n.MemberID.String(),
 		Channel: strings.ToUpper(string(n.Channel)), Type: "CUSTOM", Status: status,
 		Title: title, Body: n.Body, CreatedAt: n.CreatedAt, SentAt: n.SentAt,
-		ReadAt: n.ReadAt, Metadata: map[string]any{},
+		ReadAt: n.ReadAt, Metadata: notificationMetadata(n),
 	}
 }
 
-func handleNotificationInbox(svc *notification.Service) http.HandlerFunc {
+func notificationMetadata(n notification.Notification) map[string]any {
+	metadata := map[string]any{}
+	if n.DeepLink != "" {
+		metadata["deepLink"] = n.DeepLink
+	}
+	return metadata
+}
+
+func handleNotificationInbox(svc *notification.Service, members memberAccountResolver) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		scope, err := tenancy.FromContext(r.Context())
 		if err != nil || scope.UserID == "" {
 			httpx.Error(w, http.StatusUnauthorized, "Sign in to continue.")
 			return
 		}
-		history, err := svc.History(r.Context(), scope.UserID, 200)
+		memberID, err := memberIDForUser(r.Context(), members, scope.UserID)
+		if err != nil {
+			httpx.Error(w, http.StatusConflict, "Your account is not linked to a member record yet.")
+			return
+		}
+		paged := r.URL.Query().Has("page") || r.URL.Query().Has("limit")
+		page, limit := 1, 200
+		if paged {
+			page, limit = paging(r)
+			if page < 1 {
+				page = 1
+			}
+			if page > 10_000_000 {
+				httpx.Error(w, http.StatusBadRequest, "That notification page is not valid.")
+				return
+			}
+			if limit < 1 || limit > 100 {
+				limit = 50
+			}
+		}
+		history, err := svc.HistoryPage(r.Context(), memberID, int64(limit), int64(page-1)*int64(limit))
 		if err != nil {
 			writeNotificationError(w, err)
 			return
@@ -84,18 +127,32 @@ func handleNotificationInbox(svc *notification.Service) http.HandlerFunc {
 		for _, item := range history {
 			items = append(items, notificationForMember(item))
 		}
+		if paged {
+			total, countErr := svc.HistoryCount(r.Context(), memberID)
+			if countErr != nil {
+				writeNotificationError(w, countErr)
+				return
+			}
+			httpx.JSON(w, http.StatusOK, map[string]any{"data": items, "total": total})
+			return
+		}
 		httpx.JSON(w, http.StatusOK, items)
 	}
 }
 
-func handleNotificationRead(svc *notification.Service) http.HandlerFunc {
+func handleNotificationRead(svc *notification.Service, members memberAccountResolver) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		scope, err := tenancy.FromContext(r.Context())
 		if err != nil || scope.UserID == "" {
 			httpx.Error(w, http.StatusUnauthorized, "Sign in to continue.")
 			return
 		}
-		item, err := svc.MarkRead(r.Context(), chi.URLParam(r, "id"), scope.UserID)
+		memberID, err := memberIDForUser(r.Context(), members, scope.UserID)
+		if err != nil {
+			httpx.Error(w, http.StatusConflict, "Your account is not linked to a member record yet.")
+			return
+		}
+		item, err := svc.MarkRead(r.Context(), chi.URLParam(r, "id"), memberID)
 		if err != nil {
 			writeNotificationError(w, err)
 			return
@@ -107,7 +164,7 @@ func handleNotificationRead(svc *notification.Service) http.HandlerFunc {
 	}
 }
 
-func handleNotificationDevice(d *deps.Deps, svc *notification.Service) http.HandlerFunc {
+func handleNotificationDevice(d *deps.Deps, svc *notification.Service, members memberAccountResolver) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		scope, err := tenancy.FromContext(r.Context())
 		if err != nil || scope.UserID == "" {
@@ -127,7 +184,12 @@ func handleNotificationDevice(d *deps.Deps, svc *notification.Service) http.Hand
 			httpx.Error(w, http.StatusUnauthorized, "Sign in to continue.")
 			return
 		}
-		if err := svc.RegisterDevice(r.Context(), scope.UserID, claims.Family, req.Token, req.Platform); err != nil {
+		memberID, err := memberIDForUser(r.Context(), members, scope.UserID)
+		if err != nil {
+			httpx.Error(w, http.StatusConflict, "Your account is not linked to a member record yet.")
+			return
+		}
+		if err := svc.RegisterDevice(r.Context(), memberID, claims.Family, req.Token, req.Platform); err != nil {
 			writeNotificationError(w, err)
 			return
 		}

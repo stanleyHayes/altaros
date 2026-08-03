@@ -9,6 +9,9 @@ import givingService, {
   normalizeGivingRecord,
   normalizeGiveRequest,
   normalizeGivingHistoryParams,
+  memberPaymentUpliftMinor,
+  MOBILE_PAYMENT_CALLBACK_URL,
+  pendingGivingRecoveryReference,
   sumConfirmedGivingMinor,
   type GivingRecord,
 } from './giving.service';
@@ -22,11 +25,48 @@ const mockedApi = api as jest.Mocked<typeof api>;
 
 const validRecord = {
   id: 'gift-1', churchId: 'church-1', type: 'offering', channel: 'mobile_money',
-  grossMinor: 1000, levyMinor: 0, netMinor: 970, currency: 'GHS', status: 'pending',
+  grossMinor: 1000, levyMinor: 0, providerFeeMinor: 0, chargedMinor: 1000,
+  feeBearer: 'church', netMinor: 970, currency: 'GHS', status: 'pending',
   idempotencyKey: 'gift-ref-1', occurredAt: '2026-08-01T10:00:00Z',
   createdAt: '2026-08-01T10:00:00Z',
 } satisfies GivingRecord;
 const validReference = 'alt_abcdefghijklmnopqrstuvwxyz234567';
+const money = (minor: number) => ({ minor, currency: 'GHS' });
+const fullPricing = (
+  giftMinor: number,
+  providerFeeMinor = 0,
+  levyMinor = 0,
+  bearer: 'giver' | 'church' = 'giver',
+) => {
+  const chargedMinor = giftMinor + (bearer === 'giver' ? providerFeeMinor : 0);
+  return {
+    gift: money(giftMinor),
+    fee: {
+      gift: money(giftMinor),
+      providerFee: money(providerFeeMinor),
+      charged: money(chargedMinor),
+      bearer,
+      explanation: providerFeeMinor > 0
+        ? 'This estimate includes the disclosed payment-provider fee.'
+        : 'No payment-provider fee applies.',
+      estimated: true,
+    },
+    levy: {
+      levy: money(levyMinor),
+      total: money(chargedMinor + levyMinor),
+      exempt: levyMinor === 0,
+      reason: levyMinor === 0 ? 'Below the daily threshold' : 'Daily allowance exceeded',
+    },
+    total: money(chargedMinor + levyMinor),
+  };
+};
+const flattenedPricing = (pricing: ReturnType<typeof fullPricing>) => ({
+  fee: pricing.fee,
+  levy: pricing.levy.levy,
+  total: pricing.total,
+  exempt: pricing.levy.exempt,
+  reason: pricing.levy.reason,
+});
 
 describe('giving money formatting', () => {
   it.each([
@@ -89,12 +129,7 @@ describe('giving money formatting', () => {
   });
 
   it('quotes without creating a transaction', async () => {
-    const quote = {
-      levy: { minor: 50, currency: 'GHS' },
-      total: { minor: 15050, currency: 'GHS' },
-      exempt: false,
-      reason: 'Daily allowance exceeded',
-    };
+    const quote = flattenedPricing(fullPricing(15000, 293, 50));
     mockedApi.post.mockResolvedValueOnce({ data: { success: true, data: quote } } as never);
 
     await expect(givingService.quote({
@@ -105,16 +140,54 @@ describe('giving money formatting', () => {
     });
   });
 
+  it('includes a giver-borne provider fee in the exact consent total', () => {
+    const quote = validateLevyQuote(flattenedPricing(fullPricing(10000, 195)), '100.00');
+    expect(quote.fee.charged.minor).toBe(10195);
+    expect(quote.total.minor).toBe(10195);
+  });
+
+  it('reports the member payment uplift instead of the provider settlement cost', () => {
+    expect(memberPaymentUpliftMinor({ grossMinor: 10000, chargedMinor: 10195 })).toBe(195);
+    expect(memberPaymentUpliftMinor({ grossMinor: 10000, chargedMinor: 10000 })).toBe(0);
+  });
+
+  it('rejects a quote whose total omits the giver-borne provider fee', () => {
+    const quote = flattenedPricing(fullPricing(10000, 195));
+    expect(() => validateLevyQuote({ ...quote, total: money(10000) }, '100.00'))
+      .toThrow('The server returned an invalid payment quote.');
+  });
+
   it('canonicalizes checkout intent before transport', () => {
     expect(normalizeGiveRequest({
       amount: '0010.5', currency: 'GHS', type: 'offering', channel: 'mobile_money',
       email: ' MEMBER@EXAMPLE.COM ', note: ' Sunday offering ', anonymous: false,
-      callbackUrl: 'altaros://giving/complete', acceptedTotalMinor: 1050,
+      callbackUrl: MOBILE_PAYMENT_CALLBACK_URL, acceptedTotalMinor: 1050,
     })).toEqual({
       amount: '10.50', currency: 'GHS', type: 'offering', channel: 'mobile_money',
       email: 'member@example.com', note: 'Sunday offering', anonymous: false,
-      callbackUrl: 'altaros://giving/complete', acceptedTotalMinor: 1050,
+      callbackUrl: MOBILE_PAYMENT_CALLBACK_URL, acceptedTotalMinor: 1050,
     });
+  });
+
+  it('requires an attributable live purpose for campaign and pledge payments', () => {
+    const campaignId = '64f000000000000000000001';
+    const pledgeId = '64f000000000000000000002';
+    expect(normalizeGiveRequest({
+      amount: '10.00', currency: 'GHS', type: 'campaign', channel: 'mobile_money',
+      campaignId: campaignId.toUpperCase(), acceptedTotalMinor: 1000,
+    })).toMatchObject({ campaignId, type: 'campaign' });
+    expect(normalizeGiveRequest({
+      amount: '10.00', currency: 'GHS', type: 'pledge_payment', channel: 'mobile_money',
+      campaignId, pledgeId: pledgeId.toUpperCase(), acceptedTotalMinor: 1000,
+    })).toMatchObject({ campaignId, pledgeId, type: 'pledge_payment' });
+    expect(() => normalizeGiveRequest({
+      amount: '10.00', currency: 'GHS', type: 'campaign', channel: 'mobile_money',
+      acceptedTotalMinor: 1000,
+    })).toThrow('gift details are not valid');
+    expect(() => normalizeGiveRequest({
+      amount: '10.00', currency: 'GHS', type: 'offering', channel: 'mobile_money',
+      campaignId, acceptedTotalMinor: 1000,
+    })).toThrow('gift details are not valid');
   });
 
   it.each([
@@ -124,6 +197,7 @@ describe('giving money formatting', () => {
     { email: 'not-an-email' },
     { note: 'x'.repeat(241) },
     { note: 'offering\u0000memo' },
+    { callbackUrl: 'altaros://giving/complete' },
     { callbackUrl: 'https://evil.example/complete' },
     { acceptedTotalMinor: 0 },
     { acceptedTotalMinor: 999 },
@@ -133,7 +207,7 @@ describe('giving money formatting', () => {
     await expect(givingService.give({
       amount: '10.00', currency: 'GHS', type: 'offering', channel: 'mobile_money',
       email: 'member@example.com', note: 'Offering', anonymous: false,
-      callbackUrl: 'altaros://giving/complete', acceptedTotalMinor: 1000,
+      callbackUrl: MOBILE_PAYMENT_CALLBACK_URL, acceptedTotalMinor: 1000,
       ...override,
     } as never, 'church-1', 'member-1')).rejects.toThrow('gift details are not valid');
     expect(mockedApi.post).toHaveBeenCalledTimes(callsBefore);
@@ -161,15 +235,12 @@ describe('giving money formatting', () => {
   });
 
   it('rejects a malformed quote returned alongside checkout creation', async () => {
+    const malformedPricing = fullPricing(1000, 0, 10);
+    malformedPricing.total = money(1000);
     mockedApi.post.mockResolvedValueOnce({ data: {
       transaction: validRecord,
       authorizationUrl: 'https://checkout.paystack.com/session-1',
-      levy: {
-        levy: { minor: 10, currency: 'GHS' },
-        total: { minor: 1000, currency: 'GHS' },
-        exempt: false,
-        reason: 'inconsistent total',
-      },
+      quote: malformedPricing,
     } } as never);
 
     await expect(givingService.give({
@@ -187,12 +258,7 @@ describe('giving money formatting', () => {
       transaction: { ...validRecord, idempotencyKey: validReference, memberId: 'member-1' },
       authorizationUrl: 'https://checkout.paystack.com/session-1',
       accessCode: 'access-1',
-      levy: {
-        levy: { minor: 0, currency: 'GHS' },
-        total: { minor: 1000, currency: 'GHS' },
-        exempt: true,
-        reason: 'Below the daily threshold',
-      },
+      quote: fullPricing(1000),
     };
     expect(normalizeCheckoutResult(checkout, payload, 'church-1', 'member-1'))
       .toMatchObject({ authorizationUrl: 'https://checkout.paystack.com/session-1' });
@@ -222,10 +288,7 @@ describe('giving money formatting', () => {
     const checkout = {
       transaction: { ...validRecord, idempotencyKey: validReference, memberId: 'member-1' },
       authorizationUrl: 'https://checkout.paystack.com/session-1', accessCode: 'access-1',
-      levy: {
-        levy: { minor: 0, currency: 'GHS' }, total: { minor: 1000, currency: 'GHS' },
-        exempt: true, reason: 'Below threshold',
-      },
+      quote: fullPricing(1000),
     };
     expect(() => normalizeCheckoutResult({ ...checkout, ...override }, payload, 'church-1', 'member-1'))
       .toThrow('invalid checkout');
@@ -239,10 +302,7 @@ describe('giving money formatting', () => {
     const checkout = {
       transaction: { ...validRecord, idempotencyKey: validReference, memberId: 'member-1' },
       authorizationUrl: 'https://checkout.paystack.com/session-1', accessCode: 'access-1',
-      levy: {
-        levy: { minor: 0, currency: 'GHS' }, total: { minor: 1000, currency: 'GHS' },
-        exempt: true, reason: 'Below threshold',
-      },
+      quote: fullPricing(1000),
     };
     expect(() => normalizeCheckoutResult(checkout, payload, 'church-1', 'member-1'))
       .toThrow('invalid checkout');
@@ -282,6 +342,21 @@ describe('giving money formatting', () => {
     expect(normalizePaymentReference(` ${validReference.toUpperCase()} `)).toBe(validReference);
     expect(normalizePaymentReference('altar/unsafe ref')).toBeNull();
     expect(normalizePaymentReference('alt_abcdefghijklmnopqrstuvwxyz234568')).toBeNull();
+  });
+
+  it('resumes only a pending digital checkout with a canonical reference', () => {
+    expect(pendingGivingRecoveryReference({
+      status: 'pending', channel: 'mobile_money', idempotencyKey: validReference.toUpperCase(),
+    })).toBe(validReference);
+    expect(pendingGivingRecoveryReference({
+      status: 'success', channel: 'mobile_money', idempotencyKey: validReference,
+    })).toBeNull();
+    expect(pendingGivingRecoveryReference({
+      status: 'pending', channel: 'cash', idempotencyKey: validReference,
+    })).toBeNull();
+    expect(pendingGivingRecoveryReference({
+      status: 'pending', channel: 'card', idempotencyKey: 'unsafe/reference',
+    })).toBeNull();
   });
 
   it('verifies the owned provider reference through the settlement route', async () => {
@@ -335,13 +410,98 @@ describe('giving money formatting', () => {
   });
 
   it('reads the member transaction list from the self-history route', async () => {
-    const history = [{ ...validRecord, status: 'success' as const, grossMinor: 5000 }];
+    const history = [{
+      ...validRecord, status: 'success' as const, grossMinor: 5000, chargedMinor: 5000,
+    }];
     mockedApi.get.mockResolvedValueOnce({ data: { success: true, data: history } } as never);
 
     await expect(givingService.getHistory('church-1', 'member-1')).resolves.toEqual(history);
 
     expect(mockedApi.get).toHaveBeenCalledWith('/finance/me/giving', { params: undefined });
   });
+
+  it('loads member-owned campaigns and active pledges for attributable giving', async () => {
+    const campaignId = '64f000000000000000000001';
+    const pledgeId = '64f000000000000000000002';
+    mockedApi.get.mockResolvedValueOnce({ data: { success: true, data: {
+      campaigns: [{
+        id: campaignId, churchId: 'church-1', title: 'New sanctuary',
+        targetAmount: 1000000, currentAmount: 250000, currency: 'GHS', progress: 25,
+        startDate: '2026-07-01T00:00:00Z', endDate: '2026-12-31T23:59:59Z', isActive: true,
+      }],
+      pledges: [{
+        pledge: {
+          id: pledgeId, churchId: 'church-1', memberId: 'member-1', campaignId,
+          totalMinor: 100000, currency: 'GHS', frequency: 'monthly', instalments: 10,
+          startDate: '2026-07-01T00:00:00Z', note: 'Building promise',
+        },
+        paidMinor: 25000, dueMinor: 20000, arrearsMinor: 0, aheadMinor: 5000,
+        remainingMinor: 75000, percent: 25, behind: false, complete: false, currency: 'GHS',
+      }],
+    } } } as never);
+
+    await expect(givingService.getGivingOptions('church-1', 'member-1')).resolves.toEqual({
+      campaigns: [{
+        id: campaignId, title: 'New sanctuary', targetAmount: 1000000,
+        currentAmount: 250000, currency: 'GHS', progress: 25,
+        endDate: '2026-12-31T23:59:59Z',
+      }],
+      pledges: [{
+        id: pledgeId, campaignId, totalMinor: 100000, paidMinor: 25000,
+        remainingMinor: 75000, currency: 'GHS', percent: 25, note: 'Building promise',
+      }],
+    });
+    expect(mockedApi.get).toHaveBeenCalledWith('/finance/me/giving-options');
+  });
+
+  it('rejects cross-member or malformed giving options', async () => {
+    mockedApi.get.mockResolvedValueOnce({ data: { success: true, data: {
+      campaigns: [],
+      pledges: [{
+        pledge: {
+          id: '64f000000000000000000002', churchId: 'church-1', memberId: 'member-2',
+          totalMinor: 1000, currency: 'GHS', note: 'Private promise',
+        },
+        paidMinor: 0, remainingMinor: 1000, percent: 0, currency: 'GHS',
+      }],
+    } } } as never);
+    await expect(givingService.getGivingOptions('church-1', 'member-1'))
+      .rejects.toThrow('invalid giving options');
+  });
+
+  it('reads a bounded giving-history page with its authoritative total', async () => {
+    const history = [{ ...validRecord, status: 'success' as const }];
+    mockedApi.get.mockResolvedValueOnce({
+      data: { success: true, data: { data: history, total: 51 } },
+    } as never);
+
+    await expect(givingService.getHistoryPage('church-1', 'member-1', 2, 50))
+      .resolves.toEqual({ records: history, total: 51 });
+    expect(mockedApi.get).toHaveBeenCalledWith('/finance/me/giving', {
+      params: { page: 2, limit: 50 },
+    });
+  });
+
+  it.each([
+    { data: [validRecord], total: -1 },
+    { data: [validRecord], total: 0 },
+    { data: 'not-a-list', total: 1 },
+    { data: [validRecord], total: 1.5 },
+  ])('rejects an invalid paged giving history response: %p', async (payload) => {
+    mockedApi.get.mockResolvedValueOnce({ data: { success: true, data: payload } } as never);
+    await expect(givingService.getHistoryPage('church-1', 'member-1', 1))
+      .rejects.toThrow('invalid giving history');
+  });
+
+  it.each([[0, 50], [1.5, 50], [1, 0], [1, 101]])(
+    'rejects an unsafe giving history page before transport: %s/%s',
+    async (page, limit) => {
+      const callsBefore = mockedApi.get.mock.calls.length;
+      await expect(givingService.getHistoryPage('church-1', 'member-1', page, limit))
+        .rejects.toThrow('page is not valid');
+      expect(mockedApi.get).toHaveBeenCalledTimes(callsBefore);
+    },
+  );
 
   it('accepts only gateway-supported ordered history dates', () => {
     expect(normalizeGivingHistoryParams({

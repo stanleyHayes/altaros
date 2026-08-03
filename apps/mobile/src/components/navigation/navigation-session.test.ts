@@ -1,4 +1,4 @@
-import { navigationSessionKey } from './navigation-session';
+import { navigationIdentityForUser, navigationSessionKey } from './navigation-session';
 
 describe('root navigation session ownership', () => {
   it('keeps one stable auth navigator while signed out', () => {
@@ -19,5 +19,10 @@ describe('root navigation session ownership', () => {
       .not.toBe(navigationSessionKey(true, { churchId: 'a', memberId: 'bc' }));
     expect(navigationSessionKey(true, { churchId: '', memberId: 'member-1' }))
       .toBe('member-navigation-incomplete');
+  });
+
+  it('binds private navigation to the roster member identity, not the login account id', () => {
+    const user = { id: 'account-1', churchId: 'church-1', memberId: 'member-1' };
+    expect(navigationIdentityForUser(user)).toEqual({ churchId: 'church-1', memberId: 'member-1' });
   });
 });

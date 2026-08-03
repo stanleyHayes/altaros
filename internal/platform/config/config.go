@@ -86,6 +86,8 @@ type Config struct {
 	SMS        SMSConfig
 	AfricasTkg AfricasTalkingConfig
 	Resend     ResendConfig
+	Firebase   FirebaseConfig
+	APNS       APNSConfig
 	Cloudinary CloudinaryConfig
 	Anthropic  AnthropicConfig
 
@@ -193,6 +195,20 @@ type ArkeselConfig struct {
 type ResendConfig struct {
 	APIKey    string
 	FromEmail string
+}
+
+// FirebaseConfig holds the service account used for Android FCM v1 delivery.
+type FirebaseConfig struct {
+	ServiceAccount string
+}
+
+// APNSConfig holds Apple's token-based provider credentials for iOS delivery.
+type APNSConfig struct {
+	TeamID     string
+	KeyID      string
+	BundleID   string
+	PrivateKey string
+	Sandbox    bool
 }
 
 type CloudinaryConfig struct {
@@ -314,6 +330,12 @@ func Load(serviceName string) (*Config, error) {
 			APIKey:    os.Getenv("RESEND_API_KEY"),
 			FromEmail: os.Getenv("RESEND_FROM_EMAIL"),
 		},
+		Firebase: FirebaseConfig{ServiceAccount: os.Getenv("FIREBASE_SERVICE_ACCOUNT")},
+		APNS: APNSConfig{
+			TeamID: os.Getenv("APNS_TEAM_ID"), KeyID: os.Getenv("APNS_KEY_ID"),
+			BundleID:   getenv("APNS_BUNDLE_ID", "com.altaros.app"),
+			PrivateKey: os.Getenv("APNS_PRIVATE_KEY"), Sandbox: getenvBool("APNS_SANDBOX", false),
+		},
 		Cloudinary: CloudinaryConfig{
 			CloudName: os.Getenv("CLOUDINARY_CLOUD_NAME"),
 			APIKey:    os.Getenv("CLOUDINARY_API_KEY"),
@@ -362,8 +384,13 @@ func requiredSecrets(service string, sms SMSProvider) map[string]func(*Config) s
 			"PAYSTACK_WEBHOOK_SECRET": func(c *Config) string { return c.Paystack.WebhookSecret },
 		},
 		"notification": {
-			"RESEND_API_KEY":    func(c *Config) string { return c.Resend.APIKey },
-			"RESEND_FROM_EMAIL": func(c *Config) string { return c.Resend.FromEmail },
+			"RESEND_API_KEY":           func(c *Config) string { return c.Resend.APIKey },
+			"RESEND_FROM_EMAIL":        func(c *Config) string { return c.Resend.FromEmail },
+			"FIREBASE_SERVICE_ACCOUNT": func(c *Config) string { return c.Firebase.ServiceAccount },
+			"APNS_TEAM_ID":             func(c *Config) string { return c.APNS.TeamID },
+			"APNS_KEY_ID":              func(c *Config) string { return c.APNS.KeyID },
+			"APNS_BUNDLE_ID":           func(c *Config) string { return c.APNS.BundleID },
+			"APNS_PRIVATE_KEY":         func(c *Config) string { return c.APNS.PrivateKey },
 		},
 		"ai": {
 			"ANTHROPIC_API_KEY": func(c *Config) string { return c.Anthropic.APIKey },

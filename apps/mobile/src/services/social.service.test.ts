@@ -177,11 +177,50 @@ describe('social service contracts', () => {
     expect(mockedApi.post).not.toHaveBeenCalled();
   });
 
+  it('reports a post only after a matching gateway acknowledgement', async () => {
+    mockedApi.post.mockResolvedValueOnce({ data: { reported: true, reportId: 'report-1' } } as never);
+    await expect(socialService.reportPost('post-1', 'privacy')).resolves.toBeUndefined();
+    expect(mockedApi.post).toHaveBeenCalledWith('/social/posts/post-1/report', {
+      reason: 'privacy', detail: '',
+    });
+  });
+
+  it('rejects invalid report input and contradictory acknowledgements', async () => {
+    await expect(socialService.reportPost('post-1', 'other' as never))
+      .rejects.toThrow('valid reason');
+    expect(mockedApi.post).not.toHaveBeenCalled();
+    mockedApi.post.mockResolvedValueOnce({ data: { reported: false, reportId: 'report-1' } } as never);
+    await expect(socialService.reportPost('post-1', 'spam'))
+      .rejects.toThrow('did not confirm');
+  });
+
+  it('deletes an owned post only after the gateway confirms deletion', async () => {
+    mockedApi.delete.mockResolvedValueOnce({ data: { deleted: true } } as never);
+    await expect(socialService.deletePost('post-1')).resolves.toBeUndefined();
+    expect(mockedApi.delete).toHaveBeenCalledWith('/social/posts/post-1');
+
+    mockedApi.delete.mockResolvedValueOnce({ data: { deleted: false } } as never);
+    await expect(socialService.deletePost('post-1'))
+      .rejects.toThrow('did not confirm');
+  });
+
+  it('deletes an owned comment only after the gateway confirms deletion', async () => {
+    mockedApi.delete.mockResolvedValueOnce({ data: { deleted: true } } as never);
+    await expect(socialService.deleteComment('post-1', 'comment-1')).resolves.toBeUndefined();
+    expect(mockedApi.delete).toHaveBeenCalledWith('/social/posts/post-1/comments/comment-1');
+
+    mockedApi.delete.mockResolvedValueOnce({ data: { deleted: false } } as never);
+    await expect(socialService.deleteComment('post-1', 'comment-1'))
+      .rejects.toThrow('did not confirm');
+  });
+
   it.each([
     () => socialService.getFeed('church/unsafe'),
     () => socialService.likePost('post/unsafe'),
     () => socialService.unlikePost('post/unsafe'),
     () => socialService.deletePost('post/unsafe'),
+    () => socialService.reportPost('post/unsafe', 'spam'),
+    () => socialService.deleteComment('post-1', 'comment/unsafe'),
     () => socialService.addComment('post-1', 'Amen', 'member/unsafe'),
   ])('rejects an unsafe community route identity before transport', async (request) => {
     await expect(request()).rejects.toThrow();

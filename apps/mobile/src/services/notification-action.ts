@@ -1,11 +1,47 @@
+import { isAmbiguousMutationFailure } from './api-error';
+
 export interface NotificationActionResult {
   readFailed: boolean;
+  readError?: unknown;
   openFailed: boolean;
 }
 
 export interface NotificationInboxOwner {
   churchId?: string;
   memberId?: string;
+}
+
+export function notificationBannerState(
+  actionError: string,
+  loadError: string,
+  actionNeedsRefresh: boolean,
+  offline: boolean,
+): {
+  message: string;
+  action?: { label: string; hint: string; disabled: boolean };
+} | null {
+  const messages = [actionError.trim(), loadError.trim()].filter(Boolean);
+  if (messages.length === 0 && !actionNeedsRefresh) return null;
+  if (messages.length === 0) {
+    messages.push('Notification read status needs to be refreshed.');
+  }
+  const refreshRequired = Boolean(loadError.trim()) || actionNeedsRefresh;
+  return {
+    message: [...new Set(messages)].join(' '),
+    ...(refreshRequired ? {
+      action: offline
+        ? {
+          label: 'Reconnect to refresh',
+          hint: 'Reconnect to refresh your notification inbox.',
+          disabled: true,
+        }
+        : {
+          label: 'Refresh inbox',
+          hint: 'Loads the latest notifications and read status.',
+          disabled: false,
+        },
+    } : {}),
+  };
 }
 
 export function notificationInboxBelongsToIdentity(
@@ -53,8 +89,21 @@ export async function runNotificationActions(
   const [readResult, openResult] = await Promise.allSettled([read, open]);
   return {
     readFailed: readResult.status === 'rejected',
+    ...(readResult.status === 'rejected' ? { readError: readResult.reason } : {}),
     openFailed: openResult.status === 'rejected',
   };
+}
+
+export function notificationReadFailure(error: unknown): { outcomeUnknown: boolean; message: string } {
+  return isAmbiguousMutationFailure(error)
+    ? {
+      outcomeUnknown: true,
+      message: 'We could not confirm whether that notification was marked as read. Refresh your inbox to check its latest status.',
+    }
+    : {
+      outcomeUnknown: false,
+      message: 'That notification could not be marked as read. Try again.',
+    };
 }
 
 export function notificationActionAccessibility(

@@ -448,12 +448,13 @@ func (s *Service) settle(ctx context.Context, stored *Transaction) (*Transaction
 	}
 
 	// The provider says this succeeded. Two checks before it becomes income.
-	if v.Amount.Minor != stored.GrossMinor || v.Amount.Currency != stored.Currency {
+	charged := stored.Charged()
+	if v.Amount.Minor != charged.Minor || v.Amount.Currency != charged.Currency {
 		// Never reconcile silently to the provider's figure: either our record
 		// is wrong or the payment is not the one we think it is, and both need
 		// a human rather than a number quietly changing.
 		return nil, fmt.Errorf("%w: recorded %s, provider reported %s",
-			ErrAmountMismatch, stored.Gross(), v.Amount)
+			ErrAmountMismatch, charged, v.Amount)
 	}
 
 	payout, err := s.dir.PayoutFor(ctx, stored.ChurchID.String())
@@ -638,6 +639,8 @@ func (s *Service) RecordCash(ctx context.Context, req CashRequest) (*Transaction
 		"grossMinor":       req.Amount.Minor,
 		"levyMinor":        int64(0),
 		"providerFeeMinor": int64(0),
+		"chargedMinor":     req.Amount.Minor,
+		"feeBearer":        string(money.BearerChurch),
 		"platformFeeMinor": int64(0),
 		"netMinor":         req.Amount.Minor,
 		"currency":         req.Amount.Currency,

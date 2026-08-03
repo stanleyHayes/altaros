@@ -1,6 +1,7 @@
 import {
   SETTLEMENT_MAX_ATTEMPTS,
   SETTLEMENT_POLL_INTERVAL_MS,
+  canLeaveSettlement,
   normalizePaymentCallbackReference,
   settlementContextMatches,
   settlementPreflightError,
@@ -46,6 +47,11 @@ describe('giving settlement polling', () => {
   it('uses a bounded retry window suitable for a payment-return screen', () => {
     expect(SETTLEMENT_POLL_INTERVAL_MS).toBe(4_000);
     expect(SETTLEMENT_MAX_ATTEMPTS).toBe(4);
+  });
+
+  it('keeps payment status terminal until the member explicitly opens giving history', () => {
+    expect(canLeaveSettlement(false)).toBe(false);
+    expect(canLeaveSettlement(true)).toBe(true);
   });
 
   it.each([1, 2, 3])('continues polling a pending gift after attempt %s', (attempt) => {

@@ -19,17 +19,23 @@ import { Button } from '../../components/common/Button';
 import { useAuth } from '../../hooks/useAuth';
 import { colors, typography, spacing, borderRadius } from '../../theme';
 import type { AuthStackParamList } from '../../components/navigation/AppNavigator';
-import authService, { canonicalPhone } from '../../services/auth.service';
+import authService, { canonicalPhone, canonicalWorkspace } from '../../services/auth.service';
 import { otpDigitLayout } from './otp-layout';
 import {
   OTP_RESEND_DELAY_MS,
+  otpCodeInputState,
   otpJourneyKey,
   otpResendSeconds,
+  otpResendFailure,
+  otpResendActionState,
+  otpVerificationFailure,
+  otpVerifyActionState,
   ownsOtpJourney,
 } from './otp-state';
 import { createSubmissionLock } from '../../services/submission-lock';
+import { formKeyboardProps } from '../../components/common/form-keyboard';
 import { useKnownOffline } from '../../hooks/useKnownOffline';
-import { apiErrorMessage } from '../../services/api-error';
+import { useAnimatedRouteTop } from '../../hooks/useAnimatedRouteTop';
 
 const OTP_LENGTH = 6;
 
@@ -42,11 +48,14 @@ export function OtpScreen() {
   const { width: viewportWidth } = useWindowDimensions();
   const { verifyOtp } = useAuth();
   const offline = useKnownOffline();
+  const scrollRef = useRef<ScrollView>(null);
+  useAnimatedRouteTop(scrollRef);
   const { codeRequested = true, deliveryUnconfirmed = false } = route.params;
   const phone = typeof route.params.phone === 'string' ? canonicalPhone(route.params.phone) : null;
-  const validRoute = phone !== null;
+  const workspace = canonicalWorkspace(route.params.workspace);
+  const validRoute = phone !== null && workspace !== null;
   const initialCodeRequested = codeRequested && validRoute;
-  const journeyKey = otpJourneyKey(phone, codeRequested, deliveryUnconfirmed);
+  const journeyKey = otpJourneyKey(phone, workspace, codeRequested, deliveryUnconfirmed);
 
   const [otp, setOtp] = useState<string[]>(Array(OTP_LENGTH).fill(''));
   const [isLoading, setIsLoading] = useState(false);
@@ -57,12 +66,24 @@ export function OtpScreen() {
   );
   const [timerNow, setTimerNow] = useState(Date.now);
   const [hasRequestedCode, setHasRequestedCode] = useState(initialCodeRequested);
+  const [verificationOutcomeUnknown, setVerificationOutcomeUnknown] = useState(false);
   const inputRefs = useRef<(TextInput | null)[]>([]);
   const otpMutationLock = useRef(createSubmissionLock());
   const mountedRef = useRef(true);
   const activeJourneyRef = useRef(journeyKey);
   activeJourneyRef.current = journeyKey;
   const digitLayout = otpDigitLayout(viewportWidth);
+  const codeInputState = otpCodeInputState(hasRequestedCode, isLoading, isResending);
+  const resendAction = otpResendActionState(validRoute, offline, isResending, isLoading);
+  const verifyAction = otpVerifyActionState(
+    validRoute,
+    offline,
+    hasRequestedCode,
+    verificationOutcomeUnknown,
+    otp.every(Boolean),
+    isResending,
+    isLoading,
+  );
 
   useEffect(() => {
     mountedRef.current = true;
@@ -76,6 +97,7 @@ export function OtpScreen() {
     setIsResending(false);
     setError(validRoute ? '' : 'This verification request has an invalid mobile number. Return to sign in and request a new code.');
     setHasRequestedCode(initialCodeRequested);
+    setVerificationOutcomeUnknown(false);
     const now = Date.now();
     setTimerNow(now);
     setResendAvailableAt(initialCodeRequested ? now + OTP_RESEND_DELAY_MS : 0);
@@ -128,7 +150,7 @@ export function OtpScreen() {
   };
 
   const handleVerify = async () => {
-    if (!phone) {
+    if (!phone || !workspace) {
       setError('This verification request has an invalid mobile number. Return to sign in and request a new code.');
       return;
     }
@@ -143,11 +165,19 @@ export function OtpScreen() {
 
     setIsLoading(true);
     try {
-      await verifyOtp({ phone, otp: code }, () => mountedRef.current
+      await verifyOtp({ phone, otp: code, workspace }, () => mountedRef.current
         && ownsOtpJourney(activeJourneyRef.current, startedJourney));
     } catch (error: unknown) {
       if (mountedRef.current && ownsOtpJourney(activeJourneyRef.current, startedJourney)) {
-        setError(apiErrorMessage(error, 'We could not verify that code. Try again.'));
+        const failure = otpVerificationFailure(error);
+        if (failure.outcomeUnknown) {
+          setVerificationOutcomeUnknown(true);
+          setHasRequestedCode(false);
+          setOtp(Array(OTP_LENGTH).fill(''));
+          setResendAvailableAt(0);
+          setTimerNow(Date.now());
+        }
+        setError(failure.message);
       }
     } finally {
       if (mountedRef.current && ownsOtpJourney(activeJourneyRef.current, startedJourney)) {
@@ -158,7 +188,7 @@ export function OtpScreen() {
   };
 
   const handleResend = async () => {
-    if (!phone) {
+    if (!phone || !workspace) {
       setError('This verification request has an invalid mobile number. Return to sign in and request a new code.');
       return;
     }
@@ -168,9 +198,10 @@ export function OtpScreen() {
     setIsResending(true);
     setError('');
     try {
-      await authService.requestOtp(phone);
+      await authService.requestOtp(phone, workspace);
       if (!mountedRef.current || !ownsOtpJourney(activeJourneyRef.current, startedJourney)) return;
       setHasRequestedCode(true);
+      setVerificationOutcomeUnknown(false);
       const now = Date.now();
       setTimerNow(now);
       setResendAvailableAt(now + OTP_RESEND_DELAY_MS);
@@ -184,7 +215,16 @@ export function OtpScreen() {
       );
     } catch (resendError) {
       if (mountedRef.current && ownsOtpJourney(activeJourneyRef.current, startedJourney)) {
-        setError(apiErrorMessage(resendError, 'We could not resend the code. Try again.'));
+        const failure = otpResendFailure(resendError);
+        if (failure.deliveryUnknown) {
+          setHasRequestedCode(true);
+          setVerificationOutcomeUnknown(false);
+          const now = Date.now();
+          setTimerNow(now);
+          setResendAvailableAt(now + OTP_RESEND_DELAY_MS);
+          setOtp(Array(OTP_LENGTH).fill(''));
+        }
+        setError(failure.message);
       }
     } finally {
       if (mountedRef.current && ownsOtpJourney(activeJourneyRef.current, startedJourney)) {
@@ -197,7 +237,7 @@ export function OtpScreen() {
   return (
     <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <StatusBar style="light" />
-      <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled" bounces={false}>
+      <ScrollView ref={scrollRef} contentContainerStyle={styles.container} {...formKeyboardProps(Platform.OS)} bounces={false}>
         <View style={styles.ambientTop} importantForAccessibility="no-hide-descendants" />
         <View style={styles.ambientBottom} importantForAccessibility="no-hide-descendants" />
         <View style={styles.journey}>
@@ -219,7 +259,9 @@ export function OtpScreen() {
                   ? deliveryUnconfirmed
                     ? 'If this number belongs to a member account, we sent a 6-digit code to'
                     : 'Enter the 6-digit code we sent to'
-                  : 'Your account is ready. Request a code to verify'}{'\n'}
+                  : deliveryUnconfirmed
+                    ? 'We could not confirm account creation. Request a code to check this number'
+                    : 'Request a code to continue verification'}{'\n'}
                 <Text style={styles.phone}>{phone ?? 'Invalid mobile number'}</Text>
               </Text>
             </View>
@@ -235,11 +277,12 @@ export function OtpScreen() {
                   keyboardType="number-pad"
                   maxLength={index === 0 ? OTP_LENGTH : 1}
                   selectTextOnFocus
-                  editable={hasRequestedCode && !isLoading && !isResending}
+                  editable={codeInputState.editable}
                   textContentType={index === 0 ? 'oneTimeCode' : 'none'}
                   autoComplete={index === 0 ? 'sms-otp' : 'off'}
                   accessibilityLabel={`Code digit ${index + 1} of ${OTP_LENGTH}`}
                   accessibilityHint={index === 0 ? 'You can paste the complete code here' : undefined}
+                  accessibilityState={codeInputState.accessibilityState}
                 />
               ))}
             </View>
@@ -250,13 +293,13 @@ export function OtpScreen() {
               </View>
             ) : null}
             <Button
-              title="Verify and continue"
+              title={verifyAction.label}
               onPress={handleVerify}
               loading={isLoading}
               fullWidth
               size="lg"
-              disabled={!validRoute || offline || !hasRequestedCode || otp.some((d) => !d) || isResending}
-              accessibilityHint={!validRoute ? 'Return to sign in and request a new code.' : offline ? 'Reconnect to verify this code.' : undefined}
+              disabled={verifyAction.disabled}
+              accessibilityHint={verifyAction.hint}
             />
             <View style={styles.resendContainer}>
               {resendTimer > 0 ? (
@@ -266,15 +309,16 @@ export function OtpScreen() {
                 </View>
               ) : (
                 <TouchableOpacity
-                  style={[styles.resendButton, offline && styles.actionDisabled]}
+                  style={[styles.resendButton, resendAction.disabled && styles.actionDisabled]}
                   onPress={() => void handleResend()}
-                  disabled={!validRoute || offline || isResending || isLoading}
+                  disabled={resendAction.disabled}
                   accessibilityRole="button"
-                  accessibilityHint={!validRoute ? 'Return to sign in and enter a valid mobile number.' : offline ? 'Reconnect to request another code.' : undefined}
-                  accessibilityState={{ busy: isResending, disabled: !validRoute || offline || isResending || isLoading }}
+                  accessibilityLabel={resendAction.label}
+                  accessibilityHint={resendAction.hint}
+                  accessibilityState={{ busy: resendAction.busy, disabled: resendAction.disabled }}
                 >
                   <Text style={styles.resendPrompt}>Didn&apos;t receive it? </Text>
-                  <Text style={styles.resendLink}>{isResending ? 'Sending…' : 'Send another code'}</Text>
+                  <Text style={styles.resendLink}>{resendAction.label}</Text>
                 </TouchableOpacity>
               )}
             </View>

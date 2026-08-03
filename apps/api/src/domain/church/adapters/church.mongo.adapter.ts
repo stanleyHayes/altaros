@@ -21,6 +21,10 @@ interface ChurchDocument extends Document {
   timezone: string;
   currency: string;
   plan: ChurchPlan;
+  requestedPlan?: ChurchPlan;
+  denomination?: string;
+  averageWeeklyAttendance?: number;
+  ministryPriorities?: string[];
   isActive: boolean;
   createdAt: Date;
   updatedAt: Date;
@@ -46,6 +50,10 @@ const churchSchema = new Schema<ChurchDocument>(
       enum: ["free", "basic", "pro", "enterprise"],
       default: "free",
     },
+    requestedPlan: { type: String, enum: ["free", "basic", "pro", "enterprise"] },
+    denomination: { type: String },
+    averageWeeklyAttendance: { type: Number },
+    ministryPriorities: [{ type: String }],
     isActive: { type: Boolean, default: true },
   },
   { timestamps: true },
@@ -71,6 +79,10 @@ function toChurch(doc: ChurchDocument): Church {
     timezone: doc.timezone,
     currency: doc.currency,
     plan: doc.plan,
+    requestedPlan: doc.requestedPlan,
+    denomination: doc.denomination,
+    averageWeeklyAttendance: doc.averageWeeklyAttendance,
+    ministryPriorities: doc.ministryPriorities,
     isActive: doc.isActive,
     createdAt: doc.createdAt,
     updatedAt: doc.updatedAt,

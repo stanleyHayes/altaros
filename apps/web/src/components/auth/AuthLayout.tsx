@@ -67,8 +67,11 @@ export default function AuthLayout({ title, subtitle, children }: AuthLayoutProp
           elevation={0}
           sx={{
             width: "100%",
-            maxWidth: 520,
-            bgcolor: "transparent",
+            maxWidth: 560,
+            boxSizing: "border-box",
+            bgcolor: "#FBFDFB",
+            borderRadius: { xs: "16px", sm: "20px" },
+            p: { xs: 2.5, sm: 4 },
           }}
         >
           <Box sx={{ mb: 4 }}>

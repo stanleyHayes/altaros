@@ -27,7 +27,9 @@ const (
 )
 
 type User struct {
-	ID        string    `json:"id"`
+	ID string `json:"id"`
+	// Linked congregation-roster identity used by member-owned domains.
+	MemberID  *string   `json:"memberId,omitempty"`
 	ChurchID  string    `json:"churchId"`
 	Email     string    `json:"email"`
 	Phone     string    `json:"phone"`
@@ -62,6 +64,13 @@ type RegisterRequest struct {
 	// self-signup flow, where the registrant knows their church's name but
 	// has no id yet.
 	ChurchName *string `json:"churchName,omitempty"`
+	// Optional founding profile captured during church onboarding.
+	ChurchCity              *string  `json:"churchCity,omitempty"`
+	ChurchDenomination      *string  `json:"churchDenomination,omitempty"`
+	AverageWeeklyAttendance *float64 `json:"averageWeeklyAttendance,omitempty"`
+	MinistryPriorities      []string `json:"ministryPriorities,omitempty"`
+	// Package intent. Paid access is activated separately after billing.
+	RequestedPlan *string `json:"requestedPlan,omitempty"`
 }
 
 type OtpVerifyRequest struct {

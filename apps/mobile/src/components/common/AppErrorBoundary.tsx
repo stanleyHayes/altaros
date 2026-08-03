@@ -6,6 +6,9 @@ import { borderRadius, colors, spacing, typography } from '../../theme';
 interface Props { children: ReactNode }
 interface State { hasError: boolean; recoveryKey: number }
 
+export const APP_RECOVERY_MESSAGE =
+  'Restart this view to continue. If you were making a payment, check your giving history before trying again.';
+
 export function AppErrorFallback({ onRecover }: { onRecover: () => void }) {
   return (
     <View style={styles.screen}>
@@ -19,7 +22,7 @@ export function AppErrorFallback({ onRecover }: { onRecover: () => void }) {
         Something interrupted the app.
       </Text>
       <Text style={styles.body}>
-        Your account and payment details are still safe. Restart this view to continue.
+        {APP_RECOVERY_MESSAGE}
       </Text>
       <Button title="Restart app view" onPress={onRecover} fullWidth size="lg" />
     </View>

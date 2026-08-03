@@ -114,6 +114,10 @@ func (t *Push) Send(ctx context.Context, to string, msg notification.Message) (s
 	if title == "" {
 		title = "Your church"
 	}
+	data := map[string]string{"kind": string(msg.Kind)}
+	if msg.DeepLink != "" {
+		data["deepLink"] = msg.DeepLink
+	}
 	body, err := json.Marshal(map[string]any{
 		"message": map[string]any{
 			"token": to,
@@ -121,9 +125,7 @@ func (t *Push) Send(ctx context.Context, to string, msg notification.Message) (s
 				"title": title,
 				"body":  msg.Body,
 			},
-			"data": map[string]string{
-				"kind": string(msg.Kind),
-			},
+			"data": data,
 		},
 	})
 	if err != nil {

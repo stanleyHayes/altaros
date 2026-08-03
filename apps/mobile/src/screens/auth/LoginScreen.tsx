@@ -16,14 +16,16 @@ import { StatusBar } from 'expo-status-bar';
 import { Input } from '../../components/common/Input';
 import { Button } from '../../components/common/Button';
 import { useAuth } from '../../hooks/useAuth';
-import authService, { canonicalPhone, MAX_AUTH_EMAIL_LENGTH, MAX_AUTH_PASSWORD_LENGTH, MAX_AUTH_PHONE_INPUT_LENGTH } from '../../services/auth.service';
+import authService, { canonicalPhone, canonicalWorkspace, MAX_AUTH_EMAIL_LENGTH, MAX_AUTH_PASSWORD_LENGTH, MAX_AUTH_PHONE_INPUT_LENGTH, MAX_CHURCH_CODE_LENGTH, OtpDeliveryUnknownError } from '../../services/auth.service';
 import { borderRadius, colors, spacing, typography } from '../../theme';
 import type { AuthStackParamList } from '../../components/navigation/AppNavigator';
 import { apiErrorMessage } from '../../services/api-error';
 import { createSubmissionLock } from '../../services/submission-lock';
 import { useKnownOffline } from '../../hooks/useKnownOffline';
 import { credentialStorageCopy, sessionPlatform } from '../../services/session-copy';
-import { loginErrors, type LoginFormValues, type LoginMethod } from './login-state';
+import { loginErrors, loginPrimaryActionState, type LoginFormValues, type LoginMethod } from './login-state';
+import { useAnimatedRouteTop } from '../../hooks/useAnimatedRouteTop';
+import { formKeyboardProps } from '../../components/common/form-keyboard';
 
 type LoginNav = NativeStackNavigationProp<AuthStackParamList, 'Login'>;
 export function LoginScreen() {
@@ -34,12 +36,18 @@ export function LoginScreen() {
   const [phone, setPhone] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [workspace, setWorkspace] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [formError, setFormError] = useState('');
   const [fieldErrors, setFieldErrors] = useState<Partial<Record<keyof LoginFormValues, string>>>({});
   const submissionLock = useRef(createSubmissionLock());
   const mountedRef = useRef(true);
+  const phoneRef = useRef<TextInput>(null);
+  const emailRef = useRef<TextInput>(null);
   const passwordRef = useRef<TextInput>(null);
+  const scrollRef = useRef<ScrollView>(null);
+  useAnimatedRouteTop(scrollRef);
+  const primaryAction = loginPrimaryActionState(method, offline, isLoading);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -49,7 +57,7 @@ export function LoginScreen() {
   const handleContinue = async () => {
     if (!submissionLock.current.acquire()) return;
     setFormError('');
-    const errors = loginErrors(method, { phone, email, password });
+    const errors = loginErrors(method, { phone, email, password, workspace });
     setFieldErrors(errors);
     if (Object.keys(errors).length > 0) {
       submissionLock.current.release();
@@ -58,12 +66,17 @@ export function LoginScreen() {
     try {
       if (method === 'phone') {
         const normalizedPhone = canonicalPhone(phone) as string;
+        const normalizedWorkspace = canonicalWorkspace(workspace) as string;
         setIsLoading(true);
         try {
-          await authService.requestOtp(normalizedPhone);
-          if (mountedRef.current) navigation.navigate('Otp', { phone: normalizedPhone, deliveryUnconfirmed: true });
+          await authService.requestOtp(normalizedPhone, normalizedWorkspace);
+          if (mountedRef.current) navigation.navigate('Otp', { phone: normalizedPhone, workspace: normalizedWorkspace, deliveryUnconfirmed: true });
         } catch (error) {
-          if (mountedRef.current) setFormError(apiErrorMessage(error, 'We could not send a code. Check your connection and try again.'));
+          if (mountedRef.current && error instanceof OtpDeliveryUnknownError) {
+            navigation.navigate('Otp', { phone: normalizedPhone, workspace: normalizedWorkspace, codeRequested: true, deliveryUnconfirmed: true });
+          } else if (mountedRef.current) {
+            setFormError(apiErrorMessage(error, 'We could not send a code. Check your connection and try again.'));
+          }
         } finally {
           if (mountedRef.current) setIsLoading(false);
         }
@@ -73,7 +86,7 @@ export function LoginScreen() {
       setIsLoading(true);
       try {
         await login(
-          { email: email.trim().toLowerCase(), password, method: 'PASSWORD' },
+          { email: email.trim().toLowerCase(), password, method: 'PASSWORD', workspace },
           () => mountedRef.current,
         );
       } catch (error) {
@@ -89,7 +102,7 @@ export function LoginScreen() {
   return (
     <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <StatusBar style="light" />
-      <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled" bounces={false}>
+      <ScrollView ref={scrollRef} contentContainerStyle={styles.container} {...formKeyboardProps(Platform.OS)} bounces={false}>
         <View style={styles.hero}>
           <View style={styles.brandRow}>
             <View style={styles.mark}><Ionicons name="leaf-outline" size={25} color={colors.text} /></View>
@@ -129,8 +142,31 @@ export function LoginScreen() {
             })}
           </View>
 
+          <Input
+            label="Church workspace"
+            placeholder="e.g. grace-chapel-accra"
+            value={workspace}
+            onChangeText={(value) => {
+              setWorkspace(value);
+              setFieldErrors((current) => ({ ...current, workspace: undefined }));
+              setFormError('');
+            }}
+            autoCapitalize="none"
+            autoCorrect={false}
+            error={fieldErrors.workspace}
+            editable={!isLoading}
+            maxLength={MAX_CHURCH_CODE_LENGTH}
+            returnKeyType="next"
+            blurOnSubmit={false}
+            onSubmitEditing={() => {
+              if (method === 'phone') phoneRef.current?.focus();
+              else emailRef.current?.focus();
+            }}
+          />
+
           {method === 'phone' ? (
             <Input
+              ref={phoneRef}
               label="Mobile number"
               placeholder="+233 24 123 4567"
               value={phone}
@@ -151,6 +187,7 @@ export function LoginScreen() {
           ) : (
             <>
               <Input
+                ref={emailRef}
                 label="Email"
                 placeholder="you@example.com"
                 value={email}
@@ -194,15 +231,11 @@ export function LoginScreen() {
 
           {formError ? <Text style={styles.formError} accessibilityRole="alert">{formError}</Text> : null}
           <Button
-            title={method === 'phone' ? 'Send my code' : 'Sign in'}
+            title={primaryAction.label}
             onPress={handleContinue}
             loading={isLoading}
-            disabled={offline}
-            accessibilityHint={offline
-              ? method === 'phone'
-                ? 'Reconnect to request a sign-in code.'
-                : 'Reconnect to sign in.'
-              : undefined}
+            disabled={primaryAction.disabled}
+            accessibilityHint={primaryAction.hint}
             fullWidth
             size="lg"
           />

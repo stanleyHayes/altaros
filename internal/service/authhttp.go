@@ -11,6 +11,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/hayfordstanley/altar-os/internal/domain/auth"
+	"github.com/hayfordstanley/altar-os/internal/domain/member"
 	"github.com/hayfordstanley/altar-os/internal/domain/notification"
 	"github.com/hayfordstanley/altar-os/internal/platform/deps"
 	"github.com/hayfordstanley/altar-os/internal/platform/httpx"
@@ -30,6 +31,7 @@ func buildAuth(d *deps.Deps) http.Handler { return standalone(authRoutes(d)) }
 func authRoutes(d *deps.Deps) routeSet {
 	svc := auth.NewService(d.Mongo, d.Tokens, d.Redis, smsSenderFor(d))
 	notifications := newNotificationService(d)
+	members := member.NewService(d.Mongo, d.Events, d.Config.DataRegion)
 
 	limiter := ratelimit.New(d.Redis)
 
@@ -40,10 +42,10 @@ func authRoutes(d *deps.Deps) routeSet {
 		// ~100ms of CPU by design and a few hundred concurrent ones saturate
 		// the pod before any of them succeeds.
 		r.With(throttle(d, ratelimit.Register)).
-			Post("/auth/register", handleRegister(svc))
+			Post("/auth/register", handleRegister(svc, members))
 
 		r.With(throttle(d, ratelimit.Login)).
-			Post("/auth/login", handleLogin(svc, limiter, d))
+			Post("/auth/login", handleLogin(svc, limiter, d, members))
 
 		// request-otp costs real money per call. The domain throttles one phone
 		// number to a code a minute (WP-10), which cannot see one caller
@@ -52,21 +54,21 @@ func authRoutes(d *deps.Deps) routeSet {
 			Post("/auth/request-otp", handleRequestOTP(svc))
 
 		r.With(throttle(d, ratelimit.VerifyOTP)).
-			Post("/auth/verify-otp", handleVerifyOTP(svc))
+			Post("/auth/verify-otp", handleVerifyOTP(svc, members))
 
 		r.With(throttle(d, ratelimit.Login)).
-			Post("/auth/refresh-token", handleRefresh(svc))
+			Post("/auth/refresh-token", handleRefresh(svc, members))
 
-		// Signing out is not worth throttling: it is authenticated, idempotent,
-		// and a limit here would strand someone trying to end a session they
-		// have reason to think is compromised.
-		r.Post("/auth/logout", handleLogout(d, svc, notifications))
-		r.Post("/auth/logout-all", handleLogoutEverywhere(d, svc, notifications))
-		r.Get("/auth/me", handleMe(svc))
+			// Signing out is not worth throttling: it is authenticated, idempotent,
+			// and a limit here would strand someone trying to end a session they
+			// have reason to think is compromised.
+		r.Post("/auth/logout", handleLogout(d, svc, notifications, members))
+		r.Post("/auth/logout-all", handleLogoutEverywhere(d, svc, notifications, members))
+		r.Get("/auth/me", handleMe(svc, members))
 	}
 }
 
-func handleRegister(svc *auth.Service) http.HandlerFunc {
+func handleRegister(svc *auth.Service, members *member.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			ChurchID string `json:"churchId"`
@@ -85,6 +87,11 @@ func handleRegister(svc *auth.Service) http.HandlerFunc {
 		})
 		if err != nil {
 			writeAuthError(w, err)
+			return
+		}
+		if err := enrichAuthMember(r.Context(), members, user); err != nil {
+			_ = svc.RollbackRegistration(r.Context(), user.ID.Hex())
+			httpx.Error(w, http.StatusConflict, "Your member profile could not be linked. Check your details with the church office.")
 			return
 		}
 		httpx.JSON(w, http.StatusCreated, map[string]any{
@@ -127,7 +134,7 @@ func (r loginRequest) workspace() string {
 // from a thousand addresses and never trips it. Per-account alone misses one
 // host spraying many accounts. Both are needed, and the account limit can only
 // live here because the account is not known until the body is read.
-func handleLogin(svc *auth.Service, limiter *ratelimit.Limiter, d *deps.Deps) http.HandlerFunc {
+func handleLogin(svc *auth.Service, limiter *ratelimit.Limiter, d *deps.Deps, members *member.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req loginRequest
 		if err := decode(r, &req); err != nil {
@@ -168,6 +175,11 @@ func handleLogin(svc *auth.Service, limiter *ratelimit.Limiter, d *deps.Deps) ht
 			writeAuthError(w, err)
 			return
 		}
+		if err := enrichAuthMember(r.Context(), members, result.User); err != nil {
+			_ = svc.Logout(r.Context(), result.Tokens.AccessToken)
+			httpx.Error(w, http.StatusConflict, "Your account is not linked to a member profile yet.")
+			return
+		}
 		httpx.JSON(w, http.StatusOK, result)
 	}
 }
@@ -195,7 +207,7 @@ func handleRequestOTP(svc *auth.Service) http.HandlerFunc {
 	}
 }
 
-func handleVerifyOTP(svc *auth.Service) http.HandlerFunc {
+func handleVerifyOTP(svc *auth.Service, members *member.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			Workspace  string `json:"workspace"`
@@ -225,11 +237,16 @@ func handleVerifyOTP(svc *auth.Service) http.HandlerFunc {
 			writeAuthError(w, err)
 			return
 		}
+		if err := enrichAuthMember(r.Context(), members, result.User); err != nil {
+			_ = svc.Logout(r.Context(), result.Tokens.AccessToken)
+			httpx.Error(w, http.StatusConflict, "Your account is not linked to a member profile yet.")
+			return
+		}
 		httpx.JSON(w, http.StatusOK, result)
 	}
 }
 
-func handleRefresh(svc *auth.Service) http.HandlerFunc {
+func handleRefresh(svc *auth.Service, members *member.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			RefreshToken string `json:"refreshToken"`
@@ -243,17 +260,23 @@ func handleRefresh(svc *auth.Service) http.HandlerFunc {
 			writeAuthError(w, err)
 			return
 		}
+		if err := enrichAuthMember(r.Context(), members, result.User); err != nil {
+			_ = svc.Logout(r.Context(), result.Tokens.AccessToken)
+			httpx.Error(w, http.StatusConflict, "Your account is not linked to a member profile yet.")
+			return
+		}
 		httpx.JSON(w, http.StatusOK, result)
 	}
 }
 
-func handleLogout(d *deps.Deps, svc *auth.Service, notifications *notification.Service) http.HandlerFunc {
+func handleLogout(d *deps.Deps, svc *auth.Service, notifications *notification.Service, members memberAccountResolver) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		raw := bearer(r)
 		claims, claimsErr := d.Tokens.Verify(r.Context(), raw, token.KindAccess)
 		var deviceErr error
 		if claimsErr == nil {
-			deviceErr = notifications.RemoveDevices(notificationContext(r, claims), claims.UserID, claims.Family)
+			ctx := notificationContext(r, claims)
+			deviceErr = removeSessionDevices(ctx, notifications, members, claims.UserID, claims.Family)
 		}
 		if err := svc.Logout(r.Context(), raw); err != nil {
 			writeAuthError(w, err)
@@ -269,13 +292,14 @@ func handleLogout(d *deps.Deps, svc *auth.Service, notifications *notification.S
 	}
 }
 
-func handleLogoutEverywhere(d *deps.Deps, svc *auth.Service, notifications *notification.Service) http.HandlerFunc {
+func handleLogoutEverywhere(d *deps.Deps, svc *auth.Service, notifications *notification.Service, members memberAccountResolver) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		raw := bearer(r)
 		claims, claimsErr := d.Tokens.Verify(r.Context(), raw, token.KindAccess)
 		var deviceErr error
 		if claimsErr == nil {
-			deviceErr = notifications.RemoveDevices(notificationContext(r, claims), claims.UserID, "")
+			ctx := notificationContext(r, claims)
+			deviceErr = removeSessionDevices(ctx, notifications, members, claims.UserID, "")
 		}
 		if err := svc.LogoutEverywhere(r.Context(), raw); err != nil {
 			writeAuthError(w, err)
@@ -291,6 +315,26 @@ func handleLogoutEverywhere(d *deps.Deps, svc *auth.Service, notifications *noti
 	}
 }
 
+func removeSessionDevices(
+	ctx context.Context,
+	notifications *notification.Service,
+	members memberAccountResolver,
+	userID, family string,
+) error {
+	// Remove rows written by the old user-id bug as well as correctly
+	// member-keyed rows, so upgrading does not strand a live push token.
+	legacyErr := notifications.RemoveDevices(ctx, userID, family)
+	memberID, err := memberIDForUser(ctx, members, userID)
+	if err != nil {
+		return legacyErr
+	}
+	memberErr := notifications.RemoveDevices(ctx, memberID, family)
+	if legacyErr != nil {
+		return legacyErr
+	}
+	return memberErr
+}
+
 func notificationContext(r *http.Request, claims *token.Claims) context.Context {
 	return tenancy.WithScope(r.Context(), tenancy.Scope{
 		ChurchID: claims.ChurchID, OrganizationID: claims.OrganizationID,
@@ -298,15 +342,47 @@ func notificationContext(r *http.Request, claims *token.Claims) context.Context 
 	})
 }
 
-func handleMe(svc *auth.Service) http.HandlerFunc {
+func handleMe(svc *auth.Service, members *member.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		user, err := svc.CurrentUser(r.Context(), bearer(r))
 		if err != nil {
 			writeAuthError(w, err)
 			return
 		}
+		if err := enrichAuthMember(r.Context(), members, user); err != nil {
+			httpx.Error(w, http.StatusConflict, "Your account is not linked to a member profile yet.")
+			return
+		}
 		httpx.JSON(w, http.StatusOK, user)
 	}
+}
+
+func enrichAuthMember(ctx context.Context, members *member.Service, user *auth.User) error {
+	if user == nil || user.Role != RoleMember {
+		return nil
+	}
+	memberCtx := tenancy.WithScope(ctx, tenancy.Scope{
+		ChurchID: user.ChurchID.String(), OrganizationID: user.OrganizationID.String(),
+		UserID: user.ID.Hex(), Role: user.Role,
+	})
+	linked, err := members.ByUserID(memberCtx, user.ID.Hex())
+	if errors.Is(err, member.ErrNotFound) {
+		parts := strings.Fields(user.Name)
+		firstName, lastName := "Member", ""
+		if len(parts) > 0 {
+			firstName = parts[0]
+			lastName = strings.Join(parts[1:], " ")
+		}
+		linked, err = members.LinkOrCreateForUser(memberCtx, user.ID.Hex(), member.Input{
+			FirstName: firstName, LastName: lastName, Phone: user.Phone,
+			Email: user.Email, Status: member.StatusActive,
+		})
+	}
+	if err != nil || linked == nil {
+		return member.ErrNotFound
+	}
+	user.MemberID = linked.ID.Hex()
+	return nil
 }
 
 // writeAuthError maps domain errors to status codes without leaking which

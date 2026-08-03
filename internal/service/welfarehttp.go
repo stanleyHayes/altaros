@@ -3,9 +3,14 @@ package service
 import (
 	"errors"
 	"net/http"
+	"strings"
+	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/hayfordstanley/altar-os/internal/domain/member"
 	"github.com/hayfordstanley/altar-os/internal/domain/rbac"
 	"github.com/hayfordstanley/altar-os/internal/domain/welfare"
 	"github.com/hayfordstanley/altar-os/internal/platform/audit"
@@ -43,8 +48,15 @@ func newWelfareService(d *deps.Deps) *welfare.Service {
 // as its record of the people who tried and could not.
 func welfareRoutes(d *deps.Deps) routeSet {
 	svc := newWelfareService(d)
+	members := member.NewService(d.Mongo, d.Events, d.Config.DataRegion)
 
 	return func(r chi.Router) {
+		r.Group(func(r chi.Router) {
+			r.Use(authenticated(d))
+			r.Get("/welfare/my-requests", handleMyWelfareRequests(svc, members))
+			r.Post("/welfare/requests", handleMemberWelfareRequest(svc, members))
+			r.Post("/welfare/emergency-alert", handleMemberEmergencyAlert(svc, members))
+		})
 		r.Group(func(r chi.Router) {
 			r.Use(authenticated(d))
 			r.Use(resolvePermissions(d))
@@ -66,6 +78,220 @@ func welfareRoutes(d *deps.Deps) routeSet {
 				Patch("/welfare/cases/{id}/status", handleSetCaseStatus(svc))
 			r.With(requirePermission(rbac.ResourceWelfare, rbac.ActionUpdate)).
 				Patch("/welfare/cases/{id}/assign", handleAssignCase(svc))
+		})
+	}
+}
+
+type memberWelfareResponse struct {
+	ID          string    `json:"id"`
+	ChurchID    string    `json:"churchId"`
+	MemberID    string    `json:"memberId"`
+	Category    string    `json:"category"`
+	Description string    `json:"description"`
+	Urgency     string    `json:"urgency"`
+	IsAnonymous bool      `json:"isAnonymous"`
+	Status      string    `json:"status"`
+	CreatedAt   time.Time `json:"createdAt"`
+}
+
+func memberWelfareUrgency(value string) welfare.Urgency {
+	switch value {
+	case "low":
+		return welfare.UrgencyRoutine
+	case "medium", "high":
+		return welfare.UrgencyElevated
+	case "critical":
+		return welfare.UrgencyEmergency
+	default:
+		return welfare.Urgency("")
+	}
+}
+
+func mobileWelfareUrgency(value welfare.Urgency) string {
+	switch value {
+	case welfare.UrgencyRoutine:
+		return "low"
+	case welfare.UrgencyElevated:
+		return "high"
+	default:
+		return "critical"
+	}
+}
+
+func mobileWelfareStatus(value welfare.Status) string {
+	switch value {
+	case welfare.StatusOpen:
+		return "pending"
+	case welfare.StatusInProgress, welfare.StatusAwaiting:
+		return "under_review"
+	case welfare.StatusReferred:
+		return "approved"
+	case welfare.StatusResolved:
+		return "fulfilled"
+	default:
+		return "declined"
+	}
+}
+
+func memberWelfareCase(c *welfare.Case) memberWelfareResponse {
+	description := c.Detail
+	if description == "" {
+		description = c.Summary
+	}
+	return memberWelfareResponse{
+		ID: c.ID.Hex(), ChurchID: c.ChurchID.String(), MemberID: c.MemberID,
+		Category: string(c.Category), Description: description,
+		Urgency: mobileWelfareUrgency(c.Urgency), IsAnonymous: c.IsAnonymous,
+		Status: mobileWelfareStatus(c.Status), CreatedAt: c.CreatedAt,
+	}
+}
+
+func validMemberWelfareDescription(value string) bool {
+	value = strings.TrimSpace(value)
+	if value == "" || len(value) > 2000 || !utf8.ValidString(value) {
+		return false
+	}
+	for _, r := range value {
+		if unicode.IsControl(r) && r != '\n' && r != '\r' && r != '\t' {
+			return false
+		}
+	}
+	return true
+}
+
+func redactAnonymousWelfareCase(c *welfare.Case) *welfare.Case {
+	if c == nil || !c.IsAnonymous {
+		return c
+	}
+	redacted := *c
+	redacted.MemberID = ""
+	redacted.RaisedBy = ""
+	return &redacted
+}
+
+func currentWelfareMember(r *http.Request, members *member.Service) (*member.Member, error) {
+	return members.ByUserID(r.Context(), callerUserID(r))
+}
+
+func handleMyWelfareRequests(svc *welfare.Service, members *member.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		self, err := currentWelfareMember(r, members)
+		if err != nil {
+			httpx.Error(w, http.StatusConflict, "Your account is not linked to a member record yet.")
+			return
+		}
+		paged := r.URL.Query().Has("page") || r.URL.Query().Has("limit")
+		page, limit := 1, 100
+		if paged {
+			page, limit = paging(r)
+			if page < 1 {
+				page = 1
+			}
+			if page > 10_000_000 {
+				httpx.Error(w, http.StatusBadRequest, "That welfare history page is not valid.")
+				return
+			}
+			if limit < 1 || limit > 50 {
+				limit = 25
+			}
+		}
+		cases, err := svc.MinePage(r.Context(), self.ID.Hex(), int64(limit), int64(page-1)*int64(limit))
+		if err != nil {
+			writeWelfareError(w, err)
+			return
+		}
+		out := make([]memberWelfareResponse, 0, len(cases))
+		for i := range cases {
+			out = append(out, memberWelfareCase(&cases[i]))
+		}
+		if paged {
+			total, countErr := svc.MineCount(r.Context(), self.ID.Hex())
+			if countErr != nil {
+				writeWelfareError(w, countErr)
+				return
+			}
+			httpx.JSON(w, http.StatusOK, map[string]any{"data": out, "total": total})
+			return
+		}
+		httpx.JSON(w, http.StatusOK, out)
+	}
+}
+
+func handleMemberWelfareRequest(svc *welfare.Service, members *member.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Category    string `json:"category"`
+			Description string `json:"description"`
+			Urgency     string `json:"urgency"`
+			IsAnonymous bool   `json:"isAnonymous"`
+		}
+		if err := decode(r, &body); err != nil {
+			httpx.Error(w, http.StatusBadRequest, "Malformed request body")
+			return
+		}
+		self, err := currentWelfareMember(r, members)
+		if err != nil {
+			httpx.Error(w, http.StatusConflict, "Your account is not linked to a member record yet.")
+			return
+		}
+		urgency := memberWelfareUrgency(body.Urgency)
+		if urgency == "" {
+			httpx.Error(w, http.StatusBadRequest, "Choose a valid urgency.")
+			return
+		}
+		body.Description = strings.TrimSpace(body.Description)
+		if !validMemberWelfareDescription(body.Description) {
+			httpx.Error(w, http.StatusBadRequest, "Describe the support you need using 2,000 characters or fewer.")
+			return
+		}
+		created, err := svc.Open(r.Context(), welfare.Input{
+			MemberID: self.ID.Hex(), Category: welfare.Category(body.Category),
+			Urgency: urgency, Summary: body.Description, Detail: body.Description,
+			IsAnonymous: body.IsAnonymous,
+		})
+		if err != nil {
+			writeWelfareError(w, err)
+			return
+		}
+		httpx.JSON(w, http.StatusCreated, memberWelfareCase(created))
+	}
+}
+
+func handleMemberEmergencyAlert(svc *welfare.Service, members *member.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Message string `json:"message"`
+		}
+		if err := decode(r, &body); err != nil {
+			httpx.Error(w, http.StatusBadRequest, "Malformed request body")
+			return
+		}
+		self, err := currentWelfareMember(r, members)
+		if err != nil {
+			httpx.Error(w, http.StatusConflict, "Your account is not linked to a member record yet.")
+			return
+		}
+		description := strings.TrimSpace(body.Message)
+		if description == "" {
+			description = "Emergency assistance requested."
+		}
+		if !validMemberWelfareDescription(description) {
+			httpx.Error(w, http.StatusBadRequest, "Emergency context must use 2,000 characters or fewer.")
+			return
+		}
+		created, err := svc.Open(r.Context(), welfare.Input{
+			MemberID: self.ID.Hex(), Category: welfare.CategorySafeguarding,
+			Urgency: welfare.UrgencyEmergency, Summary: "Emergency welfare alert",
+			Detail: description,
+		})
+		if err != nil {
+			writeWelfareError(w, err)
+			return
+		}
+		httpx.JSON(w, http.StatusCreated, map[string]any{
+			"id": created.ID.Hex(), "churchId": created.ChurchID.String(),
+			"memberId": created.MemberID, "title": "Emergency welfare alert",
+			"description": description, "isActive": true, "createdAt": created.CreatedAt,
 		})
 	}
 }
@@ -105,6 +331,11 @@ func handleWelfareQueue(svc *welfare.Service) http.HandlerFunc {
 			writeWelfareError(w, err)
 			return
 		}
+		for i := range cases {
+			if cases[i].IsAnonymous {
+				cases[i].MemberID = ""
+			}
+		}
 		httpx.JSON(w, http.StatusOK, map[string]any{
 			"cases":      cases,
 			"categories": welfare.AllCategories,
@@ -123,7 +354,7 @@ func handleWelfareCase(svc *welfare.Service) http.HandlerFunc {
 			writeWelfareError(w, err)
 			return
 		}
-		httpx.JSON(w, http.StatusOK, found)
+		httpx.JSON(w, http.StatusOK, redactAnonymousWelfareCase(found))
 	}
 }
 
@@ -171,7 +402,7 @@ func handleAddCaseNote(svc *welfare.Service) http.HandlerFunc {
 			writeWelfareError(w, err)
 			return
 		}
-		httpx.JSON(w, http.StatusOK, updated)
+		httpx.JSON(w, http.StatusOK, redactAnonymousWelfareCase(updated))
 	}
 }
 
@@ -190,7 +421,7 @@ func handleSetCaseStatus(svc *welfare.Service) http.HandlerFunc {
 			writeWelfareError(w, err)
 			return
 		}
-		httpx.JSON(w, http.StatusOK, updated)
+		httpx.JSON(w, http.StatusOK, redactAnonymousWelfareCase(updated))
 	}
 }
 
@@ -208,7 +439,7 @@ func handleAssignCase(svc *welfare.Service) http.HandlerFunc {
 			writeWelfareError(w, err)
 			return
 		}
-		httpx.JSON(w, http.StatusOK, updated)
+		httpx.JSON(w, http.StatusOK, redactAnonymousWelfareCase(updated))
 	}
 }
 

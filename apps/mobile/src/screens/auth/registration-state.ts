@@ -1,6 +1,7 @@
 import {
   canonicalEmail,
   canonicalPhone,
+  canonicalWorkspace,
   validAuthPassword,
   validRegistrationName,
   type RegistrationChurch,
@@ -24,6 +25,35 @@ export const REGISTRATION_STEPS = [
   { title: 'Secure your account', subtitle: 'Choose a private password you do not use elsewhere.' },
   { title: 'Find your church', subtitle: 'Enter the code shared by your church office.' },
 ] as const;
+
+export function registrationProgressValue(step: RegistrationStep) {
+  return { min: 0, max: REGISTRATION_STEPS.length, now: step + 1 } as const;
+}
+
+export function registrationChurchActionState(
+  offline: boolean,
+  resolving: boolean,
+  committing: boolean,
+  hasCode: boolean,
+  churchConfirmed: boolean,
+) {
+  return {
+    lookup: {
+      label: resolving
+        ? 'Finding your church…'
+        : offline ? 'Reconnect to find your church' : 'Find my church',
+      disabled: offline || resolving || committing || !hasCode,
+      hint: offline ? 'Reconnect to find and confirm your church.' : undefined,
+    },
+    submit: {
+      label: committing
+        ? 'Creating your account…'
+        : offline ? 'Reconnect to create your account' : 'Create account',
+      disabled: offline || resolving || committing || !churchConfirmed,
+      hint: offline ? 'Reconnect to create and verify your account.' : undefined,
+    },
+  } as const;
+}
 
 export type RegistrationRemovalDecision =
   | { kind: 'allow' }
@@ -110,4 +140,13 @@ export function ownsRegistrationLookup(
 ): boolean {
   return activeRevision === startedRevision
     && canonicalChurchCodeInput(activeCode) === canonicalChurchCodeInput(startedCode);
+}
+
+export function unknownRegistrationRecoveryParams(
+  phoneInput: string,
+  workspaceInput: string,
+): { phone: string; workspace: string; deliveryUnconfirmed: true } | null {
+  const phone = canonicalPhone(phoneInput);
+  const workspace = canonicalWorkspace(workspaceInput);
+  return phone && workspace ? { phone, workspace, deliveryUnconfirmed: true } : null;
 }

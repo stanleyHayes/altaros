@@ -1,9 +1,35 @@
 import { getInitials, isSafeAvatarUri } from './Avatar';
-import { mergeInputAccessibility } from './Input';
+import { mergeInputAccessibility, passwordVisibilityState } from './Input';
 import { Button } from './Button';
 import { LoadingScreen } from './LoadingScreen';
 import { StatePanel } from './StatePanel';
-import { AppErrorFallback } from './AppErrorBoundary';
+import { APP_RECOVERY_MESSAGE, AppErrorFallback } from './AppErrorBoundary';
+import { paginationActionState } from './pagination-action';
+
+describe('shared pagination recovery', () => {
+  it('makes offline, refresh-owned, and loading states visible', () => {
+    expect(paginationActionState('older gifts', {
+      offline: true, loading: false, refreshing: false, requiresRefresh: false,
+    })).toEqual({
+      label: 'Reconnect to load older gifts',
+      disabled: true,
+      busy: false,
+      hint: 'Reconnect to load older gifts.',
+    });
+    expect(paginationActionState('older gifts', {
+      offline: false, loading: true, refreshing: false, requiresRefresh: false,
+    }).label)
+      .toBe('Loading older gifts…');
+    expect(paginationActionState('older gifts', {
+      offline: false, loading: false, refreshing: true, requiresRefresh: false,
+    }).label)
+      .toBe('Refresh in progress…');
+    expect(paginationActionState('older gifts', {
+      offline: false, loading: false, refreshing: false, requiresRefresh: true,
+    }).label)
+      .toBe('Refresh to continue');
+  });
+});
 
 describe('shared button accessibility', () => {
   it('announces why an offline action is unavailable', () => {
@@ -46,9 +72,30 @@ describe('global recovery accessibility', () => {
     });
     expect(fallback.props.children[4].type).toBe(Button);
   });
+
+  it('does not promise an unknown payment outcome is safe to retry', () => {
+    const fallback = AppErrorFallback({ onRecover: jest.fn() });
+    expect(fallback.props.children[3].props.children).toBe(APP_RECOVERY_MESSAGE);
+    expect(APP_RECOVERY_MESSAGE).toContain('check your giving history before trying again');
+    expect(APP_RECOVERY_MESSAGE).not.toContain('payment details are still safe');
+  });
 });
 
 describe('shared input accessibility', () => {
+  it('gives password visibility controls truthful native state and copy', () => {
+    expect(passwordVisibilityState(true, false)).toEqual({
+      secureTextEntry: true,
+      label: 'Show password',
+      hint: 'Reveals the password in this field.',
+    });
+    expect(passwordVisibilityState(true, true)).toEqual({
+      secureTextEntry: false,
+      label: 'Hide password',
+      hint: 'Masks the password in this field.',
+    });
+    expect(passwordVisibilityState(false, false).secureTextEntry).toBeUndefined();
+  });
+
   it('preserves caller state while adding the effective disabled state', () => {
     expect(mergeInputAccessibility({ busy: true, disabled: true }, true, undefined, undefined))
       .toEqual({ state: { busy: true, disabled: true }, hint: undefined });

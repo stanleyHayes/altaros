@@ -13,6 +13,7 @@ const REFRESH_TOKEN_KEY = 'altar.refreshToken';
 const USER_KEY = 'altar.user';
 const REVOKED_SESSION_KEY = 'altar.sessionRevoked';
 const MAX_CACHED_USER_LENGTH = 16_384;
+const LEGACY_ASYNC_KEYS = ['accessToken', 'refreshToken', 'user'] as const;
 let tokenMutationTail: Promise<void> = Promise.resolve();
 
 type SessionExpiredListener = () => void;
@@ -71,6 +72,42 @@ async function persistTokens(tokens: SessionTokenPair): Promise<void> {
   // Legacy cleanup must not turn a successfully persisted new session into
   // a failed login. The envelope is authoritative on the next read.
   await Promise.allSettled([deleteSecret(ACCESS_TOKEN_KEY), deleteSecret(REFRESH_TOKEN_KEY)]);
+}
+
+async function removeLegacyAsyncSession(): Promise<void> {
+  await Promise.all(LEGACY_ASYNC_KEYS.map((key) => AsyncStorage.removeItem(key)));
+}
+
+async function migrateLegacyAsyncSession(): Promise<SessionTokenPair | null> {
+  if (Platform.OS === 'web') return null;
+  const [accessToken, refreshToken, encodedUser] = await Promise.all(
+    LEGACY_ASYNC_KEYS.map((key) => AsyncStorage.getItem(key)),
+  );
+  if (!accessToken && !refreshToken && !encodedUser) return null;
+
+  let tokens: SessionTokenPair;
+  try {
+    tokens = normalizeSessionTokenPair(accessToken, refreshToken);
+  } catch {
+    await removeLegacyAsyncSession();
+    return null;
+  }
+
+  await persistTokens(tokens);
+  try {
+    if (encodedUser) {
+      const canonicalUser = encodeCachedUser(JSON.parse(encodedUser) as unknown);
+      await setSecret(USER_KEY, canonicalUser);
+    }
+  } catch {
+    // A malformed legacy profile must not block a valid token migration. The
+    // authenticated launch path will restore it from /auth/me.
+  } finally {
+    // Old AsyncStorage credentials are backup-eligible on Android. Remove all
+    // three keys even when only the cached profile was malformed.
+    await removeLegacyAsyncSession();
+  }
+  return tokens;
 }
 
 async function clearSessionUnlocked(): Promise<void> {
@@ -217,6 +254,7 @@ async function readTokensUnlocked(): Promise<SessionTokenPair | null> {
       deleteSecret(ACCESS_TOKEN_KEY),
       deleteSecret(REFRESH_TOKEN_KEY),
       deleteSecret(SESSION_KEY),
+      removeLegacyAsyncSession(),
     ]);
     return null;
   }
@@ -224,15 +262,18 @@ async function readTokensUnlocked(): Promise<SessionTokenPair | null> {
   if (encoded) {
     try {
       const parsed = JSON.parse(encoded) as Partial<SessionTokenPair>;
-      return normalizeSessionTokenPair(parsed.accessToken, parsed.refreshToken);
+      const tokens = normalizeSessionTokenPair(parsed.accessToken, parsed.refreshToken);
+      await removeLegacyAsyncSession().catch(() => undefined);
+      return tokens;
     } catch {
       // Invalid session data is cleared below alongside legacy keys.
     }
     await deleteSecret(SESSION_KEY);
   }
 
-  // One-time migration from the pre-envelope build. Only migrate a complete
-  // pair; combining one old token with one new token can revoke a token family.
+  // One-time migration from the intermediate SecureStore build. Only migrate
+  // a complete pair; combining one old token with one new token can revoke a
+  // token family.
   const [accessToken, refreshToken] = await Promise.all([
     getSecret(ACCESS_TOKEN_KEY),
     getSecret(REFRESH_TOKEN_KEY),
@@ -242,8 +283,9 @@ async function readTokensUnlocked(): Promise<SessionTokenPair | null> {
     tokens = normalizeSessionTokenPair(accessToken, refreshToken);
   } catch {
     await Promise.all([deleteSecret(ACCESS_TOKEN_KEY), deleteSecret(REFRESH_TOKEN_KEY)]);
-    return null;
+    return migrateLegacyAsyncSession();
   }
   await persistTokens(tokens);
+  await removeLegacyAsyncSession().catch(() => undefined);
   return tokens;
 }

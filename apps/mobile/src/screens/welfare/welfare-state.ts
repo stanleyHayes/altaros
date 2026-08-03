@@ -1,3 +1,5 @@
+import { apiErrorMessage, isAmbiguousMutationFailure } from '../../services/api-error';
+
 export interface WelfareOwner {
   churchId?: string;
   memberId?: string;
@@ -9,6 +11,52 @@ export interface EmergencyConfirmationGate {
   cancel: (token: number) => boolean;
   invalidate: () => void;
   isActive: () => boolean;
+}
+
+export function welfareFormActionState(
+  offline: boolean,
+  submitting: boolean,
+  emergencySubmitting: boolean,
+  outcomeUnknown = false,
+): {
+  controlsDisabled: boolean;
+  requestDisabled: boolean;
+  emergencyDisabled: boolean;
+} {
+  const mutationInFlight = submitting || emergencySubmitting;
+  return {
+    controlsDisabled: mutationInFlight || outcomeUnknown,
+    requestDisabled: offline || mutationInFlight,
+    emergencyDisabled: offline || mutationInFlight || outcomeUnknown,
+  };
+}
+
+export function welfareRequestActionState(
+  offline: boolean,
+  busy: boolean,
+  outcomeUnknown: boolean,
+): { mode: 'submit' | 'refresh'; label: string; disabled: boolean; hint?: string } {
+  return {
+    mode: outcomeUnknown ? 'refresh' : 'submit',
+    label: outcomeUnknown ? (offline ? 'Reconnect to confirm request' : 'Refresh care history') : 'Submit Request',
+    disabled: offline || busy,
+    hint: outcomeUnknown
+      ? offline
+        ? 'Reconnect to confirm whether your private request was recorded.'
+        : 'Refreshes your private care history before another request can be submitted.'
+      : undefined,
+  };
+}
+
+export function welfareRefreshOwnsReconciliation(
+  startedRevision: number,
+  currentRevision: number,
+): boolean {
+  return startedRevision === currentRevision;
+}
+
+export function welfareChoiceAccessibility(selected: boolean, disabled: boolean) {
+  return { selected, checked: selected, disabled };
 }
 
 /**
@@ -72,4 +120,41 @@ export function welfareMutationCompletionBelongsToIdentity(
   return mounted
     && active.churchId === startedChurchId
     && active.memberId === startedMemberId;
+}
+
+export type WelfareMutationKind = 'request' | 'emergency';
+
+export function welfareUnknownOutcomeCopy(kind: WelfareMutationKind): {
+  title: string;
+  message: string;
+} {
+  return kind === 'emergency'
+    ? {
+      title: 'Alert status unknown',
+      message: 'We could not confirm whether your urgent request reached the pastoral queue. Avoid sending it repeatedly. If you are in immediate danger, contact local emergency services now.',
+    }
+    : {
+      title: 'Request status unknown',
+      message: 'We could not confirm whether your request was recorded. Refresh your care history before submitting it again.',
+    };
+}
+
+export function welfareMutationFailureAlert(
+  kind: WelfareMutationKind,
+  error: unknown,
+): { outcomeUnknown: boolean; title: string; message: string } {
+  if (isAmbiguousMutationFailure(error)) {
+    return { outcomeUnknown: true, ...welfareUnknownOutcomeCopy(kind) };
+  }
+  return kind === 'emergency'
+    ? {
+      outcomeUnknown: false,
+      title: 'Alert not sent',
+      message: 'Contact local emergency services now if you are in immediate danger.',
+    }
+    : {
+      outcomeUnknown: false,
+      title: 'Request not sent',
+      message: apiErrorMessage(error, 'Check your connection and try again.'),
+    };
 }

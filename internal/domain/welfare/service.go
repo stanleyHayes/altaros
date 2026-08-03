@@ -87,6 +87,7 @@ type Input struct {
 	AmountMinor int64
 	Currency    string
 	AssignedTo  string
+	IsAnonymous bool
 }
 
 func (in Input) normalise() (Input, error) {
@@ -151,13 +152,14 @@ func (s *Service) Open(ctx context.Context, in Input) (*Case, error) {
 	scope, _ := tenancy.FromContext(ctx)
 	now := s.now().UTC()
 	doc := bson.M{
-		"memberId":  clean.MemberID,
-		"category":  string(clean.Category),
-		"urgency":   string(clean.Urgency),
-		"status":    string(StatusOpen),
-		"summary":   summary,
-		"createdAt": now,
-		"updatedAt": now,
+		"memberId":    clean.MemberID,
+		"category":    string(clean.Category),
+		"urgency":     string(clean.Urgency),
+		"status":      string(StatusOpen),
+		"isAnonymous": clean.IsAnonymous,
+		"summary":     summary,
+		"createdAt":   now,
+		"updatedAt":   now,
 	}
 	if detail != "" {
 		doc["detail"] = detail
@@ -182,6 +184,55 @@ func (s *Service) Open(ctx context.Context, in Input) (*Case, error) {
 	s.audit.Record(ctx, audit.ActionCreate, audit.ResourceWelfare, id.Hex(),
 		"welfare case opened")
 	return s.read(ctx, id)
+}
+
+// Mine returns the signed-in member's own requests, including the narrative
+// they submitted but never pastoral notes. The HTTP layer derives memberID
+// from the authenticated user; accepting it from a query or request body would
+// turn this into a cross-member disclosure.
+func (s *Service) Mine(ctx context.Context, memberID string, limit int64) ([]Case, error) {
+	return s.MinePage(ctx, memberID, limit, 0)
+}
+
+// MinePage returns one private, notes-free page of the member's own requests.
+func (s *Service) MinePage(ctx context.Context, memberID string, limit, offset int64) ([]Case, error) {
+	memberID = strings.TrimSpace(memberID)
+	if memberID == "" {
+		return nil, ErrMemberRequired
+	}
+	if limit < 1 || limit > 100 {
+		limit = 100
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	var cases []Case
+	err := s.cases.Find(ctx, bson.M{"memberId": memberID}, &cases,
+		options.Find().SetSort(bson.D{{Key: "createdAt", Value: -1}, {Key: "_id", Value: -1}}).SetLimit(limit).SetSkip(offset).
+			SetProjection(bson.M{"notes": 0}))
+	if err != nil {
+		return nil, fmt.Errorf("welfare: list member requests: %w", err)
+	}
+	for i := range cases {
+		if err := s.decrypt(&cases[i]); err != nil {
+			return nil, err
+		}
+		s.audit.RecordRead(ctx, audit.ResourceWelfare, cases[i].ID.Hex())
+	}
+	return cases, nil
+}
+
+// MineCount returns the authoritative size of the member's tenant-scoped history.
+func (s *Service) MineCount(ctx context.Context, memberID string) (int64, error) {
+	memberID = strings.TrimSpace(memberID)
+	if memberID == "" {
+		return 0, ErrMemberRequired
+	}
+	total, err := s.cases.CountDocuments(ctx, bson.M{"memberId": memberID})
+	if err != nil {
+		return 0, fmt.Errorf("welfare: count member requests: %w", err)
+	}
+	return total, nil
 }
 
 // ByID returns one case, decrypted.

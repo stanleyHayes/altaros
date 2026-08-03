@@ -427,9 +427,10 @@ export default function DashboardPage() {
 
   return (
     <Box>
-      <Typography variant="h4" sx={{ fontWeight: 700, mb: 3 }}>
-        Dashboard
-      </Typography>
+      <Box sx={{ mb: 3.5, p: { xs: 3, md: 4 }, borderRadius: 4, bgcolor: "#0B2E2A", color: "white", display: "grid", gridTemplateColumns: { xs: "1fr", md: "1.4fr .6fr" }, gap: 3, alignItems: "end", backgroundImage: "radial-gradient(circle at 88% 20%, rgba(109,213,196,.22), transparent 30%)", position: "relative", overflow: "hidden" }}>
+        <Box><Typography variant="overline" sx={{ color: "primary.light" }}>Today at Grace Chapel</Typography><Typography variant="h2" sx={{ color: "white", mt: 1.5, maxWidth: 680 }}>The church, in one clear view.</Typography><Typography sx={{ mt: 1.8, color: "rgba(255,255,255,.58)", maxWidth: 570 }}>People, gatherings, giving and follow-up—ready for the decisions your team needs to make today.</Typography></Box>
+        <Box sx={{ justifySelf: { md: "end" }, p: 2, minWidth: 210, borderLeft: { md: "1px solid rgba(255,255,255,.12)" }, pl: { md: 3 } }}><Typography sx={{ fontSize: ".68rem", color: "rgba(255,255,255,.45)", textTransform: "uppercase", letterSpacing: ".14em" }}>Next gathering</Typography><Typography sx={{ mt: 1, fontSize: "1.05rem", fontWeight: 700 }}>Sunday Service</Typography><Typography sx={{ mt: .4, fontSize: ".78rem", color: "primary.light" }}>9:00 AM · Main auditorium</Typography></Box>
+      </Box>
 
       {stats.length > 0 && (
         // auto-fill rather than auto-fit: with one visible card, auto-fit
@@ -440,7 +441,7 @@ export default function DashboardPage() {
           sx={{
             display: 'grid',
             gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))',
-            gap: 3,
+            gap: 2,
             mb: 4,
             // Equal height across the row, whatever each card contains.
             alignItems: 'stretch',
@@ -458,7 +459,7 @@ export default function DashboardPage() {
           sx={{
             display: 'grid',
             gridTemplateColumns: { xs: '1fr', md: 'repeat(12, 1fr)' },
-            gap: 3,
+            gap: 2,
             alignItems: 'stretch',
           }}
         >

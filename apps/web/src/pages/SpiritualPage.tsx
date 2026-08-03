@@ -13,6 +13,7 @@ import DevotionalCard from "@/components/spiritual/DevotionalCard";
 import SermonCard from "@/components/spiritual/SermonCard";
 import PrayerRequestForm from "@/components/spiritual/PrayerRequestForm";
 import type { PrayerChatMessage } from "@altar-os/shared-types";
+import PageIntro from "@/components/ui/PageIntro";
 
 // TODO: Replace with actual API data
 const mockDevotionals = [
@@ -86,9 +87,7 @@ export default function SpiritualPage() {
 
   return (
     <Box sx={{ py: 2 }}>
-      <Typography variant="h5" sx={{ fontWeight: 700, mb: 2 }}>
-        Spiritual Growth
-      </Typography>
+      <PageIntro eyebrow="Spiritual life" title="A place to grow" copy="Read, listen, pray and keep a steady rhythm through the week." />
 
       <Tabs
         value={tab}

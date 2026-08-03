@@ -32,7 +32,7 @@ export default function App() {
     return (
       <ThemeProvider theme={theme}>
         <CssBaseline />
-        <SplashScreen onComplete={() => setShowSplash(false)} />
+        <SplashScreen context="Preparing the church workspace" onComplete={() => setShowSplash(false)} />
       </ThemeProvider>
     );
   }

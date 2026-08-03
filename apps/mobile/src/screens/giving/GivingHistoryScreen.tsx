@@ -1,7 +1,9 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { FlatList, RefreshControl, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { useNavigation } from '@react-navigation/native';
+import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { Card } from '../../components/common/Card';
-import givingService, { formatMoney, sumConfirmedGivingMinor, type GivingRecord } from '../../services/giving.service';
+import givingService, { formatMoney, GIVING_HISTORY_PAGE_SIZE, memberPaymentUpliftMinor, pendingGivingRecoveryReference, sumConfirmedGivingMinor, type GivingRecord } from '../../services/giving.service';
 import { borderRadius, colors, spacing, typography } from '../../theme';
 import { ScreenSkeleton } from '../../components/common/ScreenSkeleton';
 import { createLatestRequestGate } from '../../services/latest-request';
@@ -9,6 +11,12 @@ import { useAuth } from '../../hooks/useAuth';
 import { useKnownOffline } from '../../hooks/useKnownOffline';
 import { connectivityErrorMessage } from '../../services/connectivity';
 import { StatePanel } from '../../components/common/StatePanel';
+import { useAnimatedRouteTop } from '../../hooks/useAnimatedRouteTop';
+import { paginationActionState } from '../../components/common/pagination-action';
+import type { RootStackParamList } from '../../components/navigation/AppNavigator';
+import { appendUniquePageById } from '../../services/list-reconciliation';
+
+type GivingHistoryNavigation = NativeStackNavigationProp<RootStackParamList, 'GivingHistory'>;
 
 const statusColors: Record<GivingRecord['status'], string> = {
   success: colors.success,
@@ -33,38 +41,66 @@ export function givingHistoryBelongsToIdentity(
     && owner.memberId === active.memberId;
 }
 
+export function givingHistoryRetryAccessibility(offline: boolean): {
+  disabled: boolean;
+  label: string;
+  hint: string;
+} {
+  return offline
+    ? { disabled: true, label: 'Reconnect to retry', hint: 'Reconnect to refresh your giving history.' }
+    : { disabled: false, label: 'Try again', hint: 'Refreshes your giving history.' };
+}
+
 export function GivingHistoryScreen() {
+  const navigation = useNavigation<GivingHistoryNavigation>();
   const { user } = useAuth();
   const offline = useKnownOffline();
+  const listRef = useRef<FlatList<GivingRecord>>(null);
+  useAnimatedRouteTop(listRef);
   const [records, setRecords] = useState<GivingRecord[]>([]);
   const [recordsOwner, setRecordsOwner] = useState<GivingHistoryOwner | null>(() => ({
     churchId: user?.churchId,
-    memberId: user?.id,
+    memberId: user?.memberId,
   }));
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const [loadedPage, setLoadedPage] = useState(0);
+  const [totalRecords, setTotalRecords] = useState(0);
   const [error, setError] = useState('');
   const loadGate = useRef(createLatestRequestGate());
   const recordsOwnerRef = useRef(recordsOwner);
   recordsOwnerRef.current = recordsOwner;
 
-  const loadHistory = useCallback(async (refresh = false) => {
+  const loadHistory = useCallback(async (refresh = false, page = 1) => {
     const request = loadGate.current.begin();
-    const startedOwner = { churchId: user?.churchId, memberId: user?.id };
+    const startedOwner = { churchId: user?.churchId, memberId: user?.memberId };
     if (!givingHistoryBelongsToIdentity(recordsOwnerRef.current, startedOwner)) {
       recordsOwnerRef.current = startedOwner;
       setRecordsOwner(startedOwner);
       setRecords([]);
+      setLoadedPage(0);
+      setTotalRecords(0);
     }
-    if (refresh) setIsRefreshing(true);
+    if (page > 1) setIsLoadingMore(true);
+    else if (refresh) setIsRefreshing(true);
     else setIsLoading(true);
     setError('');
     try {
-      if (!user?.churchId || !user.id) throw new Error('Member identity is incomplete');
-      const result = await givingService.getHistory(user.churchId, user.id);
+      if (!user?.churchId || !user.memberId) throw new Error('Member identity is incomplete');
+      const result = await givingService.getHistoryPage(
+        user.churchId,
+        user.memberId,
+        page,
+        GIVING_HISTORY_PAGE_SIZE,
+      );
       if (loadGate.current.isLatest(request)) {
-        setRecords(result);
-        const loadedOwner = { churchId: user.churchId, memberId: user.id };
+        setRecords((current) => page === 1
+          ? result.records
+          : appendUniquePageById(current, result.records));
+        setLoadedPage(page);
+        setTotalRecords(result.total);
+        const loadedOwner = { churchId: user.churchId, memberId: user.memberId };
         recordsOwnerRef.current = loadedOwner;
         setRecordsOwner(loadedOwner);
       }
@@ -74,9 +110,10 @@ export function GivingHistoryScreen() {
       if (loadGate.current.isLatest(request)) {
         setIsLoading(false);
         setIsRefreshing(false);
+        setIsLoadingMore(false);
       }
     }
-  }, [user?.churchId, user?.id]);
+  }, [user?.churchId, user?.memberId]);
 
   useEffect(() => {
     const gate = loadGate.current;
@@ -86,10 +123,18 @@ export function GivingHistoryScreen() {
 
   const ownsRecords = givingHistoryBelongsToIdentity(recordsOwner, {
     churchId: user?.churchId,
-    memberId: user?.id,
+    memberId: user?.memberId,
   });
   const visibleRecords = ownsRecords ? records : [];
   const totalMinor = sumConfirmedGivingMinor(visibleRecords);
+  const hasOlderRecords = visibleRecords.length < totalRecords;
+  const paginationAction = paginationActionState('older gifts', {
+    offline,
+    loading: isLoadingMore,
+    refreshing: isRefreshing,
+    requiresRefresh: Boolean(error),
+  });
+  const retry = givingHistoryRetryAccessibility(offline);
 
   if (isLoading || (!ownsRecords && !error)) {
     return <ScreenSkeleton cards={4} showHero />;
@@ -99,12 +144,13 @@ export function GivingHistoryScreen() {
     <View style={styles.container}>
       {!error || visibleRecords.length > 0 ? (
         <View style={styles.summary}>
-          <Text style={styles.summaryLabel}>{error ? 'Last loaded confirmed giving' : 'Confirmed giving'}</Text>
+          <Text style={styles.summaryLabel}>{hasOlderRecords || error ? 'Loaded confirmed giving' : 'Confirmed giving'}</Text>
           <Text style={styles.summaryAmount}>{formatMoney(totalMinor)}</Text>
-          <Text style={styles.summaryDetail}>{visibleRecords.length} {visibleRecords.length === 1 ? 'record' : 'records'} in your history</Text>
+          <Text style={styles.summaryDetail}>{visibleRecords.length} of {totalRecords} {totalRecords === 1 ? 'record' : 'records'} loaded</Text>
         </View>
       ) : null}
       <FlatList
+        ref={listRef}
         data={visibleRecords}
         keyExtractor={(item) => item.id}
         contentContainerStyle={styles.list}
@@ -112,12 +158,14 @@ export function GivingHistoryScreen() {
         ListHeaderComponent={error && visibleRecords.length > 0 ? (
           <View style={styles.errorBanner}>
             <Text style={styles.errorText} accessibilityRole="alert">{error} Showing your last loaded records.</Text>
-            <TouchableOpacity style={[styles.textAction, offline && styles.actionDisabled]} onPress={() => void loadHistory(true)} accessibilityRole="button" disabled={offline} accessibilityState={{ disabled: offline }} accessibilityHint={offline ? 'Reconnect to refresh your giving history.' : undefined}>
-              <Text style={styles.bannerRetry}>Try again</Text>
+            <TouchableOpacity style={[styles.textAction, retry.disabled && styles.actionDisabled]} onPress={() => void loadHistory(true)} accessibilityRole="button" disabled={retry.disabled} accessibilityState={{ disabled: retry.disabled }} accessibilityHint={retry.hint}>
+              <Text style={styles.bannerRetry}>{retry.label}</Text>
             </TouchableOpacity>
           </View>
         ) : null}
-        renderItem={({ item }) => (
+      renderItem={({ item }) => {
+        const recoveryReference = pendingGivingRecoveryReference(item);
+        const record = (
           <Card style={styles.recordCard}>
             <View style={styles.recordHeader}>
               <View style={styles.recordInfo}>
@@ -132,9 +180,28 @@ export function GivingHistoryScreen() {
                 <Text style={[styles.statusText, { color: statusColors[item.status] }]}>{item.status}</Text>
               </View>
             </View>
-            {item.levyMinor > 0 ? <Text style={styles.levy}>Includes {formatMoney(item.levyMinor, item.currency)} E-Levy</Text> : null}
+            {item.chargedMinor + item.levyMinor > item.grossMinor ? (
+              <Text style={styles.levy}>
+                Total debit {formatMoney(item.chargedMinor + item.levyMinor, item.currency)}
+                {memberPaymentUpliftMinor(item) > 0 ? ` · ${formatMoney(memberPaymentUpliftMinor(item), item.currency)} payment fee` : ''}
+                {item.levyMinor > 0 ? ` · ${formatMoney(item.levyMinor, item.currency)} E-Levy` : ''}
+              </Text>
+            ) : null}
+            {recoveryReference ? <Text style={styles.recovery}>Check this payment’s status →</Text> : null}
           </Card>
-        )}
+        );
+        return recoveryReference ? (
+          <TouchableOpacity
+            onPress={() => navigation.navigate('GivingComplete', { reference: recoveryReference })}
+            activeOpacity={0.82}
+            accessibilityRole="button"
+            accessibilityLabel={`Check pending ${item.type.replaceAll('_', ' ')} payment of ${formatMoney(item.grossMinor, item.currency)}`}
+            accessibilityHint="Verifies this existing payment without starting another charge."
+          >
+            {record}
+          </TouchableOpacity>
+        ) : record;
+      }}
         ListEmptyComponent={
           <StatePanel
             icon={error ? (offline ? 'cloud-offline-outline' : 'receipt-outline') : 'heart-outline'}
@@ -147,6 +214,25 @@ export function GivingHistoryScreen() {
             onAction={error ? () => void loadHistory() : undefined}
           />
         }
+        ListFooterComponent={visibleRecords.length > 0 ? (
+          <View style={styles.footer}>
+            {hasOlderRecords ? (
+              <TouchableOpacity
+                style={[styles.loadMore, paginationAction.disabled && styles.actionDisabled]}
+                onPress={() => void loadHistory(false, loadedPage + 1)}
+                disabled={paginationAction.disabled}
+                accessibilityRole="button"
+                accessibilityLabel={paginationAction.label}
+                accessibilityHint={paginationAction.hint}
+                accessibilityState={{ disabled: paginationAction.disabled, busy: paginationAction.busy }}
+              >
+                <Text style={styles.loadMoreText}>{paginationAction.label}</Text>
+              </TouchableOpacity>
+            ) : (
+              <Text style={styles.endText}>You’ve reached the beginning of your giving history.</Text>
+            )}
+          </View>
+        ) : null}
       />
     </View>
   );
@@ -173,6 +259,11 @@ const styles = StyleSheet.create({
   status: { borderRadius: borderRadius.full, paddingHorizontal: spacing.sm, paddingVertical: 3 },
   statusText: { fontFamily: typography.families.bold, fontSize: typography.sizes.xs, textTransform: 'capitalize' },
   levy: { color: colors.muted, fontSize: typography.sizes.xs, marginTop: spacing.sm },
+  recovery: { color: colors.primaryDark, fontFamily: typography.families.semibold, fontSize: typography.sizes.sm, marginTop: spacing.md },
   textAction: { minHeight: 44, justifyContent: 'center' },
   actionDisabled: { opacity: 0.5 },
+  footer: { alignItems: 'center', paddingTop: spacing.sm, paddingBottom: spacing.xl },
+  loadMore: { minHeight: 48, minWidth: 190, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: colors.primary, borderRadius: borderRadius.full, paddingHorizontal: spacing.xl },
+  loadMoreText: { color: colors.primaryDark, fontFamily: typography.families.semibold, fontSize: typography.sizes.sm },
+  endText: { color: colors.muted, fontFamily: typography.families.medium, fontSize: typography.sizes.sm, textAlign: 'center' },
 });

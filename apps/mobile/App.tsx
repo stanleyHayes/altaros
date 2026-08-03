@@ -12,6 +12,7 @@ import { AppNavigator } from './src/components/navigation/AppNavigator';
 import { SplashScreen } from './src/screens/auth/SplashScreen';
 import { OfflineBanner } from './src/components/common/OfflineBanner';
 import { AppErrorBoundary } from './src/components/common/AppErrorBoundary';
+import { PrivacyShield } from './src/components/common/PrivacyShield';
 import { configureNotificationPresentation } from './src/services/notification.service';
 import { typography } from './src/theme';
 import {
@@ -83,6 +84,7 @@ export default function App() {
               </View>
             </>
           )}
+          <PrivacyShield />
         </AuthProvider>
       </AppErrorBoundary>
     </SafeAreaProvider>

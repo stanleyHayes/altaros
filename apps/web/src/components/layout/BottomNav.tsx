@@ -58,8 +58,8 @@ export default function BottomNav() {
 
   return (
     <Paper
-      sx={{ position: "fixed", bottom: 0, left: 0, right: 0, zIndex: 1100 }}
-      elevation={3}
+      sx={{ display: { xs: "block", md: "none" }, position: "fixed", bottom: { xs: 10, sm: 16 }, left: "50%", transform: "translateX(-50%)", width: "calc(100% - 24px)", maxWidth: 620, zIndex: 1100, borderRadius: 2, bgcolor: "rgba(251,253,251,.94)", backdropFilter: "blur(18px)", overflow: "hidden", boxShadow: "0 18px 50px rgba(11,46,42,.16)" }}
+      elevation={0}
     >
       <BottomNavigation
         value={value}

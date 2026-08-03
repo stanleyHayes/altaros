@@ -64,8 +64,10 @@ export interface CreatePrayerRequest {
 
 type WirePrayerRequest = Omit<PrayerRequest, 'prayerCount'> & { prayerCount?: number };
 
-const MAX_SPIRITUAL_PAGE_SIZE = 100;
+const MAX_SPIRITUAL_PAGE_SIZE = 50;
 const DEFAULT_SPIRITUAL_PAGE_SIZE = 20;
+export const SERMON_PAGE_SIZE = 25;
+export const PRAYER_PAGE_SIZE = 25;
 const MAX_ID_LENGTH = 128;
 const MAX_TITLE_LENGTH = 200;
 export const MAX_PRAYER_DESCRIPTION_LENGTH = 2_000;
@@ -292,7 +294,9 @@ const spiritualService = {
     if (devotionals.length > pageSize) throw new Error('The server returned too many devotionals.');
     const normalized = devotionals.map((item) => normalizeDevotional(item, churchId));
     if (new Set(normalized.map((item) => item.id)).size !== normalized.length) throw new Error('The server returned duplicate devotionals.');
-    const total = Array.isArray(payload) ? normalized.length : (payload as { total?: number }).total ?? normalized.length;
+    const reportedTotal = Array.isArray(payload) ? undefined : (payload as { total?: number }).total;
+    if (params?.page !== undefined && reportedTotal === undefined) throw new Error('The server returned an invalid devotional total.');
+    const total = reportedTotal ?? normalized.length;
     if (!validPageTotal(total, normalized.length)) throw new Error('The server returned an invalid devotional total.');
     return {
       devotionals: normalized,
@@ -320,7 +324,9 @@ const spiritualService = {
     if (sermons.length > pageSize) throw new Error('The server returned too many sermons.');
     const normalized = sermons.map((item) => normalizeSermon(item, churchId));
     if (new Set(normalized.map((item) => item.id)).size !== normalized.length) throw new Error('The server returned duplicate sermons.');
-    const total = Array.isArray(payload) ? normalized.length : (payload as { total?: number }).total ?? normalized.length;
+    const reportedTotal = Array.isArray(payload) ? undefined : (payload as { total?: number }).total;
+    if (params?.page !== undefined && reportedTotal === undefined) throw new Error('The server returned an invalid sermon total.');
+    const total = reportedTotal ?? normalized.length;
     if (!validPageTotal(total, normalized.length)) throw new Error('The server returned an invalid sermon total.');
     return {
       sermons: normalized,
@@ -353,7 +359,9 @@ const spiritualService = {
     if (requests.length > pageSize) throw new Error('The server returned too many prayer requests.');
     const normalized = requests.map((item) => normalizePrayerRequest(item, churchId));
     if (new Set(normalized.map((item) => item.id)).size !== normalized.length) throw new Error('The server returned duplicate prayer requests.');
-    const total = Array.isArray(payload) ? normalized.length : (payload as { total?: number }).total ?? normalized.length;
+    const reportedTotal = Array.isArray(payload) ? undefined : (payload as { total?: number }).total;
+    if (params?.page !== undefined && reportedTotal === undefined) throw new Error('The server returned an invalid prayer total.');
+    const total = reportedTotal ?? normalized.length;
     if (!validPageTotal(total, normalized.length)) throw new Error('The server returned an invalid prayer total.');
     return {
       requests: normalized,

@@ -5,7 +5,7 @@ import {
   Card,
   CardContent,
   Grid,
-  CircularProgress,
+  Skeleton,
   Chip,
 } from "@mui/material";
 import {
@@ -13,6 +13,7 @@ import {
   Error as ErrorIcon,
 } from "@mui/icons-material";
 import AdminService, { type SystemHealth } from "@/services/admin.service";
+import PageIntro from "@/components/ui/PageIntro";
 
 function formatUptime(seconds: number): string {
   const d = Math.floor(seconds / 86400);
@@ -39,24 +40,20 @@ export default function SystemHealthPage() {
 
   if (loading) {
     return (
-      <Box sx={{ display: "flex", justifyContent: "center", py: 8 }}>
-        <CircularProgress />
-      </Box>
+      <Grid container spacing={2}>{[0, 1].map((item) => <Grid key={item} size={{ xs: 12, md: 6 }}><Skeleton variant="rounded" height={320} /></Grid>)}</Grid>
     );
   }
 
   return (
     <Box>
-      <Typography variant="h4" sx={{ fontWeight: 700, mb: 3 }}>
-        System Health
-      </Typography>
+      <PageIntro eyebrow="Infrastructure" title="System health" copy="Read the current state of the API, database and runtime memory without leaving the operator console." action={<Chip label={error ? "Attention required" : "All systems normal"} color={error ? "error" : "success"} />} />
 
-      <Grid container spacing={3}>
+      <Grid container spacing={2}>
         <Grid size={{ xs: 12, md: 6 }}>
           <Card>
             <CardContent sx={{ p: 3 }}>
               <Typography variant="h6" sx={{ fontWeight: 600, mb: 3 }}>
-                Status
+                Service status
               </Typography>
               <Box sx={{ display: "flex", flexDirection: "column", gap: 2.5 }}>
                 <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>

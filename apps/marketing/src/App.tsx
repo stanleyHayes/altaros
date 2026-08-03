@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { ThemeProvider } from "@mui/material/styles";
 import CssBaseline from "@mui/material/CssBaseline";
@@ -28,8 +29,16 @@ import NotFoundPage from "@/pages/NotFoundPage";
 import PricingPage from "@/pages/PricingPage";
 import GetStartedPage from "@/pages/GetStartedPage";
 import RouteScrollTop from "@/components/layout/RouteScrollTop";
+import SplashScreen from "@/components/ui/SplashScreen";
+import GivingReturnPage from "@/pages/GivingReturnPage";
 
 export default function App() {
+  const [showSplash, setShowSplash] = useState(() => window.location.pathname !== "/giving/complete");
+
+  if (showSplash) {
+    return <ThemeProvider theme={theme}><CssBaseline /><SplashScreen context="Setting the table" duration={1050} onComplete={() => setShowSplash(false)} /></ThemeProvider>;
+  }
+
   return (
     <HelmetProvider>
       <ThemeProvider theme={theme}>
@@ -49,6 +58,7 @@ export default function App() {
               <Route path="/changelog" element={<ChangelogPage />} />
               <Route path="/pricing" element={<PricingPage />} />
               <Route path="/get-started" element={<GetStartedPage />} />
+              <Route path="/giving/complete" element={<GivingReturnPage />} />
               <Route path="/register" element={<Navigate to="/get-started" replace />} />
 
               {/* Solutions */}

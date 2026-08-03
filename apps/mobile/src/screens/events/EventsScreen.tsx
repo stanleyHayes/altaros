@@ -7,23 +7,25 @@ import {
   TouchableOpacity,
   RefreshControl,
 } from 'react-native';
-import { useNavigation } from '@react-navigation/native';
+import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { Card } from '../../components/common/Card';
 import { Button } from '../../components/common/Button';
 import { colors, typography, spacing, borderRadius } from '../../theme';
 import type { RootStackParamList } from '../../components/navigation/AppNavigator';
 import type { ChurchEvent } from '../../services/event.service';
-import eventService, { eventRsvpAvailability } from '../../services/event.service';
+import eventService, { EVENT_PAGE_SIZE, eventRsvpAvailability } from '../../services/event.service';
 import { useAuth } from '../../hooks/useAuth';
 import { useKnownOffline } from '../../hooks/useKnownOffline';
 import { ScreenSkeleton } from '../../components/common/ScreenSkeleton';
 import { StatePanel } from '../../components/common/StatePanel';
 import { createSubmissionLock } from '../../services/submission-lock';
 import { createLatestRequestGate } from '../../services/latest-request';
-import { reconcileToggleCount } from '../../services/list-reconciliation';
-import { eventListBelongsToIdentity, type EventMemberContext } from './event-screen-state';
+import { appendUniquePageById, reconcileToggleCount } from '../../services/list-reconciliation';
+import { eventFocusLoadMode, eventListBelongsToIdentity, eventListRecoveryAction, eventRsvpAction, eventRsvpFailure, type EventMemberContext } from './event-screen-state';
 import { useAnimatedRouteTop } from '../../hooks/useAnimatedRouteTop';
+import { connectivityErrorMessage } from '../../services/connectivity';
+import { paginationActionState } from '../../components/common/pagination-action';
 
 type EventsNav = NativeStackNavigationProp<RootStackParamList>;
 
@@ -34,71 +36,95 @@ export function EventsScreen() {
   const [events, setEvents] = useState<ChurchEvent[]>([]);
   const [eventsOwner, setEventsOwner] = useState<EventMemberContext | null>(() => ({
     churchId: user?.churchId,
-    memberId: user?.id,
+    memberId: user?.memberId,
   }));
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState('');
   const [rsvpWarning, setRsvpWarning] = useState('');
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const [loadedPage, setLoadedPage] = useState(0);
+  const [totalEvents, setTotalEvents] = useState(0);
   const [updatingId, setUpdatingId] = useState<string | null>(null);
   const rsvpLock = useRef(createSubmissionLock());
   const loadGate = useRef(createLatestRequestGate());
   const listRef = useRef<FlatList<ChurchEvent>>(null);
   useAnimatedRouteTop(listRef);
   const mountedRef = useRef(true);
-  const activeIdentityRef = useRef<EventMemberContext>({ churchId: user?.churchId, memberId: user?.id });
+  const hasFocusedRef = useRef(false);
+  const activeIdentityRef = useRef<EventMemberContext>({ churchId: user?.churchId, memberId: user?.memberId });
   const eventsOwnerRef = useRef(eventsOwner);
   const activeEventIdsRef = useRef(new Set<string>());
-  activeIdentityRef.current = { churchId: user?.churchId, memberId: user?.id };
+  activeIdentityRef.current = { churchId: user?.churchId, memberId: user?.memberId };
   eventsOwnerRef.current = eventsOwner;
   activeEventIdsRef.current = new Set(events.map((event) => event.id));
 
-  const loadEvents = useCallback(async (refresh = false) => {
+  const loadEvents = useCallback(async (refresh = false, page = 1) => {
       const request = loadGate.current.begin();
-      const startedOwner = { churchId: user?.churchId, memberId: user?.id };
+      const startedOwner = { churchId: user?.churchId, memberId: user?.memberId };
       if (!eventListBelongsToIdentity(eventsOwnerRef.current, startedOwner)) {
         eventsOwnerRef.current = startedOwner;
         setEventsOwner(startedOwner);
         setEvents([]);
+        setLoadedPage(0);
+        setTotalEvents(0);
         setRsvpWarning('');
         setUpdatingId(null);
         rsvpLock.current.release();
       }
-      if (refresh) setIsRefreshing(true);
+      if (page > 1) setIsLoadingMore(true);
+      else if (refresh) setIsRefreshing(true);
       else setIsLoading(true);
       try {
         setError('');
         if (!user?.churchId) throw new Error('No church selected');
-        if (!user.id) throw new Error('Member identity is incomplete');
-        const result = await eventService.getEvents(user.churchId, user.id, { upcoming: true, limit: 50 });
+        if (!user.memberId) throw new Error('Member identity is incomplete');
+        const result = await eventService.getEvents(user.churchId, user.memberId, {
+          page,
+          upcoming: true,
+          limit: EVENT_PAGE_SIZE,
+        });
         if (loadGate.current.isLatest(request)) {
-          setEvents(result.events);
-          const loadedOwner = { churchId: user.churchId, memberId: user.id };
+          setEvents((current) => page === 1
+            ? result.events
+            : appendUniquePageById(current, result.events));
+          setLoadedPage(page);
+          setTotalEvents(result.total);
+          const loadedOwner = { churchId: user.churchId, memberId: user.memberId };
           eventsOwnerRef.current = loadedOwner;
           setEventsOwner(loadedOwner);
-          setRsvpWarning(result.events.some((event) => !event.rsvpStatusKnown)
-            ? 'Your attendance status is temporarily unavailable. Refresh before updating an RSVP.'
-            : '');
+          setRsvpWarning((current) => (
+            (page > 1 && current) || result.events.some((event) => !event.rsvpStatusKnown)
+              ? 'Your attendance status is temporarily unavailable. Refresh before updating an RSVP.'
+              : ''
+          ));
         }
-      } catch {
+      } catch (cause) {
         if (loadGate.current.isLatest(request)) {
-          setError('We could not load upcoming events.');
-          setRsvpWarning('');
+          setError(connectivityErrorMessage(cause, 'We could not load upcoming events.'));
+          if (page === 1) setRsvpWarning('');
         }
       } finally {
         if (loadGate.current.isLatest(request)) {
           setIsLoading(false);
           setIsRefreshing(false);
+          setIsLoadingMore(false);
         }
       }
-  }, [user?.churchId, user?.id]);
+  }, [user?.churchId, user?.memberId]);
 
   useEffect(() => {
     mountedRef.current = true;
     const gate = loadGate.current;
-    void loadEvents();
     return () => { mountedRef.current = false; gate.invalidate(); };
-  }, [loadEvents]);
+  }, []);
+
+  useFocusEffect(useCallback(() => {
+    const mode = eventFocusLoadMode(hasFocusedRef.current, offline);
+    hasFocusedRef.current = true;
+    if (mode !== 'skip') void loadEvents(mode === 'refresh');
+    return () => loadGate.current.invalidate();
+  }, [loadEvents, offline]));
 
   const formatDate = (dateStr: string) => {
     const date = new Date(dateStr);
@@ -116,7 +142,7 @@ export function EventsScreen() {
     if (!event.rsvpStatusKnown) return;
     if (!rsvpLock.current.acquire()) return;
     const startedChurchId = user?.churchId;
-    const startedMemberId = user?.id;
+    const startedMemberId = user?.memberId;
     if (!startedChurchId || !startedMemberId
       || !mountedRef.current
       || !eventListBelongsToIdentity(eventsOwnerRef.current, activeIdentityRef.current)
@@ -148,12 +174,20 @@ export function EventsScreen() {
           attendeeCount: reconciled.count,
         };
       }));
-    } catch {
+    } catch (cause) {
       if (mountedRef.current
         && activeIdentityRef.current.churchId === startedChurchId
         && activeIdentityRef.current.memberId === startedMemberId
         && activeEventIdsRef.current.has(event.id)) {
-        setError('We could not update that RSVP. Try again.');
+        const failure = eventRsvpFailure(cause);
+        if (failure.outcomeUnknown) {
+          setEvents((current) => current.map((item) => item.id === event.id
+            ? { ...item, rsvpStatusKnown: false }
+            : item));
+          setRsvpWarning(failure.message);
+        } else {
+          setError(failure.message);
+        }
       }
     } finally {
       rsvpLock.current.release();
@@ -164,6 +198,13 @@ export function EventsScreen() {
   const renderEvent = ({ item }: { item: ChurchEvent }) => {
     const { day, month, time } = formatDate(item.startDate);
     const availability = eventRsvpAvailability(item);
+    const rsvpAction = eventRsvpAction(
+      availability,
+      item.isRsvped,
+      offline,
+      updatingId === item.id,
+      updatingId !== null && updatingId !== item.id,
+    );
 
     return (
       <Card style={styles.eventCard}>
@@ -201,14 +242,14 @@ export function EventsScreen() {
             tap cannot both mutate attendance and open another screen. */}
         <View style={styles.rsvpRow}>
           <Button
-            title={availability.label}
+            title={rsvpAction.label}
             variant={item.isRsvped ? 'outline' : 'primary'}
             size="sm"
             onPress={() => void handleRsvp(item)}
             loading={updatingId === item.id}
-            disabled={offline || !availability.allowed || (updatingId !== null && updatingId !== item.id)}
-            accessibilityLabel={item.isRsvped ? `Cancel RSVP for ${item.title}` : `RSVP for ${item.title}`}
-            accessibilityHint={offline ? 'Reconnect to update your RSVP.' : availability.reason}
+            disabled={rsvpAction.disabled}
+            accessibilityLabel={`${rsvpAction.label} for ${item.title}`}
+            accessibilityHint={rsvpAction.hint}
           />
           {availability.reason ? <Text style={styles.rsvpReason}>{availability.reason}</Text> : null}
         </View>
@@ -218,6 +259,14 @@ export function EventsScreen() {
 
   const ownsEvents = eventListBelongsToIdentity(eventsOwner, activeIdentityRef.current);
   const visibleEvents = ownsEvents ? events : [];
+  const hasMoreEvents = visibleEvents.length < totalEvents;
+  const recoveryAction = eventListRecoveryAction(offline, error ? 'load' : 'rsvp');
+  const paginationAction = paginationActionState('more events', {
+    offline,
+    loading: isLoadingMore,
+    refreshing: isRefreshing,
+    requiresRefresh: Boolean(error || rsvpWarning),
+  });
 
   if (isLoading || !ownsEvents) {
     return <ScreenSkeleton cards={4} />;
@@ -236,8 +285,16 @@ export function EventsScreen() {
       ListHeaderComponent={(error && visibleEvents.length) || rsvpWarning ? (
         <View style={styles.errorBanner}>
           <Text style={styles.errorText} accessibilityRole="alert">{error || rsvpWarning}</Text>
-          <TouchableOpacity onPress={() => void loadEvents(true)} accessibilityRole="button" disabled={offline} accessibilityState={{ disabled: offline }} accessibilityHint={offline ? 'Reconnect to refresh upcoming events.' : undefined} style={offline && { opacity: 0.5 }}>
-            <Text style={styles.retry}>{offline ? 'Reconnect to retry' : 'Try again'}</Text>
+          <TouchableOpacity
+            onPress={() => void loadEvents(true)}
+            accessibilityRole="button"
+            accessibilityLabel={recoveryAction.label}
+            disabled={recoveryAction.disabled}
+            accessibilityState={{ disabled: recoveryAction.disabled }}
+            accessibilityHint={recoveryAction.hint}
+            style={[styles.retryAction, recoveryAction.disabled && styles.actionDisabled]}
+          >
+            <Text style={styles.retry}>{recoveryAction.label}</Text>
           </TouchableOpacity>
         </View>
       ) : null}
@@ -253,6 +310,25 @@ export function EventsScreen() {
           onAction={error ? () => void loadEvents() : undefined}
         />
       }
+      ListFooterComponent={visibleEvents.length > 0 ? (
+        <View style={styles.footer}>
+          {hasMoreEvents ? (
+            <TouchableOpacity
+              style={[styles.loadMore, paginationAction.disabled && styles.actionDisabled]}
+              onPress={() => void loadEvents(false, loadedPage + 1)}
+              disabled={paginationAction.disabled}
+              accessibilityRole="button"
+              accessibilityLabel={paginationAction.label}
+              accessibilityHint={paginationAction.hint}
+              accessibilityState={{ disabled: paginationAction.disabled, busy: paginationAction.busy }}
+            >
+              <Text style={styles.loadMoreText}>{paginationAction.label}</Text>
+            </TouchableOpacity>
+          ) : (
+            <Text style={styles.endText}>You’re all caught up with the calendar.</Text>
+          )}
+        </View>
+      ) : null}
     />
   );
 }
@@ -326,4 +402,10 @@ const styles = StyleSheet.create({
   },
   errorText: { color: colors.error, fontSize: typography.sizes.sm },
   retry: { color: colors.primary, fontSize: typography.sizes.sm, fontFamily: typography.families.semibold, marginTop: spacing.xs },
+  retryAction: { minHeight: 44, justifyContent: 'center' },
+  footer: { alignItems: 'center', paddingTop: spacing.sm, paddingBottom: spacing.xl },
+  loadMore: { minHeight: 48, minWidth: 220, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: colors.primary, borderRadius: borderRadius.full, paddingHorizontal: spacing.xl },
+  loadMoreText: { color: colors.primaryDark, fontFamily: typography.families.semibold, fontSize: typography.sizes.sm },
+  endText: { color: colors.muted, fontFamily: typography.families.medium, fontSize: typography.sizes.sm, textAlign: 'center' },
+  actionDisabled: { opacity: 0.5 },
 });

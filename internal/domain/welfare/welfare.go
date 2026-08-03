@@ -66,6 +66,7 @@ const (
 	CategoryBereavement  Category = "bereavement"
 	CategoryFood         Category = "food"
 	CategoryHousing      Category = "housing"
+	CategoryCounseling   Category = "counseling"
 	CategoryEducation    Category = "education"
 	CategorySafeguarding Category = "safeguarding"
 	CategoryOther        Category = "other"
@@ -74,7 +75,7 @@ const (
 // AllCategories is every category, for a UI.
 var AllCategories = []Category{
 	CategoryFinancial, CategoryMedical, CategoryBereavement, CategoryFood,
-	CategoryHousing, CategoryEducation, CategorySafeguarding, CategoryOther,
+	CategoryHousing, CategoryCounseling, CategoryEducation, CategorySafeguarding, CategoryOther,
 }
 
 // Valid reports whether a category is recognised.
@@ -154,10 +155,11 @@ type Case struct {
 
 	// --- searchable, and therefore NOT encrypted ---
 
-	MemberID string   `bson:"memberId" json:"memberId"`
-	Category Category `bson:"category" json:"category"`
-	Urgency  Urgency  `bson:"urgency"  json:"urgency"`
-	Status   Status   `bson:"status"   json:"status"`
+	MemberID    string   `bson:"memberId" json:"memberId"`
+	Category    Category `bson:"category" json:"category"`
+	Urgency     Urgency  `bson:"urgency"  json:"urgency"`
+	Status      Status   `bson:"status"   json:"status"`
+	IsAnonymous bool     `bson:"isAnonymous,omitempty" json:"isAnonymous"`
 	// AssignedTo is the pastoral worker handling it.
 	AssignedTo string `bson:"assignedTo,omitempty" json:"assignedTo,omitempty"`
 
@@ -199,12 +201,13 @@ type Note struct {
 // screen that somebody walks past. Opening one is a separate, separately
 // audited act.
 type CaseSummary struct {
-	ID         bson.ObjectID `json:"id"`
-	MemberID   string        `json:"memberId"`
-	Category   Category      `json:"category"`
-	Urgency    Urgency       `json:"urgency"`
-	Status     Status        `json:"status"`
-	AssignedTo string        `json:"assignedTo,omitempty"`
+	ID          bson.ObjectID `json:"id"`
+	MemberID    string        `json:"memberId"`
+	Category    Category      `json:"category"`
+	Urgency     Urgency       `json:"urgency"`
+	Status      Status        `json:"status"`
+	IsAnonymous bool          `json:"isAnonymous"`
+	AssignedTo  string        `json:"assignedTo,omitempty"`
 	// NoteCount says how much record there is without showing any of it.
 	NoteCount int       `json:"noteCount"`
 	CreatedAt time.Time `json:"createdAt"`
@@ -215,7 +218,7 @@ type CaseSummary struct {
 func (c *Case) Summarise() CaseSummary {
 	return CaseSummary{
 		ID: c.ID, MemberID: c.MemberID, Category: c.Category,
-		Urgency: c.Urgency, Status: c.Status, AssignedTo: c.AssignedTo,
+		Urgency: c.Urgency, Status: c.Status, IsAnonymous: c.IsAnonymous, AssignedTo: c.AssignedTo,
 		NoteCount: len(c.Notes), CreatedAt: c.CreatedAt, UpdatedAt: c.UpdatedAt,
 	}
 }

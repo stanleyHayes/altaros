@@ -1,6 +1,6 @@
 import Box from "@mui/material/Box";
-import Typography from "@mui/material/Typography";
 import EventCard from "@/components/events/EventCard";
+import PageIntro from "@/components/ui/PageIntro";
 
 // TODO: Replace with actual API data
 const mockEvents = [
@@ -70,12 +70,7 @@ const mockEvents = [
 export default function EventsPage() {
   return (
     <Box sx={{ py: 2 }}>
-      <Typography variant="h5" sx={{ fontWeight: 700, mb: 0.5 }}>
-        Events
-      </Typography>
-      <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
-        Upcoming church events and activities
-      </Typography>
+      <PageIntro eyebrow="Gather together" title="Events" copy="Services, groups and moments where your church community meets." />
 
       <Box sx={{ display: "flex", flexDirection: "column", gap: 2 }}>
         {mockEvents.map((event) => (

@@ -101,7 +101,57 @@ func handleMobileEvents(svc *event.Service) http.HandlerFunc {
 			httpx.Error(w, http.StatusForbidden, "You cannot view another church's events.")
 			return
 		}
-		handleListEvents(svc)(w, r)
+		filter := eventFilterFromRequest(r)
+		upcoming := r.URL.Query().Get("upcoming") == "true"
+		paged := r.URL.Query().Has("page")
+		page, limit := 1, int(filter.Limit)
+		if paged {
+			page, limit = paging(r)
+			if page < 1 {
+				page = 1
+			}
+			if page > 10_000_000 {
+				httpx.Error(w, http.StatusBadRequest, "That event page is not valid.")
+				return
+			}
+			if limit < 1 || limit > 50 {
+				limit = 25
+			}
+			filter.Limit = int64(limit)
+			filter.Offset = int64(page-1) * int64(limit)
+		}
+		if upcoming {
+			events, total, err := svc.UpcomingPage(r.Context(), page, limit)
+			if err != nil {
+				writeEventError(w, err)
+				return
+			}
+			if paged {
+				httpx.JSON(w, http.StatusOK, map[string]any{"data": events, "total": total})
+				return
+			}
+			httpx.JSON(w, http.StatusOK, events)
+			return
+		}
+		events, err := svc.List(r.Context(), filter)
+		if err != nil {
+			writeEventError(w, err)
+			return
+		}
+		if paged {
+			total, err := svc.Count(r.Context(), filter)
+			if err != nil {
+				writeEventError(w, err)
+				return
+			}
+			httpx.JSON(w, http.StatusOK, map[string]any{"data": events, "total": total})
+			return
+		}
+		// This compatibility route is the member-app collection contract. Its
+		// canonical `data` is the array itself; the dashboard `/events` route
+		// deliberately returns `{events}` and must not leak that different shape
+		// into the mobile strict normaliser.
+		httpx.JSON(w, http.StatusOK, events)
 	}
 }
 
@@ -178,24 +228,29 @@ func (in eventInput) toDomain() event.Input {
 	return out
 }
 
+func eventFilterFromRequest(r *http.Request) event.Filter {
+	filter := event.Filter{}
+	if raw := r.URL.Query().Get("from"); raw != "" {
+		if parsed, err := time.Parse(time.RFC3339, raw); err == nil {
+			filter.From = parsed
+		}
+	}
+	if raw := r.URL.Query().Get("to"); raw != "" {
+		if parsed, err := time.Parse(time.RFC3339, raw); err == nil {
+			filter.To = parsed
+		}
+	}
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		if parsed, err := strconv.ParseInt(raw, 10, 64); err == nil {
+			filter.Limit = parsed
+		}
+	}
+	return filter
+}
+
 func handleListEvents(svc *event.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		filter := event.Filter{}
-		if raw := r.URL.Query().Get("from"); raw != "" {
-			if parsed, err := time.Parse(time.RFC3339, raw); err == nil {
-				filter.From = parsed
-			}
-		}
-		if raw := r.URL.Query().Get("to"); raw != "" {
-			if parsed, err := time.Parse(time.RFC3339, raw); err == nil {
-				filter.To = parsed
-			}
-		}
-		if raw := r.URL.Query().Get("limit"); raw != "" {
-			if parsed, err := strconv.ParseInt(raw, 10, 64); err == nil {
-				filter.Limit = parsed
-			}
-		}
+		filter := eventFilterFromRequest(r)
 
 		events, err := svc.List(r.Context(), filter)
 		if err != nil {
@@ -225,7 +280,13 @@ func handleUpcomingEvents(svc *event.Service) http.HandlerFunc {
 
 func handleGetEvent(svc *event.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		found, err := svc.ByID(r.Context(), chi.URLParam(r, "id"))
+		var found *event.Event
+		var err error
+		if r.URL.Query().Get("upcoming") == "true" {
+			found, err = svc.UpcomingByID(r.Context(), chi.URLParam(r, "id"))
+		} else {
+			found, err = svc.ByID(r.Context(), chi.URLParam(r, "id"))
+		}
 		if err != nil {
 			writeEventError(w, err)
 			return

@@ -15,6 +15,7 @@ func clearSecrets(t *testing.T) {
 		"APP_ENV", "PORT", "CORS_ORIGIN", "JWT_SECRET",
 		"PAYSTACK_SECRET_KEY", "PAYSTACK_PUBLIC_KEY", "PAYSTACK_WEBHOOK_SECRET",
 		"AT_API_KEY", "AT_USERNAME", "RESEND_API_KEY", "RESEND_FROM_EMAIL",
+		"FIREBASE_SERVICE_ACCOUNT", "APNS_TEAM_ID", "APNS_KEY_ID", "APNS_BUNDLE_ID", "APNS_PRIVATE_KEY",
 		"ANTHROPIC_API_KEY",
 	} {
 		t.Setenv(k, "")
@@ -79,6 +80,24 @@ func TestRequiredSecretsAreScopedPerService(t *testing.T) {
 	}
 	if strings.Contains(missing.Error(), "ANTHROPIC_API_KEY") {
 		t.Error("finance should not require the AI key")
+	}
+}
+
+func TestNotificationRequiresBothNativePushProviders(t *testing.T) {
+	clearSecrets(t)
+	t.Setenv("APP_ENV", "production")
+	t.Setenv("JWT_SECRET", "test-secret")
+	var missing *MissingSecretsError
+	_, err := Load("notification")
+	if !errors.As(err, &missing) {
+		t.Fatalf("notification must require provider credentials, got: %v", err)
+	}
+	for _, want := range []string{
+		"FIREBASE_SERVICE_ACCOUNT", "APNS_TEAM_ID", "APNS_KEY_ID", "APNS_PRIVATE_KEY",
+	} {
+		if !strings.Contains(missing.Error(), want) {
+			t.Errorf("missing error should name %s; got %s", want, missing.Error())
+		}
 	}
 }
 

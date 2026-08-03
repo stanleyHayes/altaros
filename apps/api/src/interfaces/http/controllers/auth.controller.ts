@@ -17,6 +17,11 @@ export const registerSchema = z
     password: z.string().min(8),
     churchId: z.string().min(1).optional(),
     churchName: z.string().min(2).optional(),
+    churchCity: z.string().max(120).optional(),
+    churchDenomination: z.string().max(120).optional(),
+    averageWeeklyAttendance: z.number().int().nonnegative().max(1_000_000).optional(),
+    ministryPriorities: z.array(z.string().max(80)).max(8).optional(),
+    requestedPlan: z.enum(["free", "basic", "pro", "enterprise"]).optional(),
   })
   .refine((data) => Boolean(data.churchId || data.churchName), {
     message: "Provide either churchId (join a church) or churchName (create one)",

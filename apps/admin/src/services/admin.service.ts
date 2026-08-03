@@ -1,4 +1,4 @@
-import { get, patch } from "./api";
+import { get, patch, put } from "./api";
 
 export interface PlatformStats {
   totalChurches: number;
@@ -41,6 +41,39 @@ export interface SystemHealth {
   database: string;
   memory: { heapUsed: number; heapTotal: number; rss: number };
   nodeVersion: string;
+}
+
+export interface OperationsSnapshot {
+  notificationsTotal: number;
+  notificationsFailed: number;
+  notificationsQueued: number;
+  auditEvents: number;
+  inactiveChurches: number;
+  churchesMissingLocation: number;
+}
+
+export interface AuditRow {
+  id: string;
+  churchId: string;
+  actorId: string;
+  actorRole: string;
+  action: string;
+  resource: string;
+  resourceId?: string;
+  reason?: string;
+  createdAt: string;
+}
+
+export interface PlatformSettingsResponse {
+  settings: {
+    commissionBasisPoints: number;
+    defaultFeeBearer: string;
+    providerFees: Record<string, { basisPoints: number; flatMinor: number; capMinor: number; waiveBelowMinor: number }>;
+    messagingRates: Record<string, { minor: number; currency: string }>;
+    updatedAt: string;
+  };
+  note: string;
+  maxCommissionBasisPoints: number;
 }
 
 export interface Pagination {
@@ -90,6 +123,22 @@ const AdminService = {
 
   async getHealth(): Promise<SystemHealth> {
     return get<SystemHealth>("/admin/health");
+  },
+
+  async getOperations(): Promise<OperationsSnapshot> {
+    return get<OperationsSnapshot>("/admin/operations");
+  },
+
+  async getAudit(page = 1, limit = 50): Promise<Page<AuditRow>> {
+    return get<Page<AuditRow>>(`/admin/audit?page=${page}&limit=${limit}`);
+  },
+
+  async getPlatformSettings(): Promise<PlatformSettingsResponse> {
+    return get<PlatformSettingsResponse>("/platform/settings");
+  },
+
+  async updatePlatformSettings(payload: { commissionBasisPoints: number; defaultFeeBearer: string }): Promise<PlatformSettingsResponse["settings"]> {
+    return put<PlatformSettingsResponse["settings"]>("/platform/settings", payload);
   },
 };
 

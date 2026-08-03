@@ -7,6 +7,11 @@ import { session } from './session';
 const ANDROID_CHANNEL_ID = 'default';
 type NativePushPlatform = 'ios' | 'android';
 
+export interface PushPermissionResult {
+  status: Notifications.PermissionStatus;
+  canAskAgain: boolean;
+}
+
 export function supportsNativePush(
   platform: typeof Platform.OS = Platform.OS,
 ): platform is NativePushPlatform {
@@ -93,10 +98,16 @@ const NOTIFICATION_TYPES = new Set([
   'BIRTHDAY', 'FOLLOW_UP', 'ANNOUNCEMENT', 'CUSTOM',
 ]);
 const MAX_INBOX_ITEMS = 200;
+export const NOTIFICATION_PAGE_SIZE = 50;
 const MAX_ID_LENGTH = 128;
 const MAX_TITLE_LENGTH = 200;
 const MAX_BODY_LENGTH = 4_096;
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/;
+
+export interface NotificationPage {
+  items: MemberNotification[];
+  total: number;
+}
 
 function nonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0;
@@ -235,6 +246,42 @@ export function normalizeNotification(
 }
 
 const notificationService = {
+  async listPage(
+    churchId: string,
+    recipientId: string,
+    page: number,
+    limit = NOTIFICATION_PAGE_SIZE,
+  ): Promise<NotificationPage> {
+    if (!validId(churchId) || !validId(recipientId)) {
+      throw new Error('The member identity is incomplete.');
+    }
+    if (!Number.isSafeInteger(page) || page < 1
+      || !Number.isSafeInteger(limit) || limit < 1 || limit > 100) {
+      throw new Error('The notification page is not valid.');
+    }
+    const { data } = await api.get<unknown>('/notifications', { params: { page, limit } });
+    if (typeof data !== 'object' || data === null || Array.isArray(data)
+      || (data as { success?: unknown }).success !== true) {
+      throw new Error('The server returned an invalid notification inbox.');
+    }
+    const payload = (data as { data?: unknown }).data;
+    if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) {
+      throw new Error('The server returned an invalid notification inbox.');
+    }
+    const candidate = payload as { data?: unknown; total?: unknown };
+    if (!Array.isArray(candidate.data) || candidate.data.length > limit
+      || !Number.isSafeInteger(candidate.total) || Number(candidate.total) < candidate.data.length) {
+      throw new Error('The server returned an invalid notification inbox.');
+    }
+    const items = candidate.data.map((item) => normalizeNotification(item, {
+      churchId, recipientId,
+    }));
+    if (new Set(items.map((item) => item.id)).size !== items.length) {
+      throw new Error('The server returned duplicate notifications.');
+    }
+    return { items, total: Number(candidate.total) };
+  },
+
   async list(churchId: string, recipientId: string): Promise<MemberNotification[]> {
     if (!validId(churchId) || !validId(recipientId)) {
       throw new Error('The member identity is incomplete.');
@@ -329,7 +376,7 @@ const notificationService = {
   async enablePush(
     platform: typeof Platform.OS = Platform.OS,
     canRegister: () => boolean = () => true,
-  ): Promise<Notifications.PermissionStatus> {
+  ): Promise<PushPermissionResult> {
     if (!supportsNativePush(platform)) {
       throw new Error('Push alerts are available in the installed mobile app.');
     }
@@ -339,11 +386,15 @@ const notificationService = {
     if (!canRegister()) throw new Error('The member session changed before push setup completed.');
 
     const permission = await Notifications.requestPermissionsAsync();
-    if (permission.status !== 'granted') return permission.status;
+    const result = {
+      status: permission.status,
+      canAskAgain: permission.canAskAgain !== false,
+    };
+    if (permission.status !== 'granted') return result;
     if (!canRegister()) throw new Error('The member session changed before push setup completed.');
 
     await this.syncPushRegistration(platform, canRegister);
-    return permission.status;
+    return result;
   },
 };
 

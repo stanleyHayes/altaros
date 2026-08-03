@@ -102,6 +102,9 @@ describe('event API contract', () => {
 
     await expect(eventService.getEvent('event-1', 'church-1', 'member-1'))
       .rejects.toThrow('invalid event');
+    expect(mockedApi.get).toHaveBeenCalledWith('/events/event-1', {
+      params: { upcoming: true },
+    });
     expect(mockedApi.get).toHaveBeenCalledTimes(1);
   });
 
@@ -116,6 +119,35 @@ describe('event API contract', () => {
       params: { limit: 20, upcoming: true, sortOrder: 'asc' },
     });
     expect(result.events.map((event) => event.id)).toEqual(['sooner', 'later']);
+  });
+
+  it('accepts the canonical paged event contract and preserves the server total', async () => {
+    mockedApi.get.mockResolvedValueOnce({ data: { success: true, data: {
+      data: [
+        { id: 'later', churchId: 'church-1', title: 'Later', startDate: '2099-08-10', endDate: '2099-08-10' },
+        { id: 'sooner', churchId: 'church-1', title: 'Sooner', startDate: '2099-08-02', endDate: '2099-08-02' },
+      ],
+      total: 7,
+    } } } as never).mockResolvedValueOnce({ data: { data: [] } } as never);
+
+    const result = await eventService.getEvents('church-1', 'member-1', {
+      page: 2, limit: 25, upcoming: true,
+    });
+
+    expect(mockedApi.get).toHaveBeenNthCalledWith(1, '/events/church/church-1', {
+      params: { page: 2, limit: 25, upcoming: true, sortOrder: 'asc' },
+    });
+    expect(result.total).toBe(7);
+    expect(result.events.map((event) => event.id)).toEqual(['sooner', 'later']);
+  });
+
+  it('rejects a paged event response without a trustworthy total', async () => {
+    mockedApi.get.mockResolvedValueOnce({ data: { success: true, data: {
+      data: [{ id: 'event-1', churchId: 'church-1', title: 'Event', startDate: '2099-08-02', endDate: '2099-08-02' }],
+    } } } as never).mockResolvedValueOnce({ data: { data: [] } } as never);
+
+    await expect(eventService.getEvents('church-1', 'member-1', { page: 1, limit: 25, upcoming: true }))
+      .rejects.toThrow('invalid event total');
   });
 
   it('fetches a bounded candidate set before selecting the nearest home events', async () => {

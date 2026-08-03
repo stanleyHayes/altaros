@@ -2,6 +2,7 @@ import api from './api';
 import { unwrapApiData } from './api-envelope';
 
 export type PostType = 'general' | 'testimony' | 'praise_report';
+export type ReportReason = 'spam' | 'harassment' | 'misleading' | 'inappropriate' | 'privacy';
 
 export interface Post {
   id: string;
@@ -49,6 +50,7 @@ interface WireComment extends Omit<Comment, 'authorAvatar'> {
 }
 
 const POST_TYPES = new Set<PostType>(['general', 'testimony', 'praise_report']);
+const REPORT_REASONS = new Set<ReportReason>(['spam', 'harassment', 'misleading', 'inappropriate', 'privacy']);
 const MAX_PAGE_SIZE = 100;
 const DEFAULT_PAGE_SIZE = 100;
 const MAX_ID_LENGTH = 128;
@@ -299,9 +301,41 @@ const socialService = {
     return created;
   },
 
+  async reportPost(postId: string, reason: ReportReason): Promise<void> {
+    if (!validId(postId)) throw new Error('The community post reference is not valid.');
+    if (!REPORT_REASONS.has(reason)) throw new Error('Choose a valid reason for this report.');
+    const { data } = await api.post<unknown>(
+      `/social/posts/${encodeURIComponent(postId)}/report`,
+      { reason, detail: '' },
+    );
+    const acknowledgement = unwrapApiData(data, 'The server did not confirm this report.');
+    if (typeof acknowledgement !== 'object' || acknowledgement === null || Array.isArray(acknowledgement)
+      || (acknowledgement as { reported?: unknown }).reported !== true
+      || !validId((acknowledgement as { reportId?: unknown }).reportId)) {
+      throw new Error('The server did not confirm this report.');
+    }
+  },
+
+  async deleteComment(postId: string, commentId: string): Promise<void> {
+    if (!validId(postId) || !validId(commentId)) throw new Error('The community comment reference is not valid.');
+    const { data } = await api.delete<unknown>(
+      `/social/posts/${encodeURIComponent(postId)}/comments/${encodeURIComponent(commentId)}`,
+    );
+    const acknowledgement = unwrapApiData(data, 'The server did not confirm this comment was deleted.');
+    if (typeof acknowledgement !== 'object' || acknowledgement === null || Array.isArray(acknowledgement)
+      || (acknowledgement as { deleted?: unknown }).deleted !== true) {
+      throw new Error('The server did not confirm this comment was deleted.');
+    }
+  },
+
   async deletePost(postId: string): Promise<void> {
     if (!validId(postId)) throw new Error('The community post reference is not valid.');
-    await api.delete(`/social/posts/${encodeURIComponent(postId)}`);
+    const { data } = await api.delete<unknown>(`/social/posts/${encodeURIComponent(postId)}`);
+    const acknowledgement = unwrapApiData(data, 'The server did not confirm this post was deleted.');
+    if (typeof acknowledgement !== 'object' || acknowledgement === null || Array.isArray(acknowledgement)
+      || (acknowledgement as { deleted?: unknown }).deleted !== true) {
+      throw new Error('The server did not confirm this post was deleted.');
+    }
   },
 };
 

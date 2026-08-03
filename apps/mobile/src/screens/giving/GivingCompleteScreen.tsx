@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
-import { RouteProp, useNavigation, useRoute } from '@react-navigation/native';
+import { RouteProp, useNavigation, usePreventRemove, useRoute } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { Button } from '../../components/common/Button';
 import { useAuth } from '../../hooks/useAuth';
@@ -80,6 +80,10 @@ export function settlementPreflightError(
   return null;
 }
 
+export function canLeaveSettlement(explicitHistoryExit: boolean): boolean {
+  return explicitHistoryExit;
+}
+
 export function GivingCompleteScreen() {
   const route = useRoute<CompleteRoute>();
   const navigation = useNavigation<CompleteNav>();
@@ -90,10 +94,10 @@ export function GivingCompleteScreen() {
     route.params?.trxref,
   );
   const context = useMemo(
-    () => reference && user?.id && user.churchId
-      ? { reference, churchId: user.churchId, memberId: user.id }
+    () => reference && user?.memberId && user.churchId
+      ? { reference, churchId: user.churchId, memberId: user.memberId }
       : null,
-    [reference, user?.churchId, user?.id],
+    [reference, user?.churchId, user?.memberId],
   );
   const activeContextRef = useRef<SettlementContext | null>(context);
   activeContextRef.current = context;
@@ -107,6 +111,13 @@ export function GivingCompleteScreen() {
   const attemptsRef = useRef(new Map<string, number>());
   const inFlightRef = useRef(new Set<string>());
   const mountedRef = useRef(true);
+  const explicitHistoryExitRef = useRef(false);
+
+  usePreventRemove(true, ({ data }) => {
+    if (canLeaveSettlement(explicitHistoryExitRef.current)) {
+      navigation.dispatch(data.action);
+    }
+  });
 
   const verify = useCallback(async () => {
     const requestContext = context;
@@ -196,6 +207,10 @@ export function GivingCompleteScreen() {
 
   const success = transaction?.status === 'success';
   const failed = transaction?.status === 'failed' || transaction?.status === 'reversed';
+  const viewGivingHistory = () => {
+    explicitHistoryExitRef.current = true;
+    navigation.replace('GivingHistory');
+  };
 
   return (
     <View style={styles.container}>
@@ -244,7 +259,8 @@ export function GivingCompleteScreen() {
         <Button
           title="View giving history"
           variant={success ? 'primary' : 'outline'}
-          onPress={() => navigation.replace('GivingHistory')}
+          onPress={viewGivingHistory}
+          accessibilityHint="Leaves payment status and opens your transaction history."
           fullWidth
         />
         <Text style={styles.note}>Only a provider-verified success appears in confirmed giving.</Text>

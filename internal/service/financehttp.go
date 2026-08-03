@@ -11,6 +11,7 @@ import (
 
 	"github.com/hayfordstanley/altar-os/internal/domain/church"
 	"github.com/hayfordstanley/altar-os/internal/domain/finance"
+	"github.com/hayfordstanley/altar-os/internal/domain/member"
 	"github.com/hayfordstanley/altar-os/internal/domain/platformsetting"
 	"github.com/hayfordstanley/altar-os/internal/domain/rbac"
 	"github.com/hayfordstanley/altar-os/internal/platform/deps"
@@ -29,6 +30,16 @@ import (
 // platformsetting, which is the real source and which a church may override
 // per-subaccount for a negotiated rate.
 const DefaultCommissionBasisPoints = platformsetting.DefaultCommissionBasisPoints
+
+const mobileGivingCallbackURL = "https://altaros.com/giving/complete"
+
+// A callback is handed to the payment provider and becomes a post-checkout
+// redirect. Never let a signed-in client turn it into an arbitrary redirect.
+// Empty remains valid for non-mobile callers that use the deployment-level
+// PAYMENT_CALLBACK_URL configured on the Paystack adapter.
+func validGivingCallbackURL(value string) bool {
+	return value == "" || value == mobileGivingCallbackURL
+}
 
 // buildFinance mounts the giving and ledger routes (WP-14).
 func buildFinance(d *deps.Deps) http.Handler { return standalone(financeRoutes(d)) }
@@ -49,6 +60,7 @@ func financeRoutes(d *deps.Deps) routeSet {
 	// the notification service. It was nil until now, so the receipt half of
 	// WP-15 could never fire however correct both halves were in isolation.
 	svc := finance.NewService(d.Mongo, gateway, directory, d.Events)
+	members := member.NewService(d.Mongo, d.Events, d.Config.DataRegion)
 
 	return func(r chi.Router) {
 		// The webhook is registered OUTSIDE the auth middleware on purpose:
@@ -74,8 +86,9 @@ func financeRoutes(d *deps.Deps) routeSet {
 			// Guarding these with finance:read would stop the congregation
 			// giving, which is the product, and would leave members with no way
 			// to see their own receipts.
-			r.Post("/finance/give/quote", handleGivingQuote(svc, directory))
-			r.Post("/finance/give", handleStartGiving(svc, directory))
+			r.Post("/finance/give/quote", handleGivingQuote(svc, directory, members))
+			r.Post("/finance/give", handleStartGiving(svc, directory, members))
+			r.Get("/finance/me/giving-options", handleMyGivingOptions(svc, members))
 
 			// Giving campaigns, ported from the legacy TypeScript API (WP-20).
 			// Reading one is finance:read; running an appeal is a finance write.
@@ -97,8 +110,8 @@ func financeRoutes(d *deps.Deps) routeSet {
 			// not here: a member reading their own pledge holds nothing that
 			// would satisfy finance:read, and requiring it would hide people's
 			// own promises from them.
-			r.Get("/finance/pledges", handleListPledges(svc))
-			r.Get("/finance/pledges/{id}", handleGetPledge(svc))
+			r.Get("/finance/pledges", handleListPledges(svc, members))
+			r.Get("/finance/pledges/{id}", handleGetPledge(svc, members))
 			r.With(requirePermission(rbac.ResourceFinance, rbac.ActionCreate)).
 				Post("/finance/pledges", handleMakePledge(svc))
 			// Cancelled, never deleted — same reason a campaign is closed.
@@ -155,7 +168,7 @@ func financeRoutes(d *deps.Deps) routeSet {
 // handleGivingQuote is the non-mutating first half of checkout. The mobile
 // client must be able to show the exact debit before it creates a pending
 // transaction or sends the member to Paystack.
-func handleGivingQuote(svc *finance.Service, dir *churchDirectory) http.HandlerFunc {
+func handleGivingQuote(svc *finance.Service, dir *churchDirectory, members memberAccountResolver) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			Amount    string `json:"amount"`
@@ -185,9 +198,14 @@ func handleGivingQuote(svc *finance.Service, dir *churchDirectory) http.HandlerF
 			httpx.Error(w, http.StatusUnauthorized, "Sign in to continue.")
 			return
 		}
+		memberID, err := memberIDForUser(r.Context(), members, scope.UserID)
+		if err != nil {
+			httpx.Error(w, http.StatusConflict, "Your account is not linked to a member profile yet.")
+			return
+		}
 		// Anonymous controls what the church sees; it must not reset the
 		// signed-in giver's cumulative transfer allowance.
-		priorToday, _ := svc.GivenTodayMinor(r.Context(), scope.UserID, time.Now())
+		priorToday, _ := svc.GivenTodayMinor(r.Context(), memberID, time.Now())
 
 		quote, err := givingQuoteFor(r.Context(), dir, scope.ChurchID, amount,
 			req.Channel, priorToday)
@@ -280,7 +298,7 @@ func (c *churchDirectory) FeeScheduleFor(ctx context.Context, channel string) (m
 	return current.FeeFor(channel), nil
 }
 
-func handleStartGiving(svc *finance.Service, directory *churchDirectory) http.HandlerFunc {
+func handleStartGiving(svc *finance.Service, directory *churchDirectory, members memberAccountResolver) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			Type string `json:"type"`
@@ -293,6 +311,7 @@ func handleStartGiving(svc *finance.Service, directory *churchDirectory) http.Ha
 			Channel            string `json:"channel"`
 			Email              string `json:"email"`
 			CampaignID         string `json:"campaignId"`
+			PledgeID           string `json:"pledgeId"`
 			Note               string `json:"note"`
 			Anonymous          bool   `json:"anonymous"`
 			CallbackURL        string `json:"callbackUrl"`
@@ -302,10 +321,19 @@ func handleStartGiving(svc *finance.Service, directory *churchDirectory) http.Ha
 			httpx.Error(w, http.StatusBadRequest, "Malformed request body")
 			return
 		}
+		if !validGivingCallbackURL(req.CallbackURL) {
+			httpx.Error(w, http.StatusBadRequest, "The payment return address is not valid.")
+			return
+		}
 
 		scope, err := callerScope(r)
 		if err != nil {
 			httpx.Error(w, http.StatusUnauthorized, "Sign in to continue.")
+			return
+		}
+		linkedMemberID, err := memberIDForUser(r.Context(), members, scope.UserID)
+		if err != nil {
+			httpx.Error(w, http.StatusConflict, "Your account is not linked to a member profile yet.")
 			return
 		}
 
@@ -333,7 +361,40 @@ func handleStartGiving(svc *finance.Service, directory *churchDirectory) http.Ha
 			return
 		}
 
-		memberID := scope.UserID
+		givingType := finance.Type(req.Type)
+		switch givingType {
+		case finance.TypeCampaign:
+			campaign, campaignErr := svc.CampaignByID(r.Context(), req.CampaignID)
+			now := time.Now().UTC()
+			if campaignErr != nil || campaign == nil || !campaign.IsActive ||
+				now.Before(campaign.StartDate) || now.After(campaign.EndDate) {
+				httpx.Error(w, http.StatusBadRequest, "Choose an active giving campaign.")
+				return
+			}
+			if req.PledgeID != "" {
+				httpx.Error(w, http.StatusBadRequest, "That giving purpose is not valid.")
+				return
+			}
+		case finance.TypePledgePayment:
+			pledge, pledgeErr := svc.PledgeByID(r.Context(), req.PledgeID)
+			if pledgeErr != nil || pledge == nil || pledge.Pledge == nil ||
+				pledge.Pledge.MemberID != linkedMemberID || pledge.Pledge.Cancelled || pledge.Complete {
+				httpx.Error(w, http.StatusBadRequest, "Choose one of your active pledges.")
+				return
+			}
+			if req.Anonymous {
+				httpx.Error(w, http.StatusBadRequest, "A pledge payment cannot be anonymous.")
+				return
+			}
+			req.CampaignID = pledge.Pledge.CampaignID.String()
+		default:
+			if req.CampaignID != "" || req.PledgeID != "" {
+				httpx.Error(w, http.StatusBadRequest, "That giving purpose is not valid.")
+				return
+			}
+		}
+
+		memberID := linkedMemberID
 		if req.Anonymous {
 			memberID = ""
 		}
@@ -341,7 +402,7 @@ func handleStartGiving(svc *finance.Service, directory *churchDirectory) http.Ha
 		// Quote the levy against what this giver has already transferred
 		// today: the threshold is cumulative, so charging per transaction
 		// under-quotes exactly the member who gives most often.
-		priorToday, _ := svc.GivenTodayMinor(r.Context(), scope.UserID, time.Now())
+		priorToday, _ := svc.GivenTodayMinor(r.Context(), linkedMemberID, time.Now())
 
 		// The FULL quote, not the levy alone.
 		//
@@ -364,7 +425,7 @@ func handleStartGiving(svc *finance.Service, directory *churchDirectory) http.Ha
 		result, err := svc.StartGiving(r.Context(), finance.GiveRequest{
 			MemberID:        memberID,
 			InitiatorID:     scope.UserID,
-			Type:            finance.Type(req.Type),
+			Type:            givingType,
 			Amount:          amount,
 			Channel:         req.Channel,
 			Email:           req.Email,
@@ -734,12 +795,29 @@ func handleMyGiving(svc *finance.Service) http.HandlerFunc {
 			httpx.Error(w, http.StatusUnauthorized, "Sign in to continue.")
 			return
 		}
-		giving, err := svc.List(r.Context(), finance.Query{
+		query := finance.Query{
 			OwnerID: scope.UserID,
 			From:    parseTime(r.URL.Query().Get("from")),
 			To:      parseTime(r.URL.Query().Get("to")),
 			Limit:   500,
-		})
+		}
+		paged := r.URL.Query().Has("page") || r.URL.Query().Has("limit")
+		if paged {
+			page, limit := paging(r)
+			if page < 1 {
+				page = 1
+			}
+			if page > 10_000_000 {
+				httpx.Error(w, http.StatusBadRequest, "That giving history page is not valid.")
+				return
+			}
+			if limit < 1 || limit > 100 {
+				limit = 50
+			}
+			query.Limit = int64(limit)
+			query.Offset = int64(page-1) * int64(limit)
+		}
+		giving, err := svc.List(r.Context(), query)
 		if err != nil {
 			writeFinanceError(w, err)
 			return
@@ -747,7 +825,58 @@ func handleMyGiving(svc *finance.Service) http.HandlerFunc {
 		if giving == nil {
 			giving = []finance.Transaction{}
 		}
+		if paged {
+			total, countErr := svc.Count(r.Context(), query)
+			if countErr != nil {
+				writeFinanceError(w, countErr)
+				return
+			}
+			httpx.JSON(w, http.StatusOK, map[string]any{"data": giving, "total": total})
+			return
+		}
 		httpx.JSON(w, http.StatusOK, giving)
+	}
+}
+
+func handleMyGivingOptions(svc *finance.Service, members memberAccountResolver) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		scope, err := callerScope(r)
+		if err != nil {
+			httpx.Error(w, http.StatusUnauthorized, "Sign in to continue.")
+			return
+		}
+		memberID, err := memberIDForUser(r.Context(), members, scope.UserID)
+		if err != nil {
+			httpx.Error(w, http.StatusConflict, "Your account is not linked to a member profile yet.")
+			return
+		}
+		campaigns, err := svc.Campaigns(r.Context(), true)
+		if err != nil {
+			writeFinanceError(w, err)
+			return
+		}
+		pledges, err := svc.Pledges(r.Context(), memberID, false)
+		if err != nil {
+			writeFinanceError(w, err)
+			return
+		}
+		now := time.Now().UTC()
+		campaignViews := make([]campaignView, 0, len(campaigns))
+		for i := range campaigns {
+			if !now.Before(campaigns[i].StartDate) && !now.After(campaigns[i].EndDate) {
+				campaignViews = append(campaignViews, viewCampaign(&campaigns[i]))
+			}
+		}
+		activePledges := make([]finance.PledgeProgress, 0, len(pledges))
+		for i := range pledges {
+			if pledges[i].Pledge != nil && !pledges[i].Pledge.Cancelled && !pledges[i].Complete {
+				activePledges = append(activePledges, pledges[i])
+			}
+		}
+		httpx.JSON(w, http.StatusOK, map[string]any{
+			"campaigns": campaignViews,
+			"pledges":   activePledges,
+		})
 	}
 }
 
@@ -923,12 +1052,22 @@ func handleMakePledge(svc *finance.Service) http.HandlerFunc {
 	}
 }
 
-func handleListPledges(svc *finance.Service) http.HandlerFunc {
+func handleListPledges(svc *finance.Service, members memberAccountResolver) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		memberID := r.URL.Query().Get("memberId")
+		scope, scopeErr := callerScope(r)
+		ownMemberID := ""
+		canReadAll := permissionsFrom(r.Context()).Can(rbac.ResourceFinance, rbac.ActionRead)
+		if scopeErr == nil {
+			ownMemberID, _ = memberIDForUser(r.Context(), members, scope.UserID)
+			canReadAll = canReadAll || scope.Role == RoleSuperAdmin
+		}
+		if memberID == "" && !canReadAll {
+			memberID = ownMemberID
+		}
 		// No member named means "the whole congregation", which is a
 		// finance:read. Naming yourself is always allowed.
-		if !selfOr(r, memberID, rbac.ResourceFinance, rbac.ActionRead) {
+		if memberID == "" || (memberID != ownMemberID && !canReadAll) {
 			httpx.Error(w, http.StatusForbidden,
 				"You do not have access to the church's pledges.")
 			return
@@ -944,14 +1083,21 @@ func handleListPledges(svc *finance.Service) http.HandlerFunc {
 	}
 }
 
-func handleGetPledge(svc *finance.Service) http.HandlerFunc {
+func handleGetPledge(svc *finance.Service, members memberAccountResolver) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		out, err := svc.PledgeByID(r.Context(), chi.URLParam(r, "id"))
 		if err != nil {
 			writeFinanceError(w, err)
 			return
 		}
-		if !selfOr(r, out.Pledge.MemberID, rbac.ResourceFinance, rbac.ActionRead) {
+		scope, scopeErr := callerScope(r)
+		ownMemberID := ""
+		canReadAll := permissionsFrom(r.Context()).Can(rbac.ResourceFinance, rbac.ActionRead)
+		if scopeErr == nil {
+			ownMemberID, _ = memberIDForUser(r.Context(), members, scope.UserID)
+			canReadAll = canReadAll || scope.Role == RoleSuperAdmin
+		}
+		if out.Pledge == nil || (out.Pledge.MemberID != ownMemberID && !canReadAll) {
 			// 404 rather than 403: a distinct "forbidden" would confirm that a
 			// named member has made a pledge, which is most of what somebody
 			// asking after somebody else's giving wants to know.

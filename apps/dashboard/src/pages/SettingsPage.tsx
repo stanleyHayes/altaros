@@ -19,6 +19,12 @@ import {
 import {
   Save as SaveIcon,
   CloudUpload as UploadIcon,
+  ChurchRounded,
+  PaletteRounded,
+  TuneRounded,
+  NotificationsRounded,
+  SecurityRounded,
+  CreditCardRounded,
 } from "@mui/icons-material";
 import { useSnackbar } from "notistack";
 
@@ -41,22 +47,23 @@ const settingsSchema = z.object({
 type SettingsFormData = z.infer<typeof settingsSchema>;
 
 const mockSettings: SettingsFormData = {
-  churchName: "Grace Community Church",
-  slug: "grace-community",
-  address: "123 Faith Avenue",
-  city: "Springfield",
-  country: "United States",
-  phone: "+1 (555) 123-4567",
-  email: "info@gracecommunity.org",
-  website: "https://gracecommunity.org",
-  timezone: "America/New_York",
-  currency: "USD",
+  churchName: "Grace Chapel International",
+  slug: "grace-chapel",
+  address: "18 Boundary Road, East Legon",
+  city: "Accra",
+  country: "Ghana",
+  phone: "+233 30 255 0184",
+  email: "hello@gracechapel.org",
+  website: "https://gracechapel.org",
+  timezone: "Africa/Accra",
+  currency: "GHS",
   fiscalYearStart: "January",
   defaultLanguage: "en",
   allowPublicRegistration: true,
 };
 
 const timezones = [
+  "Africa/Accra",
   "America/New_York",
   "America/Chicago",
   "America/Denver",
@@ -99,6 +106,9 @@ const months = [
 
 const languages = [
   { value: "en", label: "English" },
+  { value: "tw", label: "Twi" },
+  { value: "ga", label: "Ga" },
+  { value: "ee", label: "Ewe" },
   { value: "fr", label: "French" },
   { value: "es", label: "Spanish" },
   { value: "pt", label: "Portuguese" },
@@ -118,9 +128,8 @@ export default function SettingsPage() {
     defaultValues: mockSettings,
   });
 
-  const onSubmit = async (data: SettingsFormData) => {
+  const onSubmit = async (_data: SettingsFormData) => {
     // TODO: Call API to save settings
-    console.log("Settings saved:", data);
     enqueueSnackbar("Settings saved successfully", { variant: "success" });
   };
 
@@ -131,25 +140,40 @@ export default function SettingsPage() {
           display: "flex",
           justifyContent: "space-between",
           alignItems: "center",
-          mb: 3,
+          mb: 4,
+          p: { xs: 3, md: 4.5 },
+          borderRadius: 4,
+          bgcolor: "primary.dark",
+          color: "white",
+          backgroundImage: "radial-gradient(circle at 88% 10%, rgba(109,213,196,.22), transparent 28%)",
         }}
       >
-        <Typography variant="h4" sx={{ fontWeight: 700 }}>
-          Settings
-        </Typography>
+        <Box><Typography variant="overline" sx={{ color: "primary.light" }}>Workspace control</Typography><Typography variant="h3" sx={{ mt: 1, color: "white" }}>Settings that fit your church.</Typography><Typography sx={{ mt: 1.2, color: "rgba(255,255,255,.58)", maxWidth: 600 }}>Identity, member access, communication preferences and plan details in one accountable place.</Typography></Box>
         <Button
           variant="contained"
           startIcon={<SaveIcon />}
           onClick={handleSubmit(onSubmit)}
           disabled={!isDirty}
+          sx={{ bgcolor: "primary.light", color: "primary.dark", "&:hover": { bgcolor: "#BFEDE5" } }}
         >
           Save Changes
         </Button>
       </Box>
 
+      <Box sx={{ display: "grid", gridTemplateColumns: { xs: "1fr", lg: "220px minmax(0,1fr)" }, gap: { xs: 2, lg: 3.5 }, alignItems: "start" }}>
+        <Box component="nav" aria-label="Settings sections" sx={{ position: { lg: "sticky" }, top: { lg: 104 }, p: 1, borderRadius: 1.25, bgcolor: "rgba(251,253,252,.72)", border: "1px solid", borderColor: "divider", display: { xs: "flex", lg: "block" }, overflowX: "auto" }}>
+          {[
+            { id: "profile", icon: ChurchRounded, label: "Church profile" },
+            { id: "branding", icon: PaletteRounded, label: "Branding" },
+            { id: "general", icon: TuneRounded, label: "Regional" },
+            { id: "notifications", icon: NotificationsRounded, label: "Notifications" },
+            { id: "security", icon: SecurityRounded, label: "Security" },
+            { id: "plan", icon: CreditCardRounded, label: "Plan & billing" },
+          ].map(({ id, icon: Icon, label }) => <Button key={id} href={`#${id}`} startIcon={<Icon />} fullWidth sx={{ justifyContent: "flex-start", color: "text.secondary", whiteSpace: "nowrap", mb: { lg: .4 } }}>{label}</Button>)}
+        </Box>
       <form onSubmit={handleSubmit(onSubmit)}>
         {/* Church Profile */}
-        <Card sx={{ mb: 3 }}>
+        <Card id="profile" sx={{ mb: 3, scrollMarginTop: 110 }}>
           <CardContent sx={{ p: 3 }}>
             <Typography variant="h6" sx={{ fontWeight: 600, mb: 3 }}>
               Church Profile
@@ -280,13 +304,13 @@ export default function SettingsPage() {
         </Card>
 
         {/* Logo & Banner Upload */}
-        <Card sx={{ mb: 3 }}>
+        <Card id="branding" sx={{ mb: 3, scrollMarginTop: 110 }}>
           <CardContent sx={{ p: 3 }}>
             <Typography variant="h6" sx={{ fontWeight: 600, mb: 3 }}>
               Branding
             </Typography>
-            <Grid container spacing={3}>
-              <Grid size={{ xs: 12, sm: 6 }}>
+            <Grid container spacing={3} sx={{ alignItems: "stretch" }}>
+              <Grid size={{ xs: 12, md: 6 }} sx={{ display: "flex", flexDirection: "column" }}>
                 <Typography variant="subtitle2" sx={{ mb: 1 }}>
                   Church Logo
                 </Typography>
@@ -294,10 +318,16 @@ export default function SettingsPage() {
                   sx={{
                     border: "2px dashed",
                     borderColor: "divider",
-                    borderRadius: 2,
-                    p: 3,
+                    borderRadius: 1.25,
+                    p: 2.5,
+                    minHeight: 210,
+                    flex: 1,
                     textAlign: "center",
                     cursor: "pointer",
+                    display: "flex",
+                    flexDirection: "column",
+                    justifyContent: "center",
+                    alignItems: "center",
                     "&:hover": { borderColor: "primary.main", bgcolor: "action.hover" },
                   }}
                 >
@@ -314,7 +344,7 @@ export default function SettingsPage() {
                   </Typography>
                 </Box>
               </Grid>
-              <Grid size={{ xs: 12, sm: 6 }}>
+              <Grid size={{ xs: 12, md: 6 }} sx={{ display: "flex", flexDirection: "column" }}>
                 <Typography variant="subtitle2" sx={{ mb: 1 }}>
                   Banner Image
                 </Typography>
@@ -322,11 +352,12 @@ export default function SettingsPage() {
                   sx={{
                     border: "2px dashed",
                     borderColor: "divider",
-                    borderRadius: 2,
-                    p: 3,
+                    borderRadius: 1.25,
+                    p: 2.5,
                     textAlign: "center",
                     cursor: "pointer",
-                    height: 120,
+                    minHeight: 210,
+                    flex: 1,
                     display: "flex",
                     flexDirection: "column",
                     justifyContent: "center",
@@ -347,7 +378,7 @@ export default function SettingsPage() {
         </Card>
 
         {/* General Settings */}
-        <Card sx={{ mb: 3 }}>
+        <Card id="general" sx={{ mb: 3, scrollMarginTop: 110 }}>
           <CardContent sx={{ p: 3 }}>
             <Typography variant="h6" sx={{ fontWeight: 600, mb: 3 }}>
               General Settings
@@ -465,24 +496,44 @@ export default function SettingsPage() {
           </CardContent>
         </Card>
 
+        <Card id="notifications" sx={{ mb: 3, scrollMarginTop: 110 }}>
+          <CardContent>
+            <Typography variant="overline" color="primary.main">Attention routing</Typography>
+            <Typography variant="h5" sx={{ mt: 1 }}>Notifications</Typography>
+            <Typography variant="body2" color="text.secondary" sx={{ mt: .8, mb: 2.5 }}>Choose which operational moments should interrupt church administrators.</Typography>
+            {[['Member care alerts', 'Follow-ups, welfare escalations and prayer assignments'], ['Finance activity', 'Completed gifts, failed charges and settlement updates'], ['Event operations', 'RSVP milestones, capacity warnings and check-in issues']].map(([title, copy], index) => <Box key={title} sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 2, py: 1.6, borderTop: index ? "1px solid" : 0, borderColor: "divider" }}><Box><Typography sx={{ fontWeight: 650 }}>{title}</Typography><Typography variant="caption" color="text.secondary">{copy}</Typography></Box><Switch defaultChecked={index !== 2} slotProps={{ input: { 'aria-label': title } }} /></Box>)}
+          </CardContent>
+        </Card>
+
+        <Card id="security" sx={{ mb: 3, scrollMarginTop: 110 }}>
+          <CardContent>
+            <Typography variant="overline" color="primary.main">Access posture</Typography>
+            <Typography variant="h5" sx={{ mt: 1 }}>Security & sessions</Typography>
+            <Box sx={{ mt: 2.5, display: "grid", gridTemplateColumns: { xs: "1fr", md: "1fr 1fr" }, gap: 1.5 }}>
+              <Box sx={{ p: 2, borderRadius: 1, bgcolor: "background.default" }}><Typography sx={{ fontWeight: 650 }}>Two-step verification</Typography><Typography variant="caption" color="text.secondary">Require a second proof for administrative accounts.</Typography><Box sx={{ mt: 1.5 }}><Button variant="outlined" size="small">Configure</Button></Box></Box>
+              <Box sx={{ p: 2, borderRadius: 1, bgcolor: "background.default" }}><Typography sx={{ fontWeight: 650 }}>Active sessions</Typography><Typography variant="caption" color="text.secondary">Review devices currently signed into this workspace.</Typography><Box sx={{ mt: 1.5 }}><Button variant="outlined" size="small">Review sessions</Button></Box></Box>
+            </Box>
+          </CardContent>
+        </Card>
+
         {/* Subscription Plan */}
-        <Card sx={{ mb: 3 }}>
+        <Card id="plan" sx={{ mb: 3, minWidth: 0, overflow: "hidden", scrollMarginTop: 110, bgcolor: "#0B2E2A", color: "white", borderColor: "transparent" }}>
           <CardContent sx={{ p: 3 }}>
             <Typography variant="h6" sx={{ fontWeight: 600, mb: 2 }}>
               Subscription Plan
             </Typography>
-            <Divider sx={{ mb: 2 }} />
-            <Box sx={{ display: "flex", alignItems: "center", gap: 2, mb: 2 }}>
+            <Divider sx={{ mb: 2, borderColor: "rgba(255,255,255,.18)" }} />
+            <Box sx={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 1.25, mb: 2 }}>
               <Typography variant="h5" sx={{ fontWeight: 700 }}>
                 Pro Plan
               </Typography>
-              <Chip label="Active" color="success" size="small" />
+              <Chip label="Active" color="success" size="small" sx={{ bgcolor: "#BFE8D2 !important", color: "#124C35 !important" }} />
             </Box>
-            <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+            <Typography variant="body2" sx={{ color: "rgba(255,255,255,.68)", mb: 2.5, maxWidth: 680, overflowWrap: "anywhere" }}>
               Includes up to 1,000 members, unlimited events, advanced analytics,
               and priority support.
             </Typography>
-            <Box sx={{ display: "flex", gap: 1 }}>
+            <Box sx={{ display: "flex", flexWrap: "wrap", gap: 1 }}>
               {["Free", "Basic", "Pro", "Enterprise"].map((plan) => (
                 <Chip
                   key={plan}
@@ -490,12 +541,25 @@ export default function SettingsPage() {
                   variant={plan === "Pro" ? "filled" : "outlined"}
                   color={plan === "Pro" ? "primary" : "default"}
                   size="small"
+                  sx={plan === "Pro"
+                    ? {
+                      bgcolor: "#6DD5C4 !important",
+                      color: "#0B2E2A !important",
+                      "& .MuiChip-label": { color: "#0B2E2A !important" },
+                    }
+                    : {
+                      borderColor: "rgba(225,241,237,.48) !important",
+                      color: "#E1EEEB !important",
+                      bgcolor: "transparent !important",
+                      "& .MuiChip-label": { color: "#E1EEEB !important", opacity: 1 },
+                    }}
                 />
               ))}
             </Box>
           </CardContent>
         </Card>
       </form>
+      </Box>
     </Box>
   );
 }

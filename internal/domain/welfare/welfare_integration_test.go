@@ -292,6 +292,78 @@ func TestASafeguardingCaseIsNeverRoutine(t *testing.T) {
 	}
 }
 
+func TestMemberHistoryReturnsOnlyOwnedRequestsWithoutPastoralNotes(t *testing.T) {
+	f := withKey(t)
+	owned, err := f.svc.Open(f.ctx, Input{
+		MemberID: "member_1", Category: CategoryCounseling,
+		Urgency: UrgencyElevated, Summary: "Private conversation",
+		Detail: "Please arrange a private conversation.", IsAnonymous: true,
+	})
+	if err != nil {
+		t.Fatalf("open owned case: %v", err)
+	}
+	if _, err := f.svc.AddNote(f.ctx, owned.ID.Hex(), "Pastoral note stays private."); err != nil {
+		t.Fatalf("add note: %v", err)
+	}
+	if _, err := f.svc.Open(f.ctx, Input{MemberID: "member_2", Summary: "Other member"}); err != nil {
+		t.Fatalf("open foreign case: %v", err)
+	}
+
+	history, err := f.svc.Mine(f.ctx, "member_1", 100)
+	if err != nil {
+		t.Fatalf("member history: %v", err)
+	}
+	if len(history) != 1 || history[0].ID != owned.ID {
+		t.Fatalf("member history crossed ownership: %+v", history)
+	}
+	if history[0].Detail != "Please arrange a private conversation." || !history[0].IsAnonymous {
+		t.Fatalf("member submission did not round trip: %+v", history[0])
+	}
+	if len(history[0].Notes) != 0 {
+		t.Fatalf("pastoral notes leaked into member history: %+v", history[0].Notes)
+	}
+}
+
+func TestMemberHistoryPagesRemainOwnedAndNotesFree(t *testing.T) {
+	f := withKey(t)
+	for i := 0; i < 2; i++ {
+		opened, err := f.svc.Open(f.ctx, Input{
+			MemberID: "member_1", Category: CategoryCounseling,
+			Summary: "Private request", Detail: "Private detail",
+		})
+		if err != nil {
+			t.Fatalf("open owned case %d: %v", i, err)
+		}
+		if _, err := f.svc.AddNote(f.ctx, opened.ID.Hex(), "Never expose this note."); err != nil {
+			t.Fatalf("add note %d: %v", i, err)
+		}
+	}
+	if _, err := f.svc.Open(f.ctx, Input{MemberID: "member_2", Summary: "Foreign"}); err != nil {
+		t.Fatalf("open foreign case: %v", err)
+	}
+
+	first, err := f.svc.MinePage(f.ctx, "member_1", 1, 0)
+	if err != nil {
+		t.Fatalf("first page: %v", err)
+	}
+	second, err := f.svc.MinePage(f.ctx, "member_1", 1, 1)
+	if err != nil {
+		t.Fatalf("second page: %v", err)
+	}
+	if len(first) != 1 || len(second) != 1 || first[0].ID == second[0].ID {
+		t.Fatalf("private pages did not reach distinct cases: first=%#v second=%#v", first, second)
+	}
+	for _, page := range [][]Case{first, second} {
+		if page[0].MemberID != "member_1" || len(page[0].Notes) != 0 {
+			t.Fatalf("paged history crossed ownership or exposed notes: %#v", page[0])
+		}
+	}
+	total, err := f.svc.MineCount(f.ctx, "member_1")
+	if err != nil || total != 2 {
+		t.Fatalf("MineCount = %d, %v; want 2", total, err)
+	}
+}
+
 func TestNotesRoundTripThroughEncryption(t *testing.T) {
 	f := withKey(t)
 	opened, err := f.svc.Open(f.ctx, Input{MemberID: "m", Summary: disclosure})

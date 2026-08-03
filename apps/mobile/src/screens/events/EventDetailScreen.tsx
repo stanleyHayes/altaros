@@ -25,10 +25,13 @@ import { reconcileToggleCount } from '../../services/list-reconciliation';
 import {
   eventActionCompletionBelongsToContext,
   eventDetailBelongsToContext,
+  eventRsvpAction,
+  eventRsvpFailure,
   type EventDetailContext,
 } from './event-screen-state';
 import { Ionicons } from '@expo/vector-icons';
 import { StatePanel } from '../../components/common/StatePanel';
+import { useAnimatedRouteTop } from '../../hooks/useAnimatedRouteTop';
 
 type EventDetailRoute = RouteProp<RootStackParamList, 'EventDetail'>;
 
@@ -37,12 +40,14 @@ export function EventDetailScreen() {
   const { eventId } = route.params;
   const { user } = useAuth();
   const offline = useKnownOffline();
+  const scrollRef = useRef<ScrollView>(null);
+  useAnimatedRouteTop(scrollRef);
 
   const [event, setEvent] = useState<ChurchEvent | null>(null);
   const [eventOwner, setEventOwner] = useState<EventDetailContext | null>(() => ({
     eventId,
     churchId: user?.churchId,
-    memberId: user?.id,
+    memberId: user?.memberId,
   }));
   const [isLoading, setIsLoading] = useState(true);
   const [isUpdating, setIsUpdating] = useState(false);
@@ -52,14 +57,14 @@ export function EventDetailScreen() {
   const mapLock = useRef(createSubmissionLock());
   const loadGate = useRef(createLatestRequestGate());
   const mountedRef = useRef(true);
-  const activeContextRef = useRef<EventDetailContext>({ eventId, churchId: user?.churchId, memberId: user?.id });
+  const activeContextRef = useRef<EventDetailContext>({ eventId, churchId: user?.churchId, memberId: user?.memberId });
   const offlineRef = useRef(offline);
-  activeContextRef.current = { eventId, churchId: user?.churchId, memberId: user?.id };
+  activeContextRef.current = { eventId, churchId: user?.churchId, memberId: user?.memberId };
   offlineRef.current = offline;
 
   const loadEvent = useCallback(async () => {
     const request = loadGate.current.begin();
-    const startedContext = { eventId, churchId: user?.churchId, memberId: user?.id };
+    const startedContext = { eventId, churchId: user?.churchId, memberId: user?.memberId };
     setEventOwner(startedContext);
     setEvent(null);
     setIsUpdating(false);
@@ -72,8 +77,8 @@ export function EventDetailScreen() {
     setIsLoading(true);
     setLoadError(null);
     try {
-      if (!user?.churchId || !user.id) throw new Error('Member identity is incomplete');
-      const eventResult = await eventService.getEvent(eventId, user.churchId, user.id);
+      if (!user?.churchId || !user.memberId) throw new Error('Member identity is incomplete');
+      const eventResult = await eventService.getEvent(eventId, user.churchId, user.memberId);
       if (loadGate.current.isLatest(request)) {
         setEventOwner(startedContext);
         setEvent(eventResult);
@@ -86,7 +91,7 @@ export function EventDetailScreen() {
     } finally {
       if (loadGate.current.isLatest(request)) setIsLoading(false);
     }
-  }, [eventId, user?.churchId, user?.id]);
+  }, [eventId, user?.churchId, user?.memberId]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -100,8 +105,8 @@ export function EventDetailScreen() {
 
   const handleRsvp = async () => {
     const actionLock = rsvpLock.current;
-    if (offline || !event || !event.rsvpStatusKnown || !user?.id || !user.churchId || !actionLock.acquire()) return;
-    const startedContext = { eventId: event.id, churchId: user.churchId, memberId: user.id };
+    if (offline || !event || !event.rsvpStatusKnown || !user?.memberId || !user.churchId || !actionLock.acquire()) return;
+    const startedContext = { eventId: event.id, churchId: user.churchId, memberId: user.memberId };
     if (!eventDetailBelongsToContext(eventOwner, startedContext)
       || !eventDetailBelongsToContext(activeContextRef.current, startedContext)) {
       actionLock.release();
@@ -110,8 +115,8 @@ export function EventDetailScreen() {
     try {
       setIsUpdating(true);
       const response = event.isRsvped
-        ? await eventService.cancelRsvp(event.id, user.id)
-        : await eventService.rsvp(event.id, user.id);
+        ? await eventService.cancelRsvp(event.id, user.memberId)
+        : await eventService.rsvp(event.id, user.memberId);
       if (!eventActionCompletionBelongsToContext(
         mountedRef.current,
         activeContextRef.current,
@@ -132,13 +137,19 @@ export function EventDetailScreen() {
         };
       });
       Alert.alert(response.status === 'confirmed' ? 'You are going' : 'RSVP cancelled', response.status === 'confirmed' ? 'This event is now on your list.' : 'You are no longer marked as attending.');
-    } catch {
+    } catch (cause) {
       if (eventActionCompletionBelongsToContext(
         mountedRef.current,
         activeContextRef.current,
         startedContext,
       )) {
-        Alert.alert('RSVP not updated', 'Check your connection and try again.');
+        const failure = eventRsvpFailure(cause);
+        if (failure.outcomeUnknown) {
+          setEvent((current) => current && current.id === event.id
+            ? { ...current, rsvpStatusKnown: false }
+            : current);
+        }
+        Alert.alert(failure.outcomeUnknown ? 'RSVP status unknown' : 'RSVP not updated', failure.message);
       }
     } finally {
       actionLock.release();
@@ -151,8 +162,8 @@ export function EventDetailScreen() {
   };
 
   const openMaps = async () => {
-    if (!event || !user?.churchId || !user.id) return;
-    const startedContext = { eventId: event.id, churchId: user.churchId, memberId: user.id };
+    if (!event || !user?.churchId || !user.memberId) return;
+    const startedContext = { eventId: event.id, churchId: user.churchId, memberId: user.memberId };
     if (!eventDetailBelongsToContext(eventOwner, startedContext)
       || !eventDetailBelongsToContext(activeContextRef.current, startedContext)) return;
     const action = eventMapAction(event.location, offline, isOpeningMap);
@@ -227,10 +238,18 @@ export function EventDetailScreen() {
   const start = formatDateTime(event.startDate);
   const end = formatDateTime(event.endDate);
   const availability = eventRsvpAvailability(event);
+  const rsvpAction = eventRsvpAction(
+    availability,
+    event.isRsvped,
+    offline,
+    isUpdating,
+    false,
+    true,
+  );
   const mapAction = eventMapAction(event.location, offline, isOpeningMap);
 
   return (
-    <ScrollView style={styles.container} showsVerticalScrollIndicator={false}>
+    <ScrollView ref={scrollRef} style={styles.container} showsVerticalScrollIndicator={false}>
       {/* Header */}
       <View style={styles.header}>
         <View style={styles.headerOrb} accessible={false} />
@@ -302,17 +321,30 @@ export function EventDetailScreen() {
       {/* RSVP Button */}
       <View style={styles.rsvpSection}>
         <Button
-          title={availability.allowed && !event.isRsvped ? 'RSVP to This Event' : availability.label}
+          title={rsvpAction.label}
           variant={event.isRsvped ? 'outline' : 'primary'}
           onPress={() => void handleRsvp()}
           fullWidth
           size="lg"
           loading={isUpdating}
-          disabled={offline || !availability.allowed}
-          accessibilityHint={offline ? 'Reconnect to update your RSVP.' : availability.reason}
+          disabled={rsvpAction.disabled}
+          accessibilityHint={rsvpAction.hint}
         />
         {offline ? <Text style={styles.rsvpReason}>Reconnect to update your RSVP.</Text>
           : availability.reason ? <Text style={styles.rsvpReason}>{availability.reason}</Text> : null}
+        {event.rsvpStatusKnown === false ? (
+          <TouchableOpacity
+            style={styles.rsvpRefreshAction}
+            onPress={() => void loadEvent()}
+            disabled={offline || isLoading}
+            accessibilityRole="button"
+            accessibilityLabel="Refresh RSVP status"
+            accessibilityHint={offline ? 'Reconnect to refresh your attendance status.' : 'Loads your latest attendance status before another RSVP change.'}
+            accessibilityState={{ disabled: offline || isLoading, busy: isLoading }}
+          >
+            <Text style={[styles.rsvpRefresh, offline && styles.actionDisabled]}>Refresh RSVP status</Text>
+          </TouchableOpacity>
+        ) : null}
       </View>
     </ScrollView>
   );
@@ -435,4 +467,6 @@ const styles = StyleSheet.create({
     paddingBottom: spacing['3xl'],
   },
   rsvpReason: { color: colors.muted, fontSize: typography.sizes.sm, textAlign: 'center', marginTop: spacing.sm },
+  rsvpRefreshAction: { minHeight: 44, justifyContent: 'center', marginTop: spacing.sm },
+  rsvpRefresh: { color: colors.primary, fontFamily: typography.families.semibold, fontSize: typography.sizes.sm, textAlign: 'center' },
 });

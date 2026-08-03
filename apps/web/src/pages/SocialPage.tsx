@@ -1,12 +1,12 @@
 import { useState } from "react";
 import Box from "@mui/material/Box";
-import Typography from "@mui/material/Typography";
 import Fab from "@mui/material/Fab";
 import Collapse from "@mui/material/Collapse";
 import AddRoundedIcon from "@mui/icons-material/AddRounded";
 import PostCard from "@/components/social/PostCard";
 import CommentSection from "@/components/social/CommentSection";
 import CreatePostDialog from "@/components/social/CreatePostDialog";
+import PageIntro from "@/components/ui/PageIntro";
 
 interface Comment {
   id: string;
@@ -133,9 +133,7 @@ export default function SocialPage() {
 
   return (
     <Box sx={{ py: 2, position: "relative", minHeight: "80vh" }}>
-      <Typography variant="h5" sx={{ fontWeight: 700, mb: 2 }}>
-        Community
-      </Typography>
+      <PageIntro eyebrow="Church community" title="Stay connected" copy="Encouragement, testimony and practical updates from people in your church." />
 
       <Box sx={{ display: "flex", flexDirection: "column", gap: 2 }}>
         {mockPosts.map((post) => (

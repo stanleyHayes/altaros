@@ -8,17 +8,18 @@ import {
   Alert,
   RefreshControl,
   AppState,
+  Platform,
 } from 'react-native';
 import { Input } from '../../components/common/Input';
 import { Button } from '../../components/common/Button';
 import { Card } from '../../components/common/Card';
 import { colors, typography, spacing, borderRadius } from '../../theme';
-import welfareService, { MAX_WELFARE_DESCRIPTION_LENGTH, type WelfareCategory, type WelfareRequest, type WelfareStatus, type WelfareUrgency } from '../../services/welfare.service';
+import welfareService, { MAX_WELFARE_DESCRIPTION_LENGTH, WELFARE_HISTORY_PAGE_SIZE, type WelfareCategory, type WelfareRequest, type WelfareStatus, type WelfareUrgency } from '../../services/welfare.service';
 import { createSubmissionLock } from '../../services/submission-lock';
 import { useAuth } from '../../hooks/useAuth';
 import { useKnownOffline } from '../../hooks/useKnownOffline';
 import { createLatestRequestGate } from '../../services/latest-request';
-import { insertUniqueById } from '../../services/list-reconciliation';
+import { appendUniquePageById, insertUniqueById } from '../../services/list-reconciliation';
 import { connectivityErrorMessage } from '../../services/connectivity';
 import { ScreenSkeleton } from '../../components/common/ScreenSkeleton';
 import {
@@ -26,9 +27,17 @@ import {
   expireEmergencyConfirmation,
   welfareMutationCompletionBelongsToIdentity,
   welfareStateBelongsToIdentity,
+  welfareMutationFailureAlert,
+  welfareChoiceAccessibility,
+  welfareFormActionState,
+  welfareRefreshOwnsReconciliation,
+  welfareRequestActionState,
   type WelfareOwner,
 } from './welfare-state';
 import { Ionicons } from '@expo/vector-icons';
+import { useAnimatedRouteTop } from '../../hooks/useAnimatedRouteTop';
+import { paginationActionState } from '../../components/common/pagination-action';
+import { formKeyboardProps } from '../../components/common/form-keyboard';
 
 const categories: { value: WelfareCategory; label: string }[] = [
   { value: 'medical', label: 'Medical' },
@@ -65,58 +74,93 @@ const statusColors: Record<WelfareStatus, string> = {
 export function WelfareScreen() {
   const { user } = useAuth();
   const offline = useKnownOffline();
+  const scrollRef = useRef<ScrollView>(null);
+  useAnimatedRouteTop(scrollRef);
   const [category, setCategory] = useState<WelfareCategory>('medical');
   const [description, setDescription] = useState('');
   const [urgency, setUrgency] = useState<WelfareUrgency>('medium');
   const [isAnonymous, setIsAnonymous] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [emergencySubmitting, setEmergencySubmitting] = useState(false);
+  const [requestOutcomeUnknown, setRequestOutcomeUnknown] = useState(false);
   const [requests, setRequests] = useState<WelfareRequest[]>([]);
   const [stateOwner, setStateOwner] = useState<WelfareOwner | null>(() => ({
     churchId: user?.churchId,
-    memberId: user?.id,
+    memberId: user?.memberId,
   }));
   const [loadError, setLoadError] = useState('');
   const [loadingRequests, setLoadingRequests] = useState(true);
   const [refreshingRequests, setRefreshingRequests] = useState(false);
-  const submissionLock = useRef(createSubmissionLock());
-  const emergencyLock = useRef(createSubmissionLock());
+  const [loadingMoreRequests, setLoadingMoreRequests] = useState(false);
+  const [loadedPage, setLoadedPage] = useState(0);
+  const [totalRequests, setTotalRequests] = useState(0);
+  const requestActionLock = useRef(createSubmissionLock());
   const emergencyConfirmationGate = useRef(createEmergencyConfirmationGate());
   const loadGate = useRef(createLatestRequestGate());
   const mountedRef = useRef(true);
-  const activeIdentityRef = useRef<WelfareOwner>({ churchId: user?.churchId, memberId: user?.id });
+  const activeIdentityRef = useRef<WelfareOwner>({ churchId: user?.churchId, memberId: user?.memberId });
   const stateOwnerRef = useRef(stateOwner);
-  activeIdentityRef.current = { churchId: user?.churchId, memberId: user?.id };
+  const requestOutcomeUnknownRef = useRef(requestOutcomeUnknown);
+  const reconciliationRevisionRef = useRef(0);
+  activeIdentityRef.current = { churchId: user?.churchId, memberId: user?.memberId };
   stateOwnerRef.current = stateOwner;
+  requestOutcomeUnknownRef.current = requestOutcomeUnknown;
 
-  const loadRequests = useCallback(async (refresh = false) => {
+  const loadRequests = useCallback(async (refresh = false, page = 1) => {
     const request = loadGate.current.begin();
-    const startedOwner = { churchId: user?.churchId, memberId: user?.id };
+    const startedReconciliationRevision = reconciliationRevisionRef.current;
+    const startedOwner = { churchId: user?.churchId, memberId: user?.memberId };
     if (!welfareStateBelongsToIdentity(stateOwnerRef.current, startedOwner)) {
       stateOwnerRef.current = startedOwner;
       setStateOwner(startedOwner);
       setRequests([]);
+      setLoadedPage(0);
+      setTotalRequests(0);
       setCategory('medical');
       setDescription('');
       setUrgency('medium');
       setIsAnonymous(false);
       setSubmitting(false);
       setEmergencySubmitting(false);
-      submissionLock.current = createSubmissionLock();
-      emergencyLock.current = createSubmissionLock();
+      setRequestOutcomeUnknown(false);
+      requestOutcomeUnknownRef.current = false;
+      reconciliationRevisionRef.current += 1;
+      requestActionLock.current = createSubmissionLock();
       emergencyConfirmationGate.current.invalidate();
     }
     setLoadError('');
-    if (refresh) setRefreshingRequests(true);
+    if (page > 1) setLoadingMoreRequests(true);
+    else if (refresh) setRefreshingRequests(true);
     else setLoadingRequests(true);
     try {
-      if (!user?.churchId || !user.id) throw new Error('Member identity is incomplete');
-      const result = await welfareService.listMine(user.churchId, user.id);
+      if (!user?.churchId || !user.memberId) throw new Error('Member identity is incomplete');
+      const result = await welfareService.listMinePage(
+        user.churchId,
+        user.memberId,
+        page,
+        WELFARE_HISTORY_PAGE_SIZE,
+      );
       if (loadGate.current.isLatest(request)) {
-        setRequests(result);
-        const loadedOwner = { churchId: user.churchId, memberId: user.id };
+        setRequests((current) => page === 1
+          ? result.requests
+          : appendUniquePageById(current, result.requests));
+        setLoadedPage(page);
+        setTotalRequests(result.total);
+        const loadedOwner = { churchId: user.churchId, memberId: user.memberId };
         stateOwnerRef.current = loadedOwner;
         setStateOwner(loadedOwner);
+        if (page === 1 && welfareRefreshOwnsReconciliation(
+          startedReconciliationRevision,
+          reconciliationRevisionRef.current,
+        )) {
+          if (requestOutcomeUnknownRef.current) {
+            setDescription('');
+            setUrgency('medium');
+            setIsAnonymous(false);
+          }
+          setRequestOutcomeUnknown(false);
+          requestOutcomeUnknownRef.current = false;
+        }
       }
     } catch (cause) {
       if (loadGate.current.isLatest(request)) {
@@ -126,9 +170,10 @@ export function WelfareScreen() {
       if (loadGate.current.isLatest(request)) {
         setLoadingRequests(false);
         setRefreshingRequests(false);
+        setLoadingMoreRequests(false);
       }
     }
-  }, [user?.churchId, user?.id]);
+  }, [user?.churchId, user?.memberId]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -146,14 +191,14 @@ export function WelfareScreen() {
       if (nextState === 'active') return;
       expireEmergencyConfirmation(
         confirmationGate,
-        () => emergencyLock.current.release(),
+        () => requestActionLock.current.release(),
       );
     });
     return () => {
       subscription.remove();
       expireEmergencyConfirmation(
         confirmationGate,
-        () => emergencyLock.current.release(),
+        () => requestActionLock.current.release(),
       );
     };
   }, []);
@@ -173,12 +218,12 @@ export function WelfareScreen() {
       return;
     }
     const startedChurchId = user?.churchId;
-    const startedMemberId = user?.id;
+    const startedMemberId = user?.memberId;
     if (!startedChurchId || !startedMemberId) {
       Alert.alert('Request not sent', 'Your member session is incomplete. Sign in again and retry.');
       return;
     }
-    const actionLock = submissionLock.current;
+    const actionLock = requestActionLock.current;
     if (!actionLock.acquire()) return;
 
     setSubmitting(true);
@@ -190,6 +235,7 @@ export function WelfareScreen() {
       );
       if (!ownsActiveIdentity(startedChurchId, startedMemberId)) return;
       setRequests((current) => insertUniqueById(current, created, 'start'));
+      setTotalRequests((current) => current + 1);
       Alert.alert(
         'Request sent',
         'Your request has been sent privately to the pastoral team. Someone will reach out to you.',
@@ -197,10 +243,17 @@ export function WelfareScreen() {
       setDescription('');
       setUrgency('medium');
       setIsAnonymous(false);
-    } catch {
+      void loadRequests(true);
+    } catch (error) {
       if (startedChurchId && startedMemberId
         && ownsActiveIdentity(startedChurchId, startedMemberId)) {
-        Alert.alert('Request not sent', 'Check your connection and try again.');
+        const copy = welfareMutationFailureAlert('request', error);
+        if (copy.outcomeUnknown) {
+          setRequestOutcomeUnknown(true);
+          requestOutcomeUnknownRef.current = true;
+          reconciliationRevisionRef.current += 1;
+        }
+        Alert.alert(copy.title, copy.message);
       }
     } finally {
       actionLock.release();
@@ -226,11 +279,18 @@ export function WelfareScreen() {
         startedMemberId,
       );
       if (ownsActiveIdentity(startedChurchId, startedMemberId)) {
-        Alert.alert('Alert sent', 'The pastoral team has been notified. If you are in immediate danger, contact local emergency services now.');
+        Alert.alert('Urgent request recorded', 'Your request is marked critical in the private pastoral queue. If you are in immediate danger, contact local emergency services now.');
+        void loadRequests(true);
       }
-    } catch {
+    } catch (error) {
       if (ownsActiveIdentity(startedChurchId, startedMemberId)) {
-        Alert.alert('Alert not sent', 'Contact local emergency services now if you are in immediate danger.');
+        const copy = welfareMutationFailureAlert('emergency', error);
+        if (copy.outcomeUnknown) {
+          setRequestOutcomeUnknown(true);
+          requestOutcomeUnknownRef.current = true;
+          reconciliationRevisionRef.current += 1;
+        }
+        Alert.alert(copy.title, copy.message);
       }
     } finally {
       actionLock.release();
@@ -240,17 +300,17 @@ export function WelfareScreen() {
 
   const handleEmergency = () => {
     const startedChurchId = user?.churchId;
-    const startedMemberId = user?.id;
+    const startedMemberId = user?.memberId;
     if (!startedChurchId || !startedMemberId
       || !ownsActiveIdentity(startedChurchId, startedMemberId)) return;
     const emergencyDescription = description.trim() || undefined;
-    const actionLock = emergencyLock.current;
+    const actionLock = requestActionLock.current;
     if (!actionLock.acquire()) return;
     const confirmationToken = emergencyConfirmationGate.current.begin();
     let alertStarted = false;
     Alert.alert(
       'Send emergency alert?',
-      'This sends an internet-dependent alert to your pastoral team. It does not replace emergency services.',
+      'This records a critical request in your church’s private pastoral queue. It does not replace emergency services.',
       [
         {
           text: 'Cancel',
@@ -288,13 +348,29 @@ export function WelfareScreen() {
   };
 
   const ownsState = welfareStateBelongsToIdentity(stateOwner, activeIdentityRef.current);
+  const hasOlderRequests = requests.length < totalRequests;
+  const paginationAction = paginationActionState('older requests', {
+    offline,
+    loading: loadingMoreRequests,
+    refreshing: false,
+    requiresRefresh: Boolean(loadError),
+  });
+  const formActionState = welfareFormActionState(
+    offline, submitting, emergencySubmitting, requestOutcomeUnknown,
+  );
+  const requestAction = welfareRequestActionState(
+    offline,
+    submitting || emergencySubmitting || (requestOutcomeUnknown && refreshingRequests),
+    requestOutcomeUnknown,
+  );
   if (!ownsState) return <ScreenSkeleton cards={4} showHero />;
 
   return (
     <ScrollView
+      ref={scrollRef}
       style={styles.container}
       contentContainerStyle={styles.content}
-      keyboardShouldPersistTaps="handled"
+      {...formKeyboardProps(Platform.OS)}
       refreshControl={(
         <RefreshControl
           refreshing={refreshingRequests}
@@ -313,17 +389,21 @@ export function WelfareScreen() {
             <Text style={styles.emergencyTitle}>Need urgent help?</Text>
           </View>
         </View>
-        <Text style={styles.emergencyBody}>Alert your church&apos;s pastoral team over the internet. If you are in immediate danger, contact local emergency services first.</Text>
+        <Text style={styles.emergencyBody}>Record a critical request in your church&apos;s private pastoral queue. If you are in immediate danger, contact local emergency services first.</Text>
         <TouchableOpacity
-          style={[styles.emergencyButton, (offline || emergencySubmitting) && styles.actionDisabled]}
+          style={[styles.emergencyButton, formActionState.emergencyDisabled && styles.actionDisabled]}
           onPress={handleEmergency}
-          disabled={offline || emergencySubmitting}
+          disabled={formActionState.emergencyDisabled}
           accessibilityRole="button"
-          accessibilityLabel="Send emergency alert"
-          accessibilityHint={offline ? 'Reconnect to send this internet-dependent alert. Contact local emergency services if you are in danger.' : undefined}
-          accessibilityState={{ disabled: offline || emergencySubmitting, busy: emergencySubmitting }}
+          accessibilityLabel="Record urgent pastoral request"
+          accessibilityHint={offline
+            ? 'Reconnect to send this internet-dependent alert. Contact local emergency services if you are in danger.'
+            : requestOutcomeUnknown
+              ? 'Refresh your care history before recording another urgent request.'
+              : submitting ? 'Wait while your private care request is being sent.' : undefined}
+          accessibilityState={{ disabled: formActionState.emergencyDisabled, busy: emergencySubmitting }}
         >
-          <Text style={styles.emergencyButtonText}>{emergencySubmitting ? 'Sending alert…' : 'Send Emergency Alert'}</Text>
+          <Text style={styles.emergencyButtonText}>{emergencySubmitting ? 'Recording request…' : 'Record Urgent Request'}</Text>
         </TouchableOpacity>
       </Card>
 
@@ -332,16 +412,17 @@ export function WelfareScreen() {
       <Text style={styles.sectionTitle}>Tell the pastoral team what you need.</Text>
       <Card style={styles.formCard}>
         <Text style={styles.label}>Category</Text>
-        <View style={styles.chipRow}>
+        <View style={styles.chipRow} accessibilityRole="radiogroup" accessibilityLabel="Welfare category">
           {categories.map((item) => {
             const selected = item.value === category;
             return (
               <TouchableOpacity
                 key={item.value}
                 onPress={() => setCategory(item.value)}
-                style={[styles.chip, selected && styles.chipSelected]}
-                accessibilityRole="button"
-                accessibilityState={{ selected }}
+                disabled={formActionState.controlsDisabled}
+                style={[styles.chip, selected && styles.chipSelected, formActionState.controlsDisabled && styles.actionDisabled]}
+                accessibilityRole="radio"
+                accessibilityState={welfareChoiceAccessibility(selected, formActionState.controlsDisabled)}
                 accessibilityLabel={`${item.label} welfare category`}
               >
                 <Text style={[styles.chipText, selected && styles.chipTextSelected]}>
@@ -360,6 +441,8 @@ export function WelfareScreen() {
           multiline
           numberOfLines={4}
           maxLength={MAX_WELFARE_DESCRIPTION_LENGTH}
+          editable={!formActionState.controlsDisabled}
+          style={formActionState.controlsDisabled ? styles.inputDisabled : undefined}
         />
         <Text
           style={styles.characterCount}
@@ -369,16 +452,17 @@ export function WelfareScreen() {
         </Text>
 
         <Text style={styles.label}>Urgency</Text>
-        <View style={styles.chipRow}>
+        <View style={styles.chipRow} accessibilityRole="radiogroup" accessibilityLabel="Welfare urgency">
           {urgencies.map((item) => {
             const selected = item.value === urgency;
             return (
               <TouchableOpacity
                 key={item.value}
                 onPress={() => setUrgency(item.value)}
-                style={[styles.chip, selected && styles.chipSelected]}
-                accessibilityRole="button"
-                accessibilityState={{ selected }}
+                disabled={formActionState.controlsDisabled}
+                style={[styles.chip, selected && styles.chipSelected, formActionState.controlsDisabled && styles.actionDisabled]}
+                accessibilityRole="radio"
+                accessibilityState={welfareChoiceAccessibility(selected, formActionState.controlsDisabled)}
                 accessibilityLabel={`${item.label} welfare urgency`}
               >
                 <Text style={[styles.chipText, selected && styles.chipTextSelected]}>{item.label}</Text>
@@ -388,10 +472,11 @@ export function WelfareScreen() {
         </View>
 
         <TouchableOpacity
-          style={styles.anonymousToggle}
+          style={[styles.anonymousToggle, formActionState.controlsDisabled && styles.actionDisabled]}
           onPress={() => setIsAnonymous((current) => !current)}
+          disabled={formActionState.controlsDisabled}
           accessibilityRole="checkbox"
-          accessibilityState={{ checked: isAnonymous }}
+          accessibilityState={{ checked: isAnonymous, disabled: formActionState.controlsDisabled }}
           accessibilityLabel="Hide my name from the shared request"
         >
           <View style={[styles.checkbox, isAnonymous && styles.checkboxChecked]}>
@@ -405,11 +490,12 @@ export function WelfareScreen() {
         </Text>
 
         <Button
-          title="Submit Request"
-          onPress={handleSubmit}
-          loading={submitting}
-          disabled={offline || submitting}
-          accessibilityHint={offline ? 'Reconnect to send this private request.' : undefined}
+          title={requestAction.label}
+          onPress={requestAction.mode === 'refresh' ? () => void loadRequests(true) : handleSubmit}
+          loading={submitting || (requestOutcomeUnknown && refreshingRequests)}
+          disabled={requestAction.disabled}
+          accessibilityHint={requestAction.hint ?? (emergencySubmitting
+            ? 'Wait while your urgent request is being recorded.' : undefined)}
         />
       </Card>
 
@@ -464,6 +550,26 @@ export function WelfareScreen() {
         ))
       )}
 
+      {!loadingRequests && requests.length > 0 ? (
+        <View style={styles.historyFooter}>
+          {hasOlderRequests ? (
+            <TouchableOpacity
+              style={[styles.loadMore, paginationAction.disabled && styles.actionDisabled]}
+              onPress={() => void loadRequests(false, loadedPage + 1)}
+              disabled={paginationAction.disabled}
+              accessibilityRole="button"
+              accessibilityLabel={paginationAction.label}
+              accessibilityHint={paginationAction.hint}
+              accessibilityState={{ disabled: paginationAction.disabled, busy: paginationAction.busy }}
+            >
+              <Text style={styles.loadMoreText}>{paginationAction.label}</Text>
+            </TouchableOpacity>
+          ) : (
+            <Text style={styles.historyEnd}>You’ve reached the beginning of your care history.</Text>
+          )}
+        </View>
+      ) : null}
+
       <View style={styles.footerSpace} />
     </ScrollView>
   );
@@ -512,6 +618,7 @@ const styles = StyleSheet.create({
     fontFamily: typography.families.semibold,
   },
   actionDisabled: { opacity: 0.5 },
+  inputDisabled: { opacity: 0.6 },
   sectionEyebrow: { color: colors.primary, fontFamily: typography.families.bold, fontSize: typography.sizes.xs, letterSpacing: 1.35, marginBottom: spacing.xs },
   sectionTitle: {
     fontSize: typography.sizes.xl,
@@ -620,6 +727,10 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   loadError: { color: colors.error, fontSize: typography.sizes.md, marginBottom: spacing.md },
+  historyFooter: { alignItems: 'center', paddingTop: spacing.sm, paddingBottom: spacing.lg },
+  loadMore: { minHeight: 48, minWidth: 210, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: colors.primary, borderRadius: borderRadius.full, paddingHorizontal: spacing.xl },
+  loadMoreText: { color: colors.primaryDark, fontFamily: typography.families.semibold, fontSize: typography.sizes.sm },
+  historyEnd: { color: colors.muted, fontFamily: typography.families.medium, fontSize: typography.sizes.sm, textAlign: 'center' },
   retry: { color: colors.primary, fontFamily: typography.families.semibold, fontSize: typography.sizes.md, marginBottom: spacing.md },
   textAction: { minHeight: 44, justifyContent: 'center', alignSelf: 'flex-start' },
   footerSpace: {

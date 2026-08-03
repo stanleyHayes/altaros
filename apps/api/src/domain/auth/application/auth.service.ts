@@ -73,12 +73,16 @@ export class AuthService implements IAuthService {
       name: data.churchName,
       slug: baseSlug,
       address: "",
-      city: "",
       country: "Ghana",
       phone: data.phone,
       email: data.email,
       timezone: "Africa/Accra",
       currency: "GHS",
+      city: data.churchCity ?? "",
+      requestedPlan: data.requestedPlan ?? "free",
+      denomination: data.churchDenomination,
+      averageWeeklyAttendance: data.averageWeeklyAttendance,
+      ministryPriorities: data.ministryPriorities,
     });
 
     return church.id;

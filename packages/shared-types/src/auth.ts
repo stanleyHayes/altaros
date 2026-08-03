@@ -13,6 +13,8 @@ export enum LoginMethod {
 
 export interface User {
   id: string;
+  /** Linked congregation-roster identity used by member-owned domains. */
+  memberId?: string;
   churchId: string;
   email: string;
   phone: string;
@@ -49,6 +51,13 @@ export interface RegisterRequest {
    * has no id yet.
    */
   churchName?: string;
+  /** Optional founding profile captured during church onboarding. */
+  churchCity?: string;
+  churchDenomination?: string;
+  averageWeeklyAttendance?: number;
+  ministryPriorities?: string[];
+  /** Package intent. Paid access is activated separately after billing. */
+  requestedPlan?: "free" | "basic" | "pro" | "enterprise";
 }
 
 export interface OtpVerifyRequest {

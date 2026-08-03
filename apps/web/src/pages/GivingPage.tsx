@@ -1,11 +1,11 @@
 import { useState } from "react";
 import Box from "@mui/material/Box";
-import Typography from "@mui/material/Typography";
 import Tabs from "@mui/material/Tabs";
 import Tab from "@mui/material/Tab";
 import GivingForm from "@/components/giving/GivingForm";
 import GivingHistoryList from "@/components/giving/GivingHistoryList";
 import CampaignCard from "@/components/giving/CampaignCard";
+import PageIntro from "@/components/ui/PageIntro";
 
 // TODO: Replace with actual API data
 const mockHistory = [
@@ -71,9 +71,7 @@ export default function GivingPage() {
 
   return (
     <Box sx={{ py: 2 }}>
-      <Typography variant="h5" sx={{ fontWeight: 700, mb: 2 }}>
-        Giving
-      </Typography>
+      <PageIntro eyebrow="Stewardship" title="Giving" copy="Give securely, follow your history and support the work your church is doing." />
 
       <Tabs
         value={tab}

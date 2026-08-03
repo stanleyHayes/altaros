@@ -7,6 +7,17 @@ export function insertUniqueById<T extends { id: string }>(
   return position === 'start' ? [item, ...items] : [...items, item];
 }
 
+export function appendUniquePageById<T extends { id: string }>(items: T[], page: T[]): T[] {
+  if (page.length === 0) return items;
+  const seen = new Set(items.map((item) => item.id));
+  const additions = page.filter((item) => {
+    if (seen.has(item.id)) return false;
+    seen.add(item.id);
+    return true;
+  });
+  return additions.length === 0 ? items : [...items, ...additions];
+}
+
 export interface ToggleCountState {
   selected: boolean;
   count: number;

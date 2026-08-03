@@ -1,4 +1,5 @@
 import {
+  appendUniquePageById,
   insertUniqueById,
   reconcileIncrementCount,
   reconcileToggleCount,
@@ -6,6 +7,12 @@ import {
 } from './list-reconciliation';
 
 describe('refreshed-list mutation reconciliation', () => {
+  it('appends a page without duplicating ids already loaded or repeated in that page', () => {
+    const current = [{ id: 'one' }];
+    expect(appendUniquePageById(current, [{ id: 'one' }, { id: 'two' }, { id: 'two' }, { id: 'three' }]))
+      .toEqual([{ id: 'one' }, { id: 'two' }, { id: 'three' }]);
+    expect(appendUniquePageById(current, [{ id: 'one' }])).toBe(current);
+  });
   it('does not insert a mutation result already returned by a newer refresh', () => {
     const item = { id: 'item-1', value: 'fresh' };
     const current = [item];
