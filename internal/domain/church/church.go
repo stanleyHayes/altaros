@@ -644,3 +644,36 @@ func decodeIDs(ctx context.Context, cur *mongo.Cursor) ([]string, error) {
 	}
 	return ids, nil
 }
+
+// AllIDs lists every church on the platform.
+//
+// For platform-wide maintenance that must run once per tenant — retention
+// enforcement, the deletion purge — where the alternative is an unscoped
+// delete across every church at once, which is the single most destructive
+// operation this codebase could perform.
+//
+// Deliberately NOT exposed over HTTP and deliberately not filtered by the
+// caller's visibility: it exists for system sweepers, which have no caller.
+func (s *Service) AllIDs(ctx context.Context) ([]string, error) {
+	cursor, err := s.churches.Find(ctx, bson.M{}, options.Find().
+		SetProjection(bson.M{"_id": 1}))
+	if err != nil {
+		return nil, fmt.Errorf("church: list ids: %w", err)
+	}
+	defer func() { _ = cursor.Close(ctx) }()
+
+	var out []string
+	for cursor.Next(ctx) {
+		var row struct {
+			ID bson.ObjectID `bson:"_id"`
+		}
+		if err := cursor.Decode(&row); err != nil {
+			return nil, fmt.Errorf("church: decode id: %w", err)
+		}
+		out = append(out, row.ID.Hex())
+	}
+	if err := cursor.Err(); err != nil {
+		return nil, fmt.Errorf("church: iterate ids: %w", err)
+	}
+	return out, nil
+}

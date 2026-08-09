@@ -287,6 +287,12 @@ func handlePublicPrivacyPolicy() http.HandlerFunc {
 				html.EscapeString(h.Because))
 		}
 
+		var retention strings.Builder
+		for _, r := range privacy.RetentionDisclosure() {
+			fmt.Fprintf(&retention, "<tr><td>%s</td><td>%d days</td><td>%s</td></tr>",
+				html.EscapeString(r.Label), r.KeepForDays, html.EscapeString(r.Because))
+		}
+
 		publicPage(w, "Privacy", `
 <h1>Privacy at ALTAR OS</h1>
 <p>ALTAR OS is church management software. Your church is the
@@ -304,6 +310,12 @@ in the apps. Nothing about you is shared between churches.</div>
 date with what the system actually does.</p>
 <table><tr><th>Information</th><th>On deletion</th><th>Why</th></tr>`+
 			rows.String()+`</table>
+
+<h2>How long we keep things</h2>
+<p>Act 843 s.24 says personal data must not be kept longer than is necessary.
+These periods are enforced automatically, not merely written down.</p>
+<table><tr><th>Information</th><th>Kept for</th><th>Why that long</th></tr>`+
+			retention.String()+`</table>
 
 <h2>Your rights under Act 843</h2>
 <ul>

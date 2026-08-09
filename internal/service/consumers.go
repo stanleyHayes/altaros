@@ -43,6 +43,10 @@ func StartConsumers(ctx context.Context, d *deps.Deps) error {
 	// what App Store 5.1.1(v) rejects and Act 843 s.33 does not permit.
 	go startPurgeSweeper(ctx, d)
 
+	// Retention (Act 843 s.24). A policy nothing enforces is a document, not
+	// a control.
+	go startRetentionSweeper(ctx, d)
+
 	if d.Events == nil || !d.Events.Enabled() {
 		d.Log.Warn("event consumers not started — no Kafka brokers configured; " +
 			"giving receipts will not be sent")
@@ -399,5 +403,74 @@ func purgeOnce(ctx context.Context, d *deps.Deps, svc *privacy.Service) {
 		// when it happened.
 		d.Log.Info("accounts purged after their grace period",
 			slog.Int("accounts", purged), slog.Int("churches", len(churches)))
+	}
+}
+
+
+// retentionSweepInterval is how often decided retention periods are enforced.
+//
+// Daily. The shortest period in the policy is a year, so running more often
+// would issue the same deletes against the same empty result set; running less
+// often would let a category sit past its decided life for weeks.
+const retentionSweepInterval = 24 * time.Hour
+
+// startRetentionSweeper enforces privacy.RetentionPolicy for every church.
+//
+// Per church, because the collections are tenant-scoped: an unscoped delete
+// here would cross every church on the platform at once, which is the single
+// most destructive thing this codebase could do.
+func startRetentionSweeper(ctx context.Context, d *deps.Deps) {
+	svc := privacy.NewService(d.Mongo, nil)
+	churches := church.NewService(d.Mongo)
+	ticker := time.NewTicker(retentionSweepInterval)
+	defer ticker.Stop()
+
+	d.Log.Info("retention sweeper started",
+		slog.Duration("interval", retentionSweepInterval),
+		slog.Int("rules", len(privacy.RetentionPolicy)))
+
+	retainOnce(ctx, d, svc, churches)
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			retainOnce(ctx, d, svc, churches)
+		}
+	}
+}
+
+func retainOnce(ctx context.Context, d *deps.Deps, svc *privacy.Service, churches *church.Service) {
+	ids, err := churches.AllIDs(ctx)
+	if err != nil {
+		d.Log.Error("could not list churches for retention",
+			slog.String("error", err.Error()))
+		return
+	}
+
+	var total int64
+	for _, churchID := range ids {
+		scoped := tenancy.WithScope(ctx, tenancy.Scope{
+			ChurchID: churchID,
+			UserID:   "system:retention",
+			Role:     "SYSTEM",
+		})
+		res, err := svc.EnforceRetention(scoped)
+		if err != nil {
+			// One church's problem must not stop the others.
+			d.Log.Error("retention failed for a church",
+				slog.String("church_id", churchID),
+				slog.String("error", err.Error()))
+			continue
+		}
+		total += res.Total
+	}
+
+	if total > 0 {
+		// Logged with counts because this is the evidence an audit asks for —
+		// see why retention is a sweeper rather than a TTL index.
+		d.Log.Info("retention enforced",
+			slog.Int64("records", total), slog.Int("churches", len(ids)))
 	}
 }
