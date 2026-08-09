@@ -59,6 +59,14 @@ func authRoutes(d *deps.Deps) routeSet {
 		r.With(throttle(d, ratelimit.Login)).
 			Post("/auth/refresh-token", handleRefresh(svc, members))
 
+		// Password reset. Throttled with the OTP rules rather than the login
+		// rules: the expensive half is sending an SMS, and the abuse this
+		// invites is making somebody's phone ring, not guessing a password.
+		r.With(throttle(d, ratelimit.RequestOTP)).
+			Post("/auth/forgot-password", handleForgotPassword(svc))
+		r.With(throttle(d, ratelimit.VerifyOTP)).
+			Post("/auth/reset-password", handleResetPassword(svc))
+
 			// Signing out is not worth throttling: it is authenticated, idempotent,
 			// and a limit here would strand someone trying to end a session they
 			// have reason to think is compromised.
@@ -480,4 +488,65 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+// handleForgotPassword sends a reset code to a registered phone.
+//
+// ALWAYS answers the same way. A response that differed for a registered
+// number would turn this endpoint into a tool for discovering who attends a
+// given church, which in some congregations is dangerous rather than merely
+// private.
+func handleForgotPassword(svc *auth.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Phone     string `json:"phone"`
+			Workspace string `json:"workspace"`
+		}
+		if err := decode(r, &body); err != nil {
+			httpx.Error(w, http.StatusBadRequest, "Malformed request body")
+			return
+		}
+		// The error is deliberately discarded: see the note above.
+		_ = svc.RequestPasswordReset(r.Context(), body.Workspace, body.Phone)
+		httpx.JSON(w, http.StatusOK, map[string]any{
+			"message": "If that number belongs to an account, a reset code is on its way. " +
+				"It expires in 5 minutes.",
+		})
+	}
+}
+
+// handleResetPassword verifies the code and sets the new password.
+func handleResetPassword(svc *auth.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Phone     string `json:"phone"`
+			Workspace string `json:"workspace"`
+			Code      string `json:"code"`
+			Password  string `json:"password"`
+		}
+		if err := decode(r, &body); err != nil {
+			httpx.Error(w, http.StatusBadRequest, "Malformed request body")
+			return
+		}
+
+		err := svc.ResetPassword(r.Context(), body.Workspace, body.Phone, body.Code, body.Password)
+		switch {
+		case err == nil:
+			httpx.JSON(w, http.StatusOK, map[string]any{
+				"message": "Your password has been changed and you have been signed out " +
+					"on every device. Sign in with your new password.",
+			})
+		case errors.Is(err, auth.ErrPasswordTooWeak):
+			httpx.Error(w, http.StatusBadRequest, "Use a password of 8 characters or more.")
+		case errors.Is(err, auth.ErrSamePassword):
+			httpx.Error(w, http.StatusBadRequest,
+				"That is your current password. Choose a different one.")
+		case errors.Is(err, auth.ErrResetCodeInvalid):
+			httpx.Error(w, http.StatusBadRequest,
+				"That code is not valid or has expired. Request a new one.")
+		default:
+			httpx.Error(w, http.StatusInternalServerError,
+				"Something went wrong. Your password has not been changed.")
+		}
+	}
 }

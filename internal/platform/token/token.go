@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -343,6 +344,32 @@ func (i *Issuer) revokeJTI(ctx context.Context, jti string, ttl time.Duration) e
 	return i.redis.Set(ctx, jtiKey(jti), "1", ttl).Err()
 }
 
+// RevokeAllForUser refuses every token this user already holds.
+//
+// Family revocation needs a token to name the family, which is exactly what
+// somebody resetting a forgotten password does not have — they are locked out.
+// So this records an EPOCH instead: an instant before which every token for
+// the user is refused, whatever family it belongs to and however it was
+// obtained.
+//
+// That is the difference between a password reset that ends an intrusion and
+// one that only inconveniences it. Somebody resets their password because they
+// think another person has it; leaving that person's existing sessions alive
+// defeats the entire point.
+//
+// ttl should exceed the refresh-token lifetime — once no token issued before
+// the epoch can still be valid, the key is dead weight.
+func (i *Issuer) RevokeAllForUser(ctx context.Context, userID string, ttl time.Duration) error {
+	if userID == "" {
+		return nil
+	}
+	stamp := strconv.FormatInt(time.Now().UTC().Unix(), 10)
+	if err := i.redis.Set(ctx, userEpochKey(userID), stamp, ttl).Err(); err != nil {
+		return fmt.Errorf("token: revoke all for user: %w", err)
+	}
+	return nil
+}
+
 func (i *Issuer) isRevoked(ctx context.Context, c *Claims) (bool, error) {
 	keys := []string{jtiKey(c.ID)}
 	if c.Family != "" {
@@ -352,8 +379,35 @@ func (i *Issuer) isRevoked(ctx context.Context, c *Claims) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	return n > 0, nil
+	if n > 0 {
+		return true, nil
+	}
+
+	// The per-user epoch. Checked second because it costs a GET rather than an
+	// EXISTS, and the common case is a token that is simply fine.
+	if c.UserID == "" || c.IssuedAt == nil {
+		return false, nil
+	}
+	raw, err := i.redis.Get(ctx, userEpochKey(c.UserID)).Result()
+	if errors.Is(err, redis.Nil) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	epoch, convErr := strconv.ParseInt(raw, 10, 64)
+	if convErr != nil {
+		return false, nil
+	}
+	// Issued at or before the epoch second is refused. Not-after rather than
+	// strictly-before, so a token minted in the same second as the reset does
+	// not survive it.
+	return c.IssuedAt.Unix() <= epoch, nil
 }
 
 func jtiKey(jti string) string       { return "revoked:jti:" + jti }
 func familyKey(family string) string { return "revoked:fam:" + family }
+
+// userEpochKey holds the instant before which every token for a user is
+// refused. See RevokeAllForUser.
+func userEpochKey(userID string) string { return "revoked:usr:" + userID }

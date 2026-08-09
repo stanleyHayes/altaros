@@ -71,6 +71,27 @@ const AuthService = {
     return post<AuthTokens>("/auth/refresh-token", { refreshToken });
   },
 
+  /**
+   * Ask for a reset code.
+   *
+   * The server answers identically whether or not the number is registered, so
+   * this resolves the same way too. Surfacing a difference here would undo the
+   * protection: it is what stops the form being used to discover who attends a
+   * given church.
+   */
+  async forgotPassword(payload: { phone: string; workspace?: string }): Promise<{ message: string }> {
+    return post<{ message: string }>("/auth/forgot-password", payload);
+  },
+
+  async resetPassword(payload: {
+    phone: string;
+    code: string;
+    password: string;
+    workspace?: string;
+  }): Promise<{ message: string }> {
+    return post<{ message: string }>("/auth/reset-password", payload);
+  },
+
   async getCurrentUser(): Promise<User> {
     return get<User>("/auth/me");
   },

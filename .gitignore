@@ -3,6 +3,13 @@ dist
 .turbo
 .env
 .env.local
+# Every real-value env file, not just the two that were listed. A
+# .env.production holds live provider keys and a signing secret; it was one
+# `git add -A` away from GitHub.
+.env.production
+.env.production.local
+.env.*.local
+*.env.production
 .vercel
 coverage
 *.tsbuildinfo
