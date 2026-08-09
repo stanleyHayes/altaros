@@ -16,11 +16,13 @@ import (
 
 // Arkesel is the SMS transport for Ghana (chosen 2 Aug 2026).
 //
-// It sits alongside the Africa's Talking transport rather than replacing it,
-// behind the same notification.Transport port — the same shape ADR-002 uses for
-// payments, and for the same reason: a messaging provider is a commercial
-// relationship as much as a technical one, and the one that is cheapest or most
-// reliable in Ghana today may not be in a year.
+// The only SMS transport, and it sits behind the notification.Transport port
+// — the same shape ADR-002 uses for payments, and for the same reason: a
+// messaging provider is a commercial relationship as much as a technical one,
+// and the one that is cheapest or most reliable in Ghana today may not be in a
+// year. A second provider was carried behind that port for a while and removed
+// on 9 Aug 2026 once nothing selected it; the port is what makes adding the
+// next one a new file rather than a rewrite.
 //
 // # What is verified and what is not
 //

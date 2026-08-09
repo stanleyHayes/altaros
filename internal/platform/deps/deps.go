@@ -228,19 +228,12 @@ func (d *Deps) pushTransport() notification.Transport {
 	return transport.NewPushRouter(android, ios)
 }
 
-// smsTransport builds the SMS provider this deployment is configured for.
+// smsTransport builds the SMS transport.
 //
 // Always returns a transport, never nil: an unconfigured one refuses each send
 // with a named reason, which is what turns "no credentials" into a suppressed
 // message somebody can see rather than a channel that silently does not exist.
 func (d *Deps) smsTransport() notification.Transport {
-	if d.Config.SMS.Provider == config.SMSAfricasTalking {
-		return transport.NewSMS(transport.SMSConfig{
-			APIKey:   d.Config.AfricasTkg.APIKey,
-			Username: d.Config.AfricasTkg.Username,
-			SenderID: d.Config.AfricasTkg.SenderID,
-		})
-	}
 	return transport.NewArkesel(transport.ArkeselConfig{
 		APIKey:   d.Config.SMS.Arkesel.APIKey,
 		SenderID: d.Config.SMS.Arkesel.SenderID,

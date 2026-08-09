@@ -8,7 +8,6 @@ import (
 	"github.com/hayfordstanley/altar-os/internal/domain/auth"
 	"github.com/hayfordstanley/altar-os/internal/domain/notification"
 	"github.com/hayfordstanley/altar-os/internal/domain/notification/transport"
-	"github.com/hayfordstanley/altar-os/internal/platform/config"
 	"github.com/hayfordstanley/altar-os/internal/platform/deps"
 )
 
@@ -20,25 +19,15 @@ import (
 // matters — and then the transport that sends is whichever branch was written
 // first, silently.
 //
-// Arkesel is the default (2 Aug 2026). Africa's Talking stays behind the same
-// notification.Transport port so switching back is one environment variable.
+// Arkesel is the only provider (9 Aug 2026). A second one was carried behind
+// the same notification.Transport port for a while; it was removed once it was
+// clear nothing selected it, because an unused branch is a branch nobody tests.
 func smsTransportFor(d *deps.Deps) notification.Transport {
-	switch d.Config.SMS.Provider {
-	case config.SMSAfricasTalking:
-		if d.Config.AfricasTkg.APIKey != "" && d.Config.AfricasTkg.Username != "" {
-			return transport.NewSMS(transport.SMSConfig{
-				APIKey:   d.Config.AfricasTkg.APIKey,
-				Username: d.Config.AfricasTkg.Username,
-				SenderID: d.Config.AfricasTkg.SenderID,
-			})
-		}
-	default:
-		if d.Config.SMS.Arkesel.APIKey != "" && d.Config.SMS.Arkesel.SenderID != "" {
-			return transport.NewArkesel(transport.ArkeselConfig{
-				APIKey:   d.Config.SMS.Arkesel.APIKey,
-				SenderID: d.Config.SMS.Arkesel.SenderID,
-			})
-		}
+	if d.Config.SMS.Arkesel.APIKey != "" && d.Config.SMS.Arkesel.SenderID != "" {
+		return transport.NewArkesel(transport.ArkeselConfig{
+			APIKey:   d.Config.SMS.Arkesel.APIKey,
+			SenderID: d.Config.SMS.Arkesel.SenderID,
+		})
 	}
 	return nil
 }

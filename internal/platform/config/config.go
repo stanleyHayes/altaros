@@ -84,7 +84,6 @@ type Config struct {
 	// credentials. A deployment configures one; requiring both would block a
 	// boot on a key for a provider it does not use.
 	SMS        SMSConfig
-	AfricasTkg AfricasTalkingConfig
 	Resend     ResendConfig
 	Firebase   FirebaseConfig
 	APNS       APNSConfig
@@ -157,20 +156,12 @@ type PaystackConfig struct {
 	WebhookSecret string
 }
 
-type AfricasTalkingConfig struct {
-	APIKey   string
-	Username string
-	SenderID string
-}
-
 // SMSProvider names the transport that actually sends.
 type SMSProvider string
 
 const (
 	// SMSArkesel is the Ghana provider chosen on 2 Aug 2026.
 	SMSArkesel SMSProvider = "arkesel"
-	// SMSAfricasTalking is the original transport, kept behind the same port.
-	SMSAfricasTalking SMSProvider = "africastalking"
 )
 
 // SMSConfig selects and configures the SMS provider.
@@ -321,11 +312,6 @@ func Load(serviceName string) (*Config, error) {
 				SenderID: os.Getenv("ARKESEL_SENDER_ID"),
 			},
 		},
-		AfricasTkg: AfricasTalkingConfig{
-			APIKey:   os.Getenv("AT_API_KEY"),
-			Username: os.Getenv("AT_USERNAME"),
-			SenderID: os.Getenv("AT_SENDER_ID"),
-		},
 		Resend: ResendConfig{
 			APIKey:    os.Getenv("RESEND_API_KEY"),
 			FromEmail: os.Getenv("RESEND_FROM_EMAIL"),
@@ -364,19 +350,11 @@ func requiredSecrets(service string, sms SMSProvider) map[string]func(*Config) s
 
 	// Only the ACTIVE provider's credentials are required. Requiring both would
 	// mean a deployment that has switched to Arkesel cannot boot without also
-	// holding an Africa's Talking username it will never use — which is how a
 	// required-secrets check stops being read and starts being worked around.
 	smsSecrets := map[string]func(*Config) string{
 		"ARKESEL_API_KEY":   func(c *Config) string { return c.SMS.Arkesel.APIKey },
 		"ARKESEL_SENDER_ID": func(c *Config) string { return c.SMS.Arkesel.SenderID },
 	}
-	if sms == SMSAfricasTalking {
-		smsSecrets = map[string]func(*Config) string{
-			"AT_API_KEY":  func(c *Config) string { return c.AfricasTkg.APIKey },
-			"AT_USERNAME": func(c *Config) string { return c.AfricasTkg.Username },
-		}
-	}
-
 	perService := map[string]map[string]func(*Config) string{
 		"finance": {
 			"PAYSTACK_SECRET_KEY":     func(c *Config) string { return c.Paystack.SecretKey },
@@ -464,11 +442,12 @@ func (c *Config) validate() error {
 // boot, naming the provider it fell back to.
 func normaliseSMSProvider(raw string) SMSProvider {
 	switch SMSProvider(strings.ToLower(strings.TrimSpace(raw))) {
-	case SMSAfricasTalking:
-		return SMSAfricasTalking
 	case SMSArkesel:
 		return SMSArkesel
 	default:
+		// One provider today. An unrecognised value still resolves rather than
+		// failing, and the required-secrets check names what is missing at
+		// boot — which is a better failure than a nil transport at 6am.
 		return SMSArkesel
 	}
 }

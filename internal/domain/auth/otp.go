@@ -37,7 +37,7 @@ const (
 	otpTTL         = 5 * time.Minute
 	otpMaxAttempts = 5
 	// otpResendWindow throttles how often a new code can be requested for the
-	// same number. SMS costs real money on Africa's Talking / Hubtel.
+	// same number. SMS costs real money on every provider.
 	otpResendWindow = 60 * time.Second
 )
 

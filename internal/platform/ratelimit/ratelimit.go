@@ -11,7 +11,7 @@
 //     succeed.
 //   - request-otp is throttled per phone number (60s, WP-10) but not per
 //     caller, so one attacker cycling through numbers sends unlimited SMS.
-//     Every one of those costs real money at Africa's Talking.
+//     Every one of those costs real money at the SMS provider.
 //   - The public church-slug lookup can be dictionary-attacked to enumerate
 //     every church on the platform — the exact concern §11.2 raises about the
 //     login form, on an endpoint that needs no credentials at all.

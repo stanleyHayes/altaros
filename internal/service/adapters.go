@@ -87,7 +87,7 @@ func (g *consentGate) IsGranted(ctx context.Context, memberID string, p consent.
 //
 // Every argument here was previously nil. The transports come from WP-15 and
 // refuse to send when unconfigured rather than pretending — so a deployment
-// without Africa's Talking credentials records suppressed messages with a
+// without SMS credentials records suppressed messages with a
 // reason, instead of reporting success for messages nobody received.
 func newNotificationService(d *deps.Deps) *notification.Service {
 	members := member.NewService(d.Mongo, d.Events, d.Config.DataRegion)
