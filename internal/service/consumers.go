@@ -61,7 +61,11 @@ func StartConsumers(ctx context.Context, d *deps.Deps) error {
 	deduper := events.NewDeduper(d.Redis, d.Config.Kafka.ConsumerGroup, d.Log)
 
 	handlers := map[string]events.Handler{
-		events.TopicGivingCompleted: deduper.Wrap(givingReceiptHandler(d, notifications, churches)),
+		// Dedupe first (do the work once), then bound the retries so a
+		// message that can never succeed cannot stall the partition and
+		// silently stop every later receipt.
+		events.TopicGivingCompleted: deduper.GiveUpAfterRepeatedFailure(
+			deduper.Wrap(givingReceiptHandler(d, notifications, churches))),
 	}
 
 	if err := d.Events.Consume(ctx, handlers); err != nil {
@@ -405,7 +409,6 @@ func purgeOnce(ctx context.Context, d *deps.Deps, svc *privacy.Service) {
 			slog.Int("accounts", purged), slog.Int("churches", len(churches)))
 	}
 }
-
 
 // retentionSweepInterval is how often decided retention periods are enforced.
 //

@@ -139,3 +139,76 @@ func (d *Deduper) Seen(ctx context.Context, eventID string) (bool, error) {
 func (d *Deduper) key(eventID string) string {
 	return dedupeKeyPrefix + d.group + ":" + eventID
 }
+
+// maxAttempts is how often one event may fail before it is given up on.
+//
+// A consumer commits its offset only after the handler returns nil, so a
+// message that fails permanently is retried forever and NOTHING BEHIND IT IS
+// EVER PROCESSED. One member whose receipt cannot be sent stops the receipts
+// for every other member on that partition, silently, with no error surfaced
+// anywhere a person looks.
+//
+// That is not hypothetical. Account deletion erases a member's record while
+// their giving.completed events may still be unprocessed or redelivered, so
+// the product now has a routine way to create a permanently unsendable
+// receipt.
+//
+// Six attempts, because the retries this protects against are genuinely
+// transient — a database blip, a provider timeout — and six passes through a
+// poll loop is long enough to ride one out while short enough that a partition
+// is not stalled for hours.
+const maxAttempts = 6
+
+// attemptsKey counts failures for one event within one consumer group.
+func (d *Deduper) attemptsKey(eventID string) string {
+	return "events:attempts:" + d.group + ":" + eventID
+}
+
+// GiveUpAfterRepeatedFailure wraps a handler so a permanently failing message
+// cannot block its partition.
+//
+// On failure the attempt is counted and the error is returned, so the offset
+// stays uncommitted and the message is retried — the behaviour that makes a
+// transient fault recoverable. Once the count passes maxAttempts the error is
+// swallowed and the offset advances, with the event logged at ERROR in full so
+// the loss is visible rather than silent.
+//
+// Dropping a message is a bad outcome. Blocking every message behind it
+// forever is a worse one, and it is the outcome that hides.
+func (d *Deduper) GiveUpAfterRepeatedFailure(handler Handler) Handler {
+	if d == nil || d.redis == nil {
+		return handler
+	}
+	return func(ctx context.Context, e *Envelope, raw []byte) error {
+		err := handler(ctx, e, raw)
+		if err == nil {
+			// Succeeded: forget the count so a later, unrelated failure of the
+			// same id starts from zero.
+			d.redis.Del(ctx, d.attemptsKey(e.ID))
+			return nil
+		}
+
+		n, incErr := d.redis.Incr(ctx, d.attemptsKey(e.ID)).Result()
+		if incErr != nil {
+			// Cannot count, so cannot safely give up. Retrying is the safe
+			// direction: it risks a stall, not a lost receipt.
+			return err
+		}
+		if n == 1 {
+			d.redis.Expire(ctx, d.attemptsKey(e.ID), DedupeTTL)
+		}
+		if n <= maxAttempts {
+			return err
+		}
+
+		d.log.Error("giving up on an event after repeated failures; the offset "+
+			"will advance so later messages are not blocked",
+			slog.String("event_id", e.ID),
+			slog.String("topic", e.Type),
+			slog.String("subject", e.Subject),
+			slog.Int64("attempts", n),
+			slog.String("last_error", err.Error()),
+			slog.String("payload", string(raw)))
+		return nil
+	}
+}
