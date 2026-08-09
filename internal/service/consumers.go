@@ -10,6 +10,7 @@ import (
 	"github.com/hayfordstanley/altar-os/internal/domain/church"
 	"github.com/hayfordstanley/altar-os/internal/domain/discipleship"
 	"github.com/hayfordstanley/altar-os/internal/domain/notification"
+	"github.com/hayfordstanley/altar-os/internal/domain/privacy"
 	"github.com/hayfordstanley/altar-os/internal/platform/deps"
 	"github.com/hayfordstanley/altar-os/internal/platform/events"
 	"github.com/hayfordstanley/altar-os/internal/platform/tenancy"
@@ -36,6 +37,11 @@ func StartConsumers(ctx context.Context, d *deps.Deps) error {
 	// only happens when somebody opens a page is a report rather than a
 	// process — the whole point is that it fires when nobody is looking.
 	go startEscalationSweeper(ctx, d)
+
+	// The purge sweeper. Without it a deleted account stays locked forever
+	// with every record intact — deactivation dressed as deletion, which is
+	// what App Store 5.1.1(v) rejects and Act 843 s.33 does not permit.
+	go startPurgeSweeper(ctx, d)
 
 	if d.Events == nil || !d.Events.Enabled() {
 		d.Log.Warn("event consumers not started — no Kafka brokers configured; " +
@@ -324,5 +330,74 @@ func escalateOnce(ctx context.Context, d *deps.Deps, svc *discipleship.Service) 
 	if escalated > 0 {
 		d.Log.Info("follow-up escalated",
 			slog.Int("tasks", escalated), slog.Int("churches", len(churches)))
+	}
+}
+
+// purgeSweepInterval is how often expired deletions are executed.
+//
+// Hourly. The grace period is thirty days, so the cost of being up to an hour
+// late is nothing, and a tighter loop would only run the same query more often
+// for the same answer.
+const purgeSweepInterval = time.Hour
+
+// startPurgeSweeper destroys the data behind deletions whose grace period has
+// expired (privacy.GracePeriod).
+func startPurgeSweeper(ctx context.Context, d *deps.Deps) {
+	svc := privacy.NewService(d.Mongo, d.Tokens)
+	ticker := time.NewTicker(purgeSweepInterval)
+	defer ticker.Stop()
+
+	d.Log.Info("privacy purge sweeper started",
+		slog.Duration("interval", purgeSweepInterval),
+		slog.Duration("grace_period", privacy.GracePeriod))
+
+	// Once at start, then on the ticker: a pod restarting more often than the
+	// interval would otherwise never sweep, and the symptom is silence.
+	purgeOnce(ctx, d, svc)
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			purgeOnce(ctx, d, svc)
+		}
+	}
+}
+
+func purgeOnce(ctx context.Context, d *deps.Deps, svc *privacy.Service) {
+	churches, err := svc.ChurchesWithDuePurges(ctx)
+	if err != nil {
+		d.Log.Error("could not find churches with due deletions",
+			slog.String("error", err.Error()))
+		return
+	}
+	if len(churches) == 0 {
+		return
+	}
+
+	purged := 0
+	for _, churchID := range churches {
+		scoped := tenancy.WithScope(ctx, tenancy.Scope{
+			ChurchID: churchID,
+			UserID:   "system:purge-sweeper",
+			Role:     "SYSTEM",
+		})
+		res, err := svc.PurgeDue(scoped)
+		if err != nil {
+			// One church's problem must not stop the others.
+			d.Log.Error("purge failed for a church",
+				slog.String("church_id", churchID),
+				slog.String("error", err.Error()))
+			continue
+		}
+		purged += res.Purged
+	}
+
+	if purged > 0 {
+		// Logged because this is irreversible and somebody may need to prove
+		// when it happened.
+		d.Log.Info("accounts purged after their grace period",
+			slog.Int("accounts", purged), slog.Int("churches", len(churches)))
 	}
 }

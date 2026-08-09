@@ -31,7 +31,7 @@ func buildPrivacy(d *deps.Deps) http.Handler { return standalone(privacyRoutes(d
 // App Store Guideline 5.1.1(v) accepts. Somebody acting on ANOTHER person's
 // data needs `member:delete`, and that is a different act entirely.
 func privacyRoutes(d *deps.Deps) routeSet {
-	svc := privacy.NewService(d.Mongo)
+	svc := privacy.NewService(d.Mongo, d.Tokens)
 	members := member.NewService(d.Mongo, d.Events, d.Config.DataRegion)
 
 	return func(r chi.Router) {
@@ -43,6 +43,12 @@ func privacyRoutes(d *deps.Deps) routeSet {
 		// here rather than from the marketing site so that they exist wherever
 		// the API is deployed — a store listing whose privacy URL 404s because
 		// a separate frontend was not deployed is a rejection.
+		// Restoring is deliberately PUBLIC: somebody inside the grace period
+		// cannot sign in — that is the point of the lock — so requiring a
+		// session to undo a mistaken deletion would make the window useless.
+		// The reference is the credential, and it is random and single-purpose.
+		r.Post("/privacy/restore", handleRestoreAccount(svc))
+
 		r.Get("/privacy/policy", handlePublicPrivacyPolicy())
 		r.Get("/privacy/data-deletion", handlePublicDataDeletion())
 
@@ -144,7 +150,7 @@ func handlePrivacyDeleteSelf(svc *privacy.Service, members *member.Service) http
 			return
 		}
 
-		receipt, err := svc.DeleteAccount(r.Context(), privacy.DeleteRequest{
+		receipt, err := svc.RequestDeletion(r.Context(), privacy.DeleteRequest{
 			MemberID: memberID,
 			UserID:   userID,
 			// Typed confirmation, not a checkbox. This is irreversible and
@@ -178,7 +184,7 @@ func handlePrivacyDeleteMember(svc *privacy.Service, members *member.Service) ht
 		if m, err := members.ByID(r.Context(), target); err == nil && m.UserID != "" {
 			userID = m.UserID.String()
 		}
-		receipt, err := svc.DeleteAccount(r.Context(), privacy.DeleteRequest{
+		receipt, err := svc.RequestDeletion(r.Context(), privacy.DeleteRequest{
 			MemberID:    target,
 			UserID:      userID,
 			Confirmed:   body.Confirm == "DELETE",
@@ -190,6 +196,29 @@ func handlePrivacyDeleteMember(svc *privacy.Service, members *member.Service) ht
 			return
 		}
 		httpx.JSON(w, http.StatusOK, map[string]any{"receipt": receipt})
+	}
+}
+
+// handleRestoreAccount undoes a deletion inside the grace period.
+func handleRestoreAccount(svc *privacy.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Reference string `json:"reference"`
+			Workspace string `json:"workspace"`
+		}
+		if err := decode(r, &body); err != nil {
+			httpx.Error(w, http.StatusBadRequest, "Malformed request body")
+			return
+		}
+		receipt, err := svc.CancelDeletion(r.Context(), body.Reference)
+		if err != nil {
+			writePrivacyError(w, err)
+			return
+		}
+		httpx.JSON(w, http.StatusOK, map[string]any{
+			"restored": true, "reference": receipt.Reference,
+			"message": "Your account is active again. Sign in as usual.",
+		})
 	}
 }
 

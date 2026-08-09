@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 )
 
 // These need no database. What they check is that the DISCLOSURE and the
@@ -157,5 +158,49 @@ func TestTheMatcherCoversBothIdentifierStorageForms(t *testing.T) {
 	plain := fmt.Sprintf("%v", matcher("memberId", "not-hex"))
 	if strings.Count(plain, "not-hex") != 1 {
 		t.Errorf("matcher invented a second form for a non-hex id: %s", plain)
+	}
+}
+
+// The grace period exists so a mistaken tap is survivable. These are the rules
+// that make "deleted" honest without making it irreversible on impulse.
+
+func TestAPendingDeletionIsRestorableAndAPurgedOneIsNot(t *testing.T) {
+	now := time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC)
+
+	pending := &Receipt{Status: StatusPending, PurgeAfter: now.Add(GracePeriod)}
+	if !pending.Restorable(now) {
+		t.Error("a fresh deletion cannot be undone — one mistaken tap is final")
+	}
+	// The day before the window closes it is still recoverable.
+	if !pending.Restorable(now.Add(GracePeriod - time.Hour)) {
+		t.Error("the window closed early")
+	}
+	// After it, never.
+	if pending.Restorable(now.Add(GracePeriod + time.Second)) {
+		t.Error("an expired deletion still claims to be restorable")
+	}
+
+	for _, s := range []Status{StatusPurged, StatusCancelled} {
+		done := &Receipt{Status: s, PurgeAfter: now.Add(GracePeriod)}
+		if done.Restorable(now) {
+			t.Errorf("a %s deletion claims to be restorable", s)
+		}
+	}
+	var none *Receipt
+	if none.Restorable(now) {
+		t.Error("a nil receipt claims to be restorable")
+	}
+}
+
+// Long enough to notice a mistake, short enough that "deleted" stays honest.
+// Both stores accept a window; neither accepts an indefinite one.
+func TestTheGracePeriodIsBoundedAndReasonable(t *testing.T) {
+	if GracePeriod < 7*24*time.Hour {
+		t.Errorf("grace period is %s — too short for somebody to notice a "+
+			"mistaken deletion while they are away", GracePeriod)
+	}
+	if GracePeriod > 90*24*time.Hour {
+		t.Errorf("grace period is %s — an account kept that long is retained, "+
+			"not deleted, whatever the flag says", GracePeriod)
 	}
 }

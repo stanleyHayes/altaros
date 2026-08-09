@@ -50,6 +50,34 @@ import (
 	"github.com/hayfordstanley/altar-os/internal/platform/mongodb"
 )
 
+// GracePeriod is how long a deleted account can still be restored.
+//
+// # Why this is not an immediate erase, and why it is still "deletion"
+//
+// The first implementation erased everything the moment the button was
+// pressed. That is defensible against App Store Guideline 5.1.1(v), which
+// rejects deactivation offered in place of deletion — but it is dangerous in a
+// church product. One mistaken tap, or a stolen unlocked phone, destroyed a
+// person's entire history with the congregation and the church's record of
+// them, with nothing to undo it.
+//
+// So deletion is now COMPLETED IN TWO PARTS:
+//
+//	immediately   the account is locked: sign-in refused, every session
+//	              revoked, the profile withdrawn from the church's views
+//	after 30 days the data is actually erased and anonymised, irreversibly
+//
+// This still satisfies both stores: the account really is deleted from the
+// person's point of view the instant they ask — they cannot sign in, and
+// nothing of theirs is reachable — and the underlying data really is destroyed
+// rather than kept indefinitely behind a flag. Google Play explicitly allows a
+// deletion window, and Apple's requirement is that deletion happens, not that
+// it happens in the same millisecond.
+//
+// Thirty days is the same window a person gets from most services, long enough
+// to notice a mistake and short enough that "deleted" stays honest.
+const GracePeriod = 30 * 24 * time.Hour
+
 // Collection records deletion receipts.
 //
 // Kept AFTER the person is gone, and deliberately holds nothing that
@@ -234,6 +262,18 @@ var Holdings = []Holding{
 	},
 }
 
+// Status is where a deletion has got to.
+type Status string
+
+const (
+	// StatusPending means the account is locked and awaiting purge.
+	StatusPending Status = "pending"
+	// StatusPurged means the data is gone. Terminal.
+	StatusPurged Status = "purged"
+	// StatusCancelled means the person came back within the window.
+	StatusCancelled Status = "cancelled"
+)
+
 // Receipt is what a person is given when their account is deleted, and what
 // the church keeps as evidence the request was honoured.
 type Receipt struct {
@@ -246,6 +286,18 @@ type Receipt struct {
 	Reference string `bson:"reference" json:"reference"`
 
 	RequestedAt time.Time `bson:"requestedAt" json:"requestedAt"`
+	// Status distinguishes an account that is locked and awaiting purge from
+	// one whose data is actually gone.
+	Status Status `bson:"status" json:"status"`
+	// PurgeAfter is when the data is destroyed for good.
+	PurgeAfter time.Time `bson:"purgeAfter" json:"purgeAfter"`
+
+	// MemberID and UserID are held ONLY while the receipt is pending, because
+	// the purge needs to know whom to erase and a restore needs to know whom
+	// to bring back. Both are removed at purge, which is what leaves the
+	// finished receipt with nothing identifying in it.
+	MemberID mongodb.ID `bson:"memberId,omitempty" json:"-"`
+	UserID   mongodb.ID `bson:"userId,omitempty"   json:"-"`
 	// SelfService distinguishes a person deleting their own account from an
 	// administrator doing it for them, which Act 843 treats differently.
 	SelfService bool `bson:"selfService" json:"selfService"`
@@ -258,7 +310,15 @@ type Receipt struct {
 	// was shown before they confirmed.
 	Retained []RetentionNote `bson:"retained,omitempty" json:"retained,omitempty"`
 
-	CompletedAt time.Time `bson:"completedAt" json:"completedAt"`
+	// CompletedAt is when the data was actually destroyed. Zero while pending.
+	CompletedAt time.Time `bson:"completedAt,omitempty" json:"completedAt,omitempty"`
+	// CancelledAt is when the person restored the account instead.
+	CancelledAt time.Time `bson:"cancelledAt,omitempty" json:"cancelledAt,omitempty"`
+}
+
+// Restorable reports whether this deletion can still be undone.
+func (r *Receipt) Restorable(now time.Time) bool {
+	return r != nil && r.Status == StatusPending && now.Before(r.PurgeAfter)
 }
 
 // RetentionNote is one thing that outlived the deletion, and why.
