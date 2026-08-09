@@ -3,7 +3,9 @@ package service
 import (
 	"errors"
 	"fmt"
+	"html"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -33,6 +35,17 @@ func privacyRoutes(d *deps.Deps) routeSet {
 	members := member.NewService(d.Mongo, d.Events, d.Config.DataRegion)
 
 	return func(r chi.Router) {
+		// --- public, unauthenticated ---
+		//
+		// Google Play requires a data-deletion route that is reachable WITHOUT
+		// installing the app and without signing in, and App Review expects to
+		// read the policy before it ever creates an account. Both are served
+		// here rather than from the marketing site so that they exist wherever
+		// the API is deployed — a store listing whose privacy URL 404s because
+		// a separate frontend was not deployed is a rejection.
+		r.Get("/privacy/policy", handlePublicPrivacyPolicy())
+		r.Get("/privacy/data-deletion", handlePublicDataDeletion())
+
 		r.Group(func(r chi.Router) {
 			r.Use(authenticated(d))
 			r.Use(resolvePermissions(d))
@@ -196,5 +209,149 @@ func writePrivacyError(w http.ResponseWriter, err error) {
 	default:
 		httpx.Error(w, http.StatusInternalServerError,
 			"Something went wrong. Your data has not been changed.")
+	}
+}
+
+// publicPage renders a plain, self-contained HTML page.
+//
+// No stylesheet, no script, no font: a store reviewer on a slow connection,
+// a regulator, and a member on a 2G phone all have to be able to read this,
+// and every external asset is one more thing that can be unavailable when
+// somebody is checking whether the policy exists.
+func publicPage(w http.ResponseWriter, title, body string) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "public, max-age=3600")
+	w.WriteHeader(http.StatusOK)
+	fmt.Fprintf(w, `<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>%s — ALTAR OS</title>
+<style>
+ body{font:16px/1.65 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+      max-width:44rem;margin:0 auto;padding:2rem 1.25rem;color:#1b1b1b;background:#fff}
+ h1{font-size:1.6rem;line-height:1.25} h2{font-size:1.1rem;margin-top:2rem}
+ table{border-collapse:collapse;width:100%%;margin:1rem 0;font-size:.94rem}
+ th,td{border:1px solid #d9e2de;padding:.5rem .6rem;text-align:left;vertical-align:top}
+ th{background:#f4f8f5} code{background:#f4f8f5;padding:.1rem .3rem;border-radius:3px}
+ .note{background:#f4f8f5;border-left:3px solid #197665;padding:.75rem 1rem;margin:1.25rem 0}
+ @media(prefers-color-scheme:dark){
+   body{background:#101413;color:#e8efec} th{background:#18211f}
+   th,td{border-color:#2a3532} .note{background:#18211f} code{background:#18211f}}
+</style>
+</head><body>%s</body></html>`, title, body)
+}
+
+// handlePublicPrivacyPolicy states what is collected and why.
+//
+// Generated from privacy.Holdings — the same list the export and the deletion
+// walk — so the published policy cannot drift from what the software does.
+// A policy maintained by hand beside code that changes is a policy that
+// becomes false without anybody noticing.
+func handlePublicPrivacyPolicy() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var rows strings.Builder
+		for _, h := range privacy.Holdings {
+			fmt.Fprintf(&rows, "<tr><td>%s</td><td>%s</td><td>%s</td></tr>",
+				html.EscapeString(h.Label),
+				html.EscapeString(string(h.Disposition)),
+				html.EscapeString(h.Because))
+		}
+
+		publicPage(w, "Privacy", `
+<h1>Privacy at ALTAR OS</h1>
+<p>ALTAR OS is church management software. Your church is the
+<strong>data controller</strong> — it decides what to collect about its members
+and why. ALTAR OS is the <strong>data processor</strong>: we hold the data on
+your church's behalf and act on its instructions. This page describes how the
+software handles your data, under Ghana's Data Protection Act 2012 (Act 843).</p>
+
+<div class="note"><strong>We do not sell your data, and we do not track you.</strong>
+There is no advertising network, no analytics broker and no third-party tracker
+in the apps. Nothing about you is shared between churches.</div>
+
+<h2>What is held, and what happens if you delete your account</h2>
+<p>This table is generated from the software itself, so it cannot fall out of
+date with what the system actually does.</p>
+<table><tr><th>Information</th><th>On deletion</th><th>Why</th></tr>`+
+			rows.String()+`</table>
+
+<h2>Your rights under Act 843</h2>
+<ul>
+<li><strong>To know what is held</strong> (s.32) — in the app: Settings &rarr;
+Privacy &rarr; Download my data.</li>
+<li><strong>To have it corrected</strong> — edit your profile, or ask your
+church office.</li>
+<li><strong>To have it erased</strong> (s.33) — see
+<a href="/api/v1/privacy/data-deletion">deleting your account</a>.</li>
+<li><strong>To object to how it is used</strong> — contact your church, or
+write to us at the address below.</li>
+</ul>
+
+<h2>Where your data lives</h2>
+<p>Church data for Ghanaian churches is held in the Ghana region. We do not
+move it outside the region without the church's instruction.</p>
+
+<h2>Payments</h2>
+<p>Giving is processed by <strong>Paystack</strong>. Each church is its own
+merchant and money settles directly to the church — ALTAR OS never holds your
+funds and never sees your card number.</p>
+
+<h2>Contact</h2>
+<p>Data protection: <a href="mailto:privacy@altaros.com">privacy@altaros.com</a><br>
+Support: <a href="mailto:support@altaros.com">support@altaros.com</a></p>
+<p>You also have the right to complain to Ghana's Data Protection Commission.</p>`)
+	}
+}
+
+// handlePublicDataDeletion is the URL Google Play requires.
+//
+// It must work for somebody who has already uninstalled the app, which is why
+// it explains the out-of-app route as prominently as the in-app one.
+func handlePublicDataDeletion() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var kept strings.Builder
+		for _, h := range privacy.Holdings {
+			if h.Disposition == privacy.Erased {
+				continue
+			}
+			fmt.Fprintf(&kept, "<li><strong>%s</strong> — %s</li>",
+				html.EscapeString(h.Label), html.EscapeString(h.Because))
+		}
+
+		publicPage(w, "Delete your account", `
+<h1>Deleting your ALTAR OS account</h1>
+
+<h2>In the app</h2>
+<p>Open <strong>Settings &rarr; Privacy &rarr; Delete my account</strong>. You
+will be shown exactly what is removed and what is kept, and asked to type
+<code>DELETE</code> to confirm. It happens immediately — there is no waiting
+period and no need to contact anyone.</p>
+
+<h2>If you have already uninstalled the app</h2>
+<p>Email <a href="mailto:privacy@altaros.com">privacy@altaros.com</a> from the
+address on your account, or write from the phone number on it, and say that you
+want your account deleted. We complete the request within 30 days and email you
+a reference when it is done.</p>
+
+<h2>What is removed</h2>
+<p>Your login, your profile, and everything personal: prayer requests, welfare
+and pastoral records, posts and comments, attendance, serving rota, follow-up
+notes, notification history and your registered devices. Deletion is
+immediate and cannot be undone.</p>
+
+<h2>What is kept, and why</h2>
+<p>Not everything can lawfully be destroyed. These survive with
+<strong>your name removed</strong> and no way to reconnect them to you:</p>
+<ul>`+kept.String()+`</ul>
+
+<div class="note">We say this plainly because you are entitled to know it before
+you decide. An app that says &ldquo;all your data has been deleted&rdquo; while
+keeping a named record of your giving would be lying to you about something
+Act 843 gives you the right to ask about.</div>
+
+<h2>Questions</h2>
+<p><a href="mailto:privacy@altaros.com">privacy@altaros.com</a> &middot;
+<a href="/api/v1/privacy/policy">Privacy policy</a></p>`)
 	}
 }
