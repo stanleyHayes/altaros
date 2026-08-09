@@ -234,20 +234,32 @@ func TestGivingProducesAnSMSReceiptThroughKafka(t *testing.T) {
 	targetEventID.Store("")
 	inner := givingReceiptHandler(d, notifications, nil)
 	err = bus.Consume(consumeCtx, map[string]events.Handler{
-		events.TopicGivingCompleted: deduper.Wrap(func(c context.Context, e *events.Envelope, raw []byte) error {
-			if err := inner(c, e, raw); err != nil {
-				return err
-			}
-			// A unique consumer group begins at the topic's configured offset,
-			// which may include records from prior test runs. Only the transaction
-			// created below proves this flow, and ignoring older transactions prevents them
-			// from filling the channel and deadlocking Bus.Close during cleanup.
-			data, _ := e.Data.(map[string]any)
-			if data["transactionId"] == targetEventID.Load().(string) {
-				handled <- e.ID
-			}
-			return nil
-		}),
+		// Wrapped exactly as StartConsumers wraps it, including the bounded
+		// retry, so this test keeps testing the production wiring rather than
+		// a simplified copy of it.
+		//
+		// NOTE: this alignment does NOT currently make the test pass. It is
+		// failing for a reason not yet identified — the consumer joins and is
+		// assigned all three partitions, the event is confirmed published, and
+		// yet no offset is ever committed. The bounded retry was expected to
+		// clear it and did not, so the "old records block the replay" theory
+		// is unproven. Do not read a green run here as evidence either way
+		// until the cause is actually found.
+		events.TopicGivingCompleted: deduper.GiveUpAfterRepeatedFailure(
+			deduper.Wrap(func(c context.Context, e *events.Envelope, raw []byte) error {
+				if err := inner(c, e, raw); err != nil {
+					return err
+				}
+				// A unique consumer group begins at the topic's configured offset,
+				// which may include records from prior test runs. Only the transaction
+				// created below proves this flow, and ignoring older transactions prevents them
+				// from filling the channel and deadlocking Bus.Close during cleanup.
+				data, _ := e.Data.(map[string]any)
+				if data["transactionId"] == targetEventID.Load().(string) {
+					handled <- e.ID
+				}
+				return nil
+			})),
 	})
 	if err != nil {
 		t.Fatalf("Consume: %v", err)
