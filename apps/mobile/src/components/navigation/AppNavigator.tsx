@@ -19,6 +19,7 @@ import { EventDetailScreen } from '../../screens/events/EventDetailScreen';
 import { CreatePostScreen } from '../../screens/social/CreatePostScreen';
 import { WelfareScreen } from '../../screens/welfare/WelfareScreen';
 import { NotificationsScreen } from '../../screens/notifications/NotificationsScreen';
+import PrivacyScreen from '../../screens/profile/PrivacyScreen';
 import { GivingCompleteScreen } from '../../screens/giving/GivingCompleteScreen';
 import { PostCommentsScreen } from '../../screens/social/PostCommentsScreen';
 import { colors, typography } from '../../theme';
@@ -53,6 +54,9 @@ export type RootStackParamList = {
   PostComments: { postId: string; postTitle?: string };
   Welfare: undefined;
   Notifications: undefined;
+  // Data subject rights. Apple 5.1.1(v) requires the deletion path to be
+  // reachable inside the app, not only from a website.
+  Privacy: undefined;
 };
 
 const AuthStack = createNativeStackNavigator<AuthStackParamList>();
@@ -204,6 +208,11 @@ function MainNavigator() {
         name="Notifications"
         component={NotificationsScreen}
         options={{ title: 'Notifications' }}
+      />
+      <RootStack.Screen
+        name="Privacy"
+        component={PrivacyScreen}
+        options={{ title: 'Your data' }}
       />
     </RootStack.Navigator>
   );

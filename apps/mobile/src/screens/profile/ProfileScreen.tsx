@@ -261,6 +261,10 @@ export function ProfileScreen() {
     { label: 'Notifications', detail: 'Messages and push alerts', icon: 'notifications-outline' as const, external: false, action: () => navigation.navigate('Notifications') },
     { label: 'Giving history', detail: 'Receipts and pending gifts', icon: 'receipt-outline' as const, external: false, action: () => navigation.navigate('GivingHistory') },
     { label: 'Welfare & care', detail: 'Private pastoral support', icon: 'hand-left-outline' as const, external: false, action: () => navigation.navigate('Welfare') },
+    // Apple 5.1.1(v): account deletion has to be reachable from inside the
+    // app. Kept beside the other account rows rather than buried, because a
+    // deletion path a reviewer cannot find is treated as one that is missing.
+    { label: 'Your data', detail: 'Download a copy, or delete your account', icon: 'shield-checkmark-outline' as const, external: false, action: () => navigation.navigate('Privacy') },
     { label: 'Privacy', detail: 'How Altar OS handles your data', icon: 'finger-print-outline' as const, external: true, url: 'https://altaros.com/privacy', action: () => { void openExternal('https://altaros.com/privacy', 'Privacy information'); } },
     { label: 'Help centre', detail: 'Get support from our team', icon: 'chatbubble-ellipses-outline' as const, external: true, url: 'https://altaros.com/help', action: () => { void openExternal('https://altaros.com/help', 'Help centre'); } },
   ];
