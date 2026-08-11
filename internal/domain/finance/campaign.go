@@ -33,6 +33,8 @@ const CampaignCollection = "campaigns"
 var (
 	// ErrCampaignNotFound means no such campaign in this church.
 	ErrCampaignNotFound = errors.New("finance: campaign not found")
+	// ErrCampaignVisibility means an unrecognised audience.
+	ErrCampaignVisibility = errors.New("finance: that audience is not recognised")
 	// ErrCampaignTitle means a campaign was submitted without a title.
 	ErrCampaignTitle = errors.New("finance: a campaign needs a title")
 	// ErrCampaignTarget means the target is not a usable amount.
@@ -62,6 +64,43 @@ type Campaign struct {
 	StartDate time.Time `bson:"startDate" json:"startDate"`
 	EndDate   time.Time `bson:"endDate"   json:"endDate"`
 	IsActive  bool      `bson:"isActive"  json:"isActive"`
+
+	// Visibility is who may see this campaign, and it is NOT the same question
+	// as IsActive.
+	//
+	// IsActive says the appeal is running. Visibility says who has been shown
+	// it. A church drafts a building-fund appeal weeks before it announces it,
+	// and an appeal that appears on the public website the moment somebody
+	// types a title is a church's plans published by accident.
+	//
+	// Draft is therefore the default, and it is the zero value on purpose:
+	// a campaign created by an older client that knows nothing about this
+	// field stays private rather than being published by omission.
+	Visibility Visibility `bson:"visibility,omitempty" json:"visibility"`
+
+	// ListedInDirectory opts this campaign into ALTAR OS's own marketing site.
+	//
+	// Separate from Visibility and defaulting to false, because they are
+	// different consents. Putting an appeal on your own church's website is a
+	// decision about your congregation; putting it on a software company's
+	// homepage, beside other churches, is a decision about your church's
+	// public identity. One does not imply the other and the product must not
+	// treat it as though it does.
+	ListedInDirectory bool `bson:"listedInDirectory,omitempty" json:"listedInDirectory"`
+
+	// ShowProgress reveals the raised figure alongside the target.
+	//
+	// Optional because a thermometer cuts both ways. "GHS 48,000 of GHS
+	// 50,000" recruits the last few givers; "GHS 1,200 of GHS 50,000", visible
+	// to the whole internet, tells a congregation its church is failing. That
+	// is the church's call to make, not ours, so the default is off.
+	ShowProgress bool `bson:"showProgress,omitempty" json:"showProgress"`
+
+	// CoverImageURL is the picture on the appeal.
+	CoverImageURL string `bson:"coverImageUrl,omitempty" json:"coverImageUrl,omitempty"`
+
+	PublishedAt *time.Time `bson:"publishedAt,omitempty" json:"publishedAt,omitempty"`
+	PublishedBy mongodb.ID `bson:"publishedBy,omitempty" json:"publishedBy,omitempty"`
 
 	// CurrentAmount is NOT stored. It is summed from completed giving on every
 	// read, and the json tag is here so it appears in responses.
@@ -102,6 +141,44 @@ type CampaignInput struct {
 	StartDate    time.Time
 	EndDate      time.Time
 	IsActive     *bool
+	// CoverImageURL is checked against the media rules before it is stored.
+	CoverImageURL string
+}
+
+// Visibility is who may see a campaign.
+type Visibility string
+
+const (
+	// VisibilityDraft is church staff only. The zero value, deliberately.
+	VisibilityDraft Visibility = ""
+	// VisibilityMembers is signed-in members of this church.
+	VisibilityMembers Visibility = "members"
+	// VisibilityPublic is anybody, including the church's public website.
+	VisibilityPublic Visibility = "public"
+)
+
+// Valid reports whether a visibility is recognised.
+func (v Visibility) Valid() bool {
+	return v == VisibilityDraft || v == VisibilityMembers || v == VisibilityPublic
+}
+
+// VisibleToMembers reports whether a signed-in member of the church may see it.
+func (v Visibility) VisibleToMembers() bool {
+	return v == VisibilityMembers || v == VisibilityPublic
+}
+
+// VisibleToPublic reports whether an anonymous visitor may see it.
+func (v Visibility) VisibleToPublic() bool { return v == VisibilityPublic }
+
+// PublishRequest changes who can see a campaign.
+type PublishRequest struct {
+	CampaignID string
+	Visibility Visibility
+	// ListedInDirectory and ShowProgress are separate consents — see the
+	// comments on the fields.
+	ListedInDirectory bool
+	ShowProgress      bool
+	ActorID           string
 }
 
 func (in CampaignInput) normalise() (CampaignInput, error) {
@@ -353,4 +430,103 @@ func (c *Campaign) TotalRaised() money.Amount {
 		currency = "GHS"
 	}
 	return money.Amount{Minor: c.CurrentAmount, Currency: currency}
+}
+
+// --- publishing -------------------------------------------------------------
+//
+// Three audiences, three queries, and the narrowing is done in the DATABASE
+// rather than by filtering a full list in the handler. A public endpoint that
+// fetches every campaign and then drops the drafts is one refactor away from
+// forgetting the second half, and the failure is silent: a church's unannounced
+// appeal on its own homepage, discovered by the church.
+
+// Publish sets who may see a campaign.
+func (s *Service) Publish(ctx context.Context, req PublishRequest) (*Campaign, error) {
+	if !req.Visibility.Valid() {
+		return nil, fmt.Errorf("%w: %q", ErrCampaignVisibility, req.Visibility)
+	}
+	oid, err := bson.ObjectIDFromHex(strings.TrimSpace(req.CampaignID))
+	if err != nil {
+		return nil, ErrCampaignNotFound
+	}
+
+	now := s.now().UTC()
+	set := bson.M{
+		"visibility": string(req.Visibility),
+		// Both are re-stated on every publish rather than left alone, so the
+		// screen a person confirmed IS the state that gets stored. Carrying an
+		// old directory opt-in through a re-publish would mean a church that
+		// unticked it still appears on our marketing site.
+		"listedInDirectory": req.ListedInDirectory,
+		"showProgress":      req.ShowProgress,
+		"updatedAt":         now,
+	}
+	if req.Visibility == VisibilityDraft {
+		// Withdrawn. The published stamps go, and so does the directory
+		// listing — a draft must never remain on the marketing site.
+		set["listedInDirectory"] = false
+	} else {
+		set["publishedAt"] = now
+		set["publishedBy"] = mongodb.ID(req.ActorID)
+	}
+
+	if _, err := s.campaigns.UpdateOne(ctx, bson.M{"_id": oid},
+		bson.M{"$set": set}); err != nil {
+		return nil, fmt.Errorf("finance: publish campaign: %w", err)
+	}
+	return s.CampaignByID(ctx, req.CampaignID)
+}
+
+// CampaignsForMembers lists what a signed-in member of this church may see.
+//
+// Members hold no finance permission — see the note on the giving routes — so
+// this is reachable by any member of the church and returns only what the
+// church chose to show them.
+func (s *Service) CampaignsForMembers(ctx context.Context) ([]Campaign, error) {
+	return s.campaignsVisibleTo(ctx, bson.M{
+		"visibility": bson.M{"$in": bson.A{
+			string(VisibilityMembers), string(VisibilityPublic),
+		}},
+	})
+}
+
+// CampaignsForPublic lists what an anonymous visitor to the church's own site
+// may see.
+func (s *Service) CampaignsForPublic(ctx context.Context) ([]Campaign, error) {
+	return s.campaignsVisibleTo(ctx, bson.M{"visibility": string(VisibilityPublic)})
+}
+
+// campaignsVisibleTo runs an audience-narrowed query and fills in progress.
+func (s *Service) campaignsVisibleTo(ctx context.Context, filter bson.M) ([]Campaign, error) {
+	filter["isActive"] = true
+
+	out := []Campaign{}
+	err := s.campaigns.Find(ctx, filter, &out,
+		options.Find().SetSort(bson.D{{Key: "startDate", Value: -1}}).SetLimit(100))
+	if err != nil {
+		return nil, fmt.Errorf("finance: list visible campaigns: %w", err)
+	}
+	if len(out) == 0 {
+		return out, nil
+	}
+	ids := make([]bson.ObjectID, 0, len(out))
+	for i := range out {
+		ids = append(ids, out[i].ID)
+	}
+	raised, err := s.raisedByCampaign(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	for i := range out {
+		out[i].CurrentAmount = raised[out[i].ID.Hex()]
+	}
+	// A church that chose not to show its progress must not have it leak
+	// through the figure itself. Cleared AFTER the sum so the same code path
+	// serves both cases and there is no second query to forget.
+	for i := range out {
+		if !out[i].ShowProgress {
+			out[i].CurrentAmount = 0
+		}
+	}
+	return out, nil
 }
