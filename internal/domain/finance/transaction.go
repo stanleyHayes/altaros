@@ -147,6 +147,14 @@ type Transaction struct {
 	// IdempotencyKey is unique across the whole collection and doubles as the
 	// provider reference for the charge.
 	IdempotencyKey string `bson:"idempotencyKey" json:"idempotencyKey"`
+
+	// SaveMethod is the giver's consent to keep this instrument for one-tap,
+	// recorded when the gift starts and acted on when it settles — the
+	// reusable authorization does not exist until the charge succeeds.
+	//
+	// json:"-" because it is our record of a consent, not something a client
+	// reads back off a receipt.
+	SaveMethod bool `bson:"saveMethod,omitempty" json:"-"`
 	// SettledTo is the subaccount the money reached, checked against the
 	// church's own before the transaction is recognised.
 	SettledTo string `bson:"settledTo,omitempty" json:"settledTo,omitempty"`

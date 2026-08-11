@@ -28,8 +28,27 @@ func giveUpDeduper(t *testing.T) *Deduper {
 		testsupport.SkipOrFail(t, "Redis", err)
 	}
 	t.Cleanup(func() { _ = rdb.Close() })
-	return NewDeduper(rdb, "giveup-test-"+t.Name(), slog.New(
+
+	d := NewDeduper(rdb, "giveup-test-"+t.Name(), slog.New(
 		slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError})))
+
+	// The counter lives in Redis under a key derived from the test name and a
+	// fixed event id, and it OUTLIVES the process. Without this the first run
+	// passed and every run after it failed at the first attempt, having
+	// inherited a count already at the limit — a test that reports a
+	// give-up-too-early bug that is not in the code. Clearing before and after
+	// makes each run start from zero whatever the last one left behind.
+	clear := func() {
+		for _, name := range []string{
+			"evt-poison-" + t.Name(), "evt-recover-" + t.Name(),
+		} {
+			_ = rdb.Del(context.Background(), d.attemptsKey(name)).Err()
+			_ = rdb.Del(context.Background(), d.key(name)).Err()
+		}
+	}
+	clear()
+	t.Cleanup(clear)
+	return d
 }
 
 func TestAPermanentlyFailingEventStopsBlockingThePartition(t *testing.T) {

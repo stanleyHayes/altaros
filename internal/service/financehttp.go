@@ -15,6 +15,7 @@ import (
 	"github.com/hayfordstanley/altar-os/internal/domain/platformsetting"
 	"github.com/hayfordstanley/altar-os/internal/domain/rbac"
 	"github.com/hayfordstanley/altar-os/internal/platform/deps"
+	"github.com/hayfordstanley/altar-os/internal/platform/fieldcrypt"
 	"github.com/hayfordstanley/altar-os/internal/platform/httpx"
 	"github.com/hayfordstanley/altar-os/internal/platform/money"
 	"github.com/hayfordstanley/altar-os/internal/platform/payments"
@@ -60,6 +61,16 @@ func financeRoutes(d *deps.Deps) routeSet {
 	// the notification service. It was nil until now, so the receipt half of
 	// WP-15 could never fire however correct both halves were in isolation.
 	svc := finance.NewService(d.Mongo, gateway, directory, d.Events)
+	// Saved payment methods, or none. A nil cipher makes the service REFUSE
+	// to store an authorization rather than write the credential in the clear
+	// — the same choice welfare makes about pastoral notes, for the same
+	// reason: losing a feature is recoverable, losing the congregation's
+	// payment credentials is not.
+	if d.Config != nil && d.Config.PaymentKey != "" {
+		if c, err := fieldcrypt.New(d.Config.PaymentKey); err == nil {
+			svc = svc.WithPaymentCrypto(c)
+		}
+	}
 	members := member.NewService(d.Mongo, d.Events, d.Config.DataRegion)
 
 	return func(r chi.Router) {
@@ -68,6 +79,11 @@ func financeRoutes(d *deps.Deps) routeSet {
 		// authentication is the HMAC signature over the raw body, checked
 		// before anything is read from it.
 		r.Post("/finance/webhooks/paystack", handlePaystackWebhook(svc, gateway))
+
+		// The church's own public website. Unauthenticated by design — the
+		// tenant is the resolved host, and the query returns only campaigns
+		// the church published to the public.
+		r.Get("/finance/public/campaigns", handlePublicCampaigns(svc))
 
 		r.Group(func(r chi.Router) {
 			r.Use(authenticated(d))
@@ -105,6 +121,22 @@ func financeRoutes(d *deps.Deps) routeSet {
 			// that no longer exists.
 			r.With(requirePermission(rbac.ResourceFinance, rbac.ActionUpdate)).
 				Post("/finance/campaigns/{id}/close", handleCloseGivingCampaign(svc))
+			// Publishing is a finance UPDATE: choosing who sees an appeal is
+			// the church's decision about its own affairs, and a member must
+			// never be able to make it.
+			r.With(requirePermission(rbac.ResourceFinance, rbac.ActionUpdate)).
+				Post("/finance/campaigns/{id}/publish", handlePublishCampaign(svc))
+			// What the congregation sees. No permission, like the rest of the
+			// member-facing giving routes — the narrowing is the query.
+			r.Get("/finance/me/campaigns", handleMemberCampaigns(svc))
+
+			// One-tap giving. No permission on any of them: these are a
+			// member's own saved instrument and their own gift, and the
+			// ownership check is that every one reads the caller's id from
+			// the token rather than the body.
+			r.Get("/finance/me/payment-method", handleMyPaymentMethod(svc, members))
+			r.Delete("/finance/me/payment-method", handleForgetPaymentMethod(svc, members))
+			r.Post("/finance/me/tap", handleTap(svc, members))
 
 			// Pledges (WP-26). The two reads are guarded INSIDE the handler,
 			// not here: a member reading their own pledge holds nothing that
@@ -972,6 +1004,12 @@ func writeFinanceError(w http.ResponseWriter, err error) {
 		httpx.Error(w, http.StatusBadRequest, "Set a target above zero.")
 	case errors.Is(err, finance.ErrCampaignDates):
 		httpx.Error(w, http.StatusBadRequest, "The campaign has to end after it starts.")
+	case errors.Is(err, finance.ErrCampaignVisibility):
+		// Was falling through to 500. An unrecognised audience is the client
+		// sending something wrong, and a 500 tells a church its server broke
+		// while telling us nothing about which value it sent.
+		httpx.Error(w, http.StatusBadRequest,
+			"Choose who may see this campaign: draft, members or public.")
 	case errors.Is(err, tenancy.ErrNoTenant):
 		httpx.Error(w, http.StatusUnauthorized, "Sign in to continue.")
 
@@ -1122,5 +1160,260 @@ func handleCancelPledge(svc *finance.Service) http.HandlerFunc {
 			return
 		}
 		httpx.JSON(w, http.StatusOK, map[string]any{"pledge": out})
+	}
+}
+
+// --- publishing an appeal ---------------------------------------------------
+
+// publishedCampaignView is what a MEMBER or the PUBLIC is shown.
+//
+// The fields are listed rather than embedding *finance.Campaign, for the same
+// reason the congregation's feed lists its own: embedding ships whatever the
+// struct happens to hold today, and this struct holds `createdBy`,
+// `publishedBy` and `churchId` — staff identifiers on an anonymous endpoint —
+// plus `currentAmount`, which is the ONE figure ShowProgress exists to keep
+// private. An embedded view would serve the raised total to the whole internet
+// while the church's toggle sat there saying "off", and nobody would find out
+// until a congregation did.
+type publishedCampaignView struct {
+	ID            string     `json:"id"`
+	Title         string     `json:"title"`
+	Description   string     `json:"description,omitempty"`
+	CoverImageURL string     `json:"coverImageUrl,omitempty"`
+	TargetAmount  int64      `json:"targetAmount"`
+	Currency      string     `json:"currency"`
+	StartDate     time.Time  `json:"startDate"`
+	EndDate       time.Time  `json:"endDate"`
+	PublishedAt   *time.Time `json:"publishedAt,omitempty"`
+
+	// Both omitted entirely when the church keeps the thermometer off — a
+	// zero would read as "nobody has given", which is worse than silence.
+	CurrentAmount *int64 `json:"currentAmount,omitempty"`
+	Progress      *int   `json:"progress,omitempty"`
+}
+
+func viewPublished(c *finance.Campaign) publishedCampaignView {
+	currency := c.Currency
+	if currency == "" {
+		currency = "GHS"
+	}
+	v := publishedCampaignView{
+		ID: c.ID.Hex(), Title: c.Title, Description: c.Description,
+		CoverImageURL: c.CoverImageURL, TargetAmount: c.TargetAmount,
+		Currency: currency, StartDate: c.StartDate, EndDate: c.EndDate,
+		PublishedAt: c.PublishedAt,
+	}
+	if c.ShowProgress {
+		raised, progress := c.CurrentAmount, c.Progress()
+		v.CurrentAmount, v.Progress = &raised, &progress
+	}
+	return v
+}
+
+func viewPublishedList(cs []finance.Campaign) []publishedCampaignView {
+	out := make([]publishedCampaignView, 0, len(cs))
+	for i := range cs {
+		out = append(out, viewPublished(&cs[i]))
+	}
+	return out
+}
+
+// handlePublishCampaign sets who may see an appeal.
+func handlePublishCampaign(svc *finance.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Visibility        string `json:"visibility"`
+			ListedInDirectory bool   `json:"listedInDirectory"`
+			ShowProgress      bool   `json:"showProgress"`
+		}
+		if err := decode(r, &body); err != nil {
+			httpx.Error(w, http.StatusBadRequest, "Malformed request body")
+			return
+		}
+		scope, _ := tenancy.FromContext(r.Context())
+		updated, err := svc.Publish(r.Context(), finance.PublishRequest{
+			CampaignID:        chi.URLParam(r, "id"),
+			Visibility:        finance.Visibility(body.Visibility),
+			ListedInDirectory: body.ListedInDirectory,
+			ShowProgress:      body.ShowProgress,
+			ActorID:           scope.UserID,
+		})
+		if err != nil {
+			writeFinanceError(w, err)
+			return
+		}
+		httpx.JSON(w, http.StatusOK, viewCampaign(updated))
+	}
+}
+
+// handleMemberCampaigns lists the appeals this church has shown its members.
+func handleMemberCampaigns(svc *finance.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		campaigns, err := svc.CampaignsForMembers(r.Context())
+		if err != nil {
+			writeFinanceError(w, err)
+			return
+		}
+		httpx.JSON(w, http.StatusOK,
+			map[string]any{"campaigns": viewPublishedList(campaigns)})
+	}
+}
+
+// handlePublicCampaigns lists the appeals on a church's own public site.
+//
+// No token: the tenant comes from the resolved host, exactly as the rest of the
+// public site does, and the query itself is narrowed to public campaigns in the
+// database rather than filtered here.
+func handlePublicCampaigns(svc *finance.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		scoped, ok := publicScope(r)
+		if !ok {
+			httpx.Error(w, http.StatusNotFound, "No church is served at this address.")
+			return
+		}
+		campaigns, err := svc.CampaignsForPublic(scoped.Context())
+		if err != nil {
+			writeFinanceError(w, err)
+			return
+		}
+		httpx.JSON(w, http.StatusOK,
+			map[string]any{"campaigns": viewPublishedList(campaigns)})
+	}
+}
+
+// --- one-tap giving ---------------------------------------------------------
+
+// callerMember resolves the signed-in account to its member profile.
+//
+// Every one-tap route goes through this rather than reading an id from the
+// body. That is the whole ownership model here: there is no member id on the
+// wire that a caller could put someone else's value into, so "give from my
+// saved card" cannot be made to mean anyone else's.
+func callerMember(w http.ResponseWriter, r *http.Request, members memberAccountResolver) (*member.Member, bool) {
+	scope, err := callerScope(r)
+	if err != nil {
+		httpx.Error(w, http.StatusUnauthorized, "Sign in to continue.")
+		return nil, false
+	}
+	linked, err := members.ByUserID(r.Context(), scope.UserID)
+	if err != nil || linked == nil || linked.ID.IsZero() {
+		httpx.Error(w, http.StatusConflict,
+			"Your account is not linked to a member profile yet.")
+		return nil, false
+	}
+	return linked, true
+}
+
+// handleMyPaymentMethod returns the caller's saved instrument, or nothing.
+//
+// A missing method is 200 with a null, not 404: "you have not saved a card" is
+// an ordinary state of a working account, and a 404 would have the app show an
+// error where it should show the button that saves one.
+func handleMyPaymentMethod(svc *finance.Service, members memberAccountResolver) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		me, ok := callerMember(w, r, members)
+		if !ok {
+			return
+		}
+		method, err := svc.PaymentMethodFor(r.Context(), me.ID.Hex())
+		if err != nil && !errors.Is(err, finance.ErrNoPaymentMethod) {
+			writeFinanceError(w, err)
+			return
+		}
+		httpx.JSON(w, http.StatusOK, map[string]any{
+			"paymentMethod": method,
+			"presetAmounts": finance.PresetAmountsMinor,
+			"tapLimit":      finance.TapLimitMinor,
+		})
+	}
+}
+
+// handleForgetPaymentMethod deletes the caller's saved instrument.
+func handleForgetPaymentMethod(svc *finance.Service, members memberAccountResolver) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		me, ok := callerMember(w, r, members)
+		if !ok {
+			return
+		}
+		if err := svc.ForgetPaymentMethod(r.Context(), me.ID.Hex()); err != nil {
+			writeFinanceError(w, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+// handleTap gives a preset amount from the saved instrument, in one action.
+func handleTap(svc *finance.Service, members memberAccountResolver) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			AmountMinor int64  `json:"amountMinor"`
+			Currency    string `json:"currency"`
+			SessionID   string `json:"sessionId"`
+			CampaignID  string `json:"campaignId"`
+			TapID       string `json:"tapId"`
+		}
+		if err := decode(r, &body); err != nil {
+			httpx.Error(w, http.StatusBadRequest, "Malformed request body")
+			return
+		}
+		me, ok := callerMember(w, r, members)
+		if !ok {
+			return
+		}
+		// The email is the MEMBER's, read from their profile rather than
+		// accepted from the body: a tap sends no email, and one that did
+		// would let a caller redirect somebody else's provider receipt.
+		tx, err := svc.Tap(r.Context(), finance.TapRequest{
+			MemberID: me.ID.Hex(), AmountMinor: body.AmountMinor,
+			Currency: body.Currency, SessionID: body.SessionID,
+			CampaignID: body.CampaignID, TapID: body.TapID,
+			Email: me.Email,
+		})
+		if err != nil {
+			writeTapError(w, err)
+			return
+		}
+		httpx.JSON(w, http.StatusCreated, map[string]any{"transaction": tx})
+	}
+}
+
+// writeTapError keeps the one-tap failures apart from the giving ones.
+//
+// Each of these is a different instruction to the person holding the phone,
+// and collapsing them into "that did not work" is what turns a recoverable
+// moment during a service into a member giving up.
+func writeTapError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, finance.ErrNoPaymentMethod):
+		httpx.Error(w, http.StatusPreconditionRequired,
+			"Give once the usual way first, and choose to save your details for next time.")
+	case errors.Is(err, finance.ErrAboveTapLimit):
+		httpx.Error(w, http.StatusUnprocessableEntity,
+			"That amount is above the one-tap limit. Please confirm it the usual way.")
+	case errors.Is(err, finance.ErrTooSoon):
+		// Not an error the giver caused: they pressed twice, and the second
+		// press is being ABSORBED rather than charged. Saying so is what stops
+		// them pressing a third time.
+		httpx.Error(w, http.StatusTooManyRequests,
+			"We already have that gift — it was only counted once.")
+	case errors.Is(err, finance.ErrMethodNotReusable):
+		httpx.Error(w, http.StatusPreconditionFailed,
+			"Your saved details cannot be used for one-tap giving. Please give the usual way.")
+	case errors.Is(err, finance.ErrPaymentKeyMissing):
+		// NOT the member's fault and not about their details: no encryption
+		// key is configured, so this server cannot hold a saved instrument at
+		// all. Sharing the "your saved details cannot be used" message sent a
+		// deployment problem to the congregation as a personal one, and left
+		// the operator with nothing pointing at the missing key.
+		httpx.Error(w, http.StatusServiceUnavailable,
+			"One-tap giving is not switched on for this server yet.")
+	case errors.Is(err, finance.ErrPaymentFailed):
+		httpx.Error(w, http.StatusPaymentRequired,
+			"Your bank did not approve that payment. Nothing has been charged.")
+	case errors.Is(err, finance.ErrTapIDRequired), errors.Is(err, finance.ErrTapMemberRequired):
+		httpx.Error(w, http.StatusBadRequest, "That gift could not be identified.")
+	default:
+		writeFinanceError(w, err)
 	}
 }

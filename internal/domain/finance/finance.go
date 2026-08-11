@@ -6,6 +6,7 @@ import (
 	"encoding/base32"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -206,6 +207,16 @@ type GiveRequest struct {
 	CampaignID      string
 	Note            string
 	CallbackURL     string
+
+	// SaveMethod is the giver asking us to keep this instrument for one-tap.
+	//
+	// Recorded at give time and acted on at SETTLE time, because the reusable
+	// authorization does not exist until the charge succeeds. Storing the
+	// consent on the transaction is what keeps the two moments joined: without
+	// it, settle would have to guess, and the safe guess (never save) would
+	// make the feature unreachable while the unsafe one keeps a card nobody
+	// agreed to us keeping.
+	SaveMethod bool
 }
 
 // GiveResult is what the giver needs to complete the payment.
@@ -324,6 +335,9 @@ func (s *Service) StartGiving(ctx context.Context, req GiveRequest) (*GiveResult
 	}
 	if req.MemberID != "" {
 		doc["memberId"] = req.MemberID
+	}
+	if req.SaveMethod {
+		doc["saveMethod"] = true
 	}
 	if req.InitiatorID != "" {
 		doc["initiatedBy"] = req.InitiatorID
@@ -519,6 +533,18 @@ func (s *Service) settle(ctx context.Context, stored *Transaction) (*Transaction
 		// Someone else settled it first. Return their row without emitting a
 		// second completion event.
 		return settled, nil
+	}
+
+	// The instrument, if the giver asked us to keep it. AFTER the settle
+	// transition and deliberately non-fatal: a gift that reached the church is
+	// not undone because we could not file a card for next time. The member
+	// sees no saved method and taps through the full flow again, which is the
+	// correct failure — the alternative is refusing money that already moved.
+	if stored.SaveMethod && v.Authorization != nil {
+		if _, err := s.SavePaymentMethod(ctx, settled.MemberID.String(), v.Authorization); err != nil {
+			slog.WarnContext(ctx, "could not save payment method",
+				"reference", settled.IdempotencyKey, "error", err)
+		}
 	}
 
 	if s.pub != nil {

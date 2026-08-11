@@ -12,7 +12,9 @@ import (
 	"github.com/hayfordstanley/altar-os/internal/domain/discipleship"
 	"github.com/hayfordstanley/altar-os/internal/domain/finance"
 	"github.com/hayfordstanley/altar-os/internal/domain/invitation"
+	"github.com/hayfordstanley/altar-os/internal/domain/live"
 	"github.com/hayfordstanley/altar-os/internal/domain/member"
+	"github.com/hayfordstanley/altar-os/internal/domain/plan"
 	"github.com/hayfordstanley/altar-os/internal/domain/rbac"
 	"github.com/hayfordstanley/altar-os/internal/domain/site"
 	"github.com/hayfordstanley/altar-os/internal/domain/social"
@@ -48,6 +50,9 @@ func EnsureIndexes(ctx context.Context, d *deps.Deps) error {
 		{"finance pledges", finance.NewService(d.Mongo, nil, nil, nil).EnsurePledgeIndexes},
 		{"social", social.NewService(d.Mongo).EnsureIndexes},
 		{"discipleship", discipleship.NewService(d.Mongo).EnsureIndexes},
+		{"plans", plan.NewService(d.Mongo).EnsureIndexes},
+		{"live", live.NewService(d.Mongo, plan.NewService(d.Mongo), live.NotConfigured{}).EnsureIndexes},
+		{"payment methods", finance.NewService(d.Mongo, nil, nil, nil).EnsurePaymentMethodIndexes},
 		{"notification", newNotificationService(d).EnsureIndexes},
 		{"rbac", rbac.NewService(d.Mongo).EnsureIndexes},
 		{"invitation", invitation.NewService(d.Mongo).EnsureIndexes},

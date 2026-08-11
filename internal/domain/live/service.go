@@ -9,6 +9,7 @@ import (
 
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
+	"go.mongodb.org/mongo-driver/v2/mongo/options"
 
 	"github.com/hayfordstanley/altar-os/internal/domain/plan"
 	"github.com/hayfordstanley/altar-os/internal/platform/mongodb"
@@ -290,3 +291,105 @@ func (s *Service) read(ctx context.Context, id string) (bson.ObjectID, *Session,
 	}
 	return oid, &out, nil
 }
+
+// ScheduleInput creates a session before it goes live.
+type ScheduleInput struct {
+	Title       string
+	Description string
+	Kind        Kind
+	CampaignID  string
+}
+
+// Schedule creates a session in the scheduled state.
+//
+// Separate from Start on purpose: a church puts next Sunday's service in the
+// app during the week, and the tier is checked when it STARTS rather than
+// here — scheduling something your plan cannot yet run is a reason to upgrade,
+// not an error to show a volunteer on a Tuesday.
+func (s *Service) Schedule(ctx context.Context, in ScheduleInput) (*Session, error) {
+	title := strings.TrimSpace(in.Title)
+	if title == "" {
+		return nil, ErrTitleRequired
+	}
+	if in.Kind == "" {
+		in.Kind = KindBroadcast
+	}
+	if !in.Kind.Valid() {
+		in.Kind = KindBroadcast
+	}
+
+	now := s.now()
+	doc := bson.M{
+		"title": title, "kind": string(in.Kind),
+		"status":         string(StatusScheduled),
+		"currentViewers": 0, "maxViewers": 0, "peakViewers": 0,
+		"createdAt": now, "updatedAt": now,
+	}
+	if d := strings.TrimSpace(in.Description); d != "" {
+		doc["description"] = d
+	}
+	if in.CampaignID != "" {
+		doc["campaignId"] = mongodb.ID(in.CampaignID)
+	}
+
+	res, err := s.sessions.InsertOne(ctx, doc)
+	if err != nil {
+		return nil, fmt.Errorf("live: schedule session: %w", err)
+	}
+	oid, _ := res.InsertedID.(bson.ObjectID)
+	return s.SessionByID(ctx, oid.Hex())
+}
+
+// Sessions lists this church's services, newest first.
+func (s *Service) Sessions(ctx context.Context) ([]Session, error) {
+	out := []Session{}
+	err := s.sessions.Find(ctx, bson.M{}, &out,
+		options.Find().SetSort(bson.D{{Key: "createdAt", Value: -1}}).SetLimit(100))
+	if err != nil {
+		return nil, fmt.Errorf("live: list sessions: %w", err)
+	}
+	return out, nil
+}
+
+// EnsureIndexes creates what live sessions need.
+func (s *Service) EnsureIndexes(ctx context.Context) error {
+	if err := s.sessions.EnsureIndexes(ctx, []mongo.IndexModel{{
+		Keys: bson.D{
+			{Key: "churchId", Value: 1}, {Key: "status", Value: 1},
+			{Key: "createdAt", Value: -1},
+		},
+		Options: options.Index().SetName("church_live_status"),
+	}}); err != nil {
+		return fmt.Errorf("live: session indexes: %w", err)
+	}
+	return s.viewers.EnsureIndexes(ctx, []mongo.IndexModel{{
+		// One live seat per member per session. The unique index is what makes
+		// the "already watching" check safe under a reconnect storm rather
+		// than merely usually right.
+		Keys: bson.D{
+			{Key: "churchId", Value: 1}, {Key: "sessionId", Value: 1},
+			{Key: "memberId", Value: 1}, {Key: "joinedAt", Value: 1},
+		},
+		Options: options.Index().SetName("church_session_member_seat"),
+	}})
+}
+
+// NotConfigured is the media server used when no SFU is wired up.
+//
+// It REFUSES rather than pretending, for the same reason an unconfigured SMS
+// transport records a suppression instead of reporting success: a church that
+// presses "go live" and sees nothing happen deserves to be told the feature is
+// not switched on, not left watching a spinner while the product implies a
+// broadcast nobody can join.
+type NotConfigured struct{}
+
+// ErrMediaNotConfigured means no SFU is available in this deployment.
+var ErrMediaNotConfigured = errors.New("live: streaming is not configured on this server")
+
+func (NotConfigured) OpenRoom(context.Context, string, Kind) (string, error) {
+	return "", ErrMediaNotConfigured
+}
+func (NotConfigured) Grant(context.Context, string, string, Role) (*Grant, error) {
+	return nil, ErrMediaNotConfigured
+}
+func (NotConfigured) CloseRoom(context.Context, string) error { return nil }

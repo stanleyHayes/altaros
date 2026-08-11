@@ -63,6 +63,13 @@ func run() error {
 		return err
 	}
 
+	// Before config.Load, because config reads the process environment and
+	// this is what puts the file's settings there. A real environment variable
+	// always wins, so this changes nothing in a deployment that passes its own.
+	if err := config.LoadDotEnv(""); err != nil {
+		return fmt.Errorf("read env file: %w", err)
+	}
+
 	cfg, err := config.Load(*serviceName)
 	if err != nil {
 		return err

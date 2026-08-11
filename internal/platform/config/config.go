@@ -10,6 +10,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -100,6 +101,15 @@ type Config struct {
 	// Absent, the welfare service refuses to store anything rather than
 	// writing plaintext — see welfare.NewService.
 	WelfareKey string
+
+	// PaymentKey encrypts stored payment authorizations (one-tap giving).
+	//
+	// A SEPARATE key from WelfareKey rather than one "encryption key" reused:
+	// the two protect different things from different people, and a single key
+	// means a compromise of pastoral notes is also a compromise of every saved
+	// card. When unset, saved payment methods are refused rather than stored
+	// in plaintext, which costs a feature instead of a congregation's cards.
+	PaymentKey string
 }
 
 // MongoConfig configures the MongoDB connection.
@@ -328,6 +338,7 @@ func Load(serviceName string) (*Config, error) {
 			APISecret: os.Getenv("CLOUDINARY_API_SECRET"),
 		},
 		WelfareKey: os.Getenv("WELFARE_ENCRYPTION_KEY"),
+		PaymentKey: os.Getenv("PAYMENT_ENCRYPTION_KEY"),
 		Anthropic: AnthropicConfig{
 			APIKey: os.Getenv("ANTHROPIC_API_KEY"),
 			Model:  getenv("ANTHROPIC_MODEL", "claude-opus-5"),
@@ -401,12 +412,54 @@ func requiredSecrets(service string, sms SMSProvider) map[string]func(*Config) s
 	return out
 }
 
+// validateNotProxyingItself refuses a port that is also the legacy upstream.
+//
+// A gateway listening on the address it forwards unported routes to answers
+// its own proxy: every unported path loops back into the process until
+// something gives up. It starts cleanly and logs nothing wrong, which is why
+// this is a startup refusal rather than a runtime surprise — the failure is
+// otherwise indistinguishable from the legacy API being down.
+//
+// Found the hard way, by loading the legacy API's own env file (PORT=3001)
+// into this binary.
+func (c *Config) validateNotProxyingItself() error {
+	if c.LegacyAPIURL == "" {
+		return nil
+	}
+	u, err := url.Parse(c.LegacyAPIURL)
+	if err != nil {
+		return fmt.Errorf("config: LEGACY_API_URL is not a URL: %w", err)
+	}
+	port := u.Port()
+	if port == "" {
+		switch u.Scheme {
+		case "http":
+			port = "80"
+		case "https":
+			port = "443"
+		}
+	}
+	if port != strconv.Itoa(c.HTTPPort) {
+		return nil
+	}
+	if host := u.Hostname(); host != "localhost" && host != "127.0.0.1" && host != "::1" {
+		// A different machine on the same port is ordinary.
+		return nil
+	}
+	return fmt.Errorf(
+		"config: PORT %d is also LEGACY_API_URL (%s) — the gateway would proxy to itself",
+		c.HTTPPort, c.LegacyAPIURL)
+}
+
 func (c *Config) validate() error {
 	if c.HTTPPort <= 0 || c.HTTPPort > 65535 {
 		return fmt.Errorf("config: PORT must be 1-65535 (got %d)", c.HTTPPort)
 	}
 	if len(c.CORSOrigins) == 0 {
 		return errors.New("config: CORS_ORIGIN must list at least one origin")
+	}
+	if err := c.validateNotProxyingItself(); err != nil {
+		return err
 	}
 
 	if !c.Env.RequiresRealSecrets() {
