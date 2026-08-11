@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/pion/rtp"
 	"github.com/pion/webrtc/v4"
 )
 
@@ -42,6 +43,10 @@ type Room struct {
 	publisher *webrtc.PeerConnection
 
 	closed bool
+
+	// recorder writes the service to disk, when the church switched it on.
+	// Nil is the normal case: recording is off by default.
+	recorder *Recorder
 }
 
 type viewer struct {
@@ -150,6 +155,9 @@ func (r *Room) removeTrack(id string) {
 func (r *Room) forward(remote *webrtc.TrackRemote, local *webrtc.TrackLocalStaticRTP) {
 	defer r.removeTrack(remote.ID())
 
+	recorder := r.Recorder()
+	codec := remote.Codec()
+
 	buf := make([]byte, 1500)
 	for {
 		n, _, err := remote.Read(buf)
@@ -159,13 +167,39 @@ func (r *Room) forward(remote *webrtc.TrackRemote, local *webrtc.TrackLocalStati
 			}
 			return
 		}
+
+		// FORWARD FIRST, record second. The congregation watching now takes
+		// precedence over the recording of it: if writing to disk ever became
+		// slow, a recorder ahead of the forward would stall the live stream
+		// for everyone in order to save a file nobody is watching yet.
 		if _, err := local.Write(buf[:n]); err != nil && !errors.Is(err, io.ErrClosedPipe) {
 			// A write failure is one viewer's connection, not the broadcast.
 			// Returning here would end the service for everyone because one
 			// person's phone went into a tunnel.
 			r.log.Debug("forward write failed", "room", r.ID, "error", err)
 		}
+
+		if recorder != nil {
+			packet := &rtp.Packet{}
+			if err := packet.Unmarshal(buf[:n]); err == nil {
+				recorder.Write(codec, packet)
+			}
+		}
 	}
+}
+
+// SetRecorder attaches a recorder to this room.
+func (r *Room) SetRecorder(rec *Recorder) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.recorder = rec
+}
+
+// Recorder is this room's recorder, or nil.
+func (r *Room) Recorder() *Recorder {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.recorder
 }
 
 // currentTracks is a snapshot for a viewer that is joining or renegotiating.
@@ -339,7 +373,18 @@ func (r *Room) Close() {
 	r.publisher = nil
 	r.viewers = map[string]*viewer{}
 	r.tracks = map[string]*webrtc.TrackLocalStaticRTP{}
+	recorder := r.recorder
 	r.mu.Unlock()
+
+	// Closed here so the files are finished even when a service ends by the
+	// process shutting down rather than a pastor pressing stop. An IVF file
+	// whose header was never rewritten is not playable.
+	if recorder != nil {
+		if _, err := recorder.Close(); err != nil {
+			r.log.Warn("recording did not finish cleanly",
+				"room", r.ID, "error", err)
+		}
+	}
 
 	// Closed outside the lock: PeerConnection.Close blocks while ICE shuts
 	// down, and holding the room lock through 500 of those would stall every

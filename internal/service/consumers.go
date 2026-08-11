@@ -47,6 +47,11 @@ func StartConsumers(ctx context.Context, d *deps.Deps) error {
 	// a control.
 	go startRetentionSweeper(ctx, d)
 
+	// Recordings expire on their own schedule: a recorded service is sensitive
+	// personal data under Act 843 s.1, and its retention is enforced rather
+	// than left to a settings page nobody re-reads.
+	go startRecordingRetention(ctx, d)
+
 	if d.Events == nil || !d.Events.Enabled() {
 		d.Log.Warn("event consumers not started — no Kafka brokers configured; " +
 			"giving receipts will not be sent")

@@ -348,6 +348,7 @@ func Load(serviceName string) (*Config, error) {
 			TURNURLs:       splitList(os.Getenv("LIVE_TURN_URLS")),
 			TURNUsername:   os.Getenv("LIVE_TURN_USERNAME"),
 			TURNCredential: os.Getenv("LIVE_TURN_CREDENTIAL"),
+			RecordingDir:   os.Getenv("LIVE_RECORDING_DIR"),
 		},
 		Anthropic: AnthropicConfig{
 			APIKey: os.Getenv("ANTHROPIC_API_KEY"),
@@ -663,6 +664,15 @@ type LiveConfig struct {
 	TURNURLs       []string
 	TURNUsername   string
 	TURNCredential string
+
+	// RecordingDir is where recorded services are written.
+	//
+	// Empty means recording is OFF for this deployment, and the retention
+	// sweeper says so at startup rather than starting silently over nothing.
+	// A church can still switch recording on per session; without a directory
+	// there is nowhere for it to go, and being told that is better than a
+	// service the church believes was captured and was not.
+	RecordingDir string
 }
 
 // Enabled reports whether live streaming can run at all.

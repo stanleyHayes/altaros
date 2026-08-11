@@ -125,6 +125,14 @@ type Session struct {
 
 	CreatedAt time.Time `bson:"createdAt" json:"createdAt"`
 	UpdatedAt time.Time `bson:"updatedAt" json:"updatedAt"`
+	// Recording says this service is being recorded, and it is what every
+	// viewer is told on join.
+	//
+	// Off by default and set per session, so a church that never thinks about
+	// recording never records. A recorded service captures the congregation —
+	// who attended, who came forward, who wept — which under Act 843 s.1 is
+	// SENSITIVE personal data because it reveals religious belief.
+	Recording bool `bson:"recording,omitempty" json:"recording"`
 }
 
 // Viewer is one person watching, and the row the cap is counted from.

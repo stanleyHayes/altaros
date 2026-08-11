@@ -22,21 +22,32 @@ type Entitlements interface {
 
 // Service runs live sessions.
 type Service struct {
-	sessions *mongodb.TenantCollection
-	viewers  *mongodb.TenantCollection
-	plans    Entitlements
-	media    MediaServer
-	now      func() time.Time
+	sessions   *mongodb.TenantCollection
+	viewers    *mongodb.TenantCollection
+	recordings *mongodb.TenantCollection
+	// allRecordings is the retention sweeper's handle, and the ONE place in
+	// this domain that reads across churches.
+	//
+	// Global() rather than Tenant() because retention has to run for every
+	// church, including the ones nobody is looking at — a rule that only
+	// applied where somebody remembered to sweep is not a rule. It is used by
+	// exactly two methods, both of which name a recording by its own id.
+	allRecordings *mongo.Collection
+	plans         Entitlements
+	media         MediaServer
+	now           func() time.Time
 }
 
 // NewService builds the service.
 func NewService(db *mongodb.DB, plans Entitlements, media MediaServer) *Service {
 	return &Service{
-		sessions: db.Tenant(SessionCollection),
-		viewers:  db.Tenant(ViewerCollection),
-		plans:    plans,
-		media:    media,
-		now:      func() time.Time { return time.Now().UTC() },
+		sessions:      db.Tenant(SessionCollection),
+		viewers:       db.Tenant(ViewerCollection),
+		recordings:    db.Tenant(RecordingCollection),
+		allRecordings: db.Global(RecordingCollection),
+		plans:         plans,
+		media:         media,
+		now:           func() time.Time { return time.Now().UTC() },
 	}
 }
 
@@ -298,6 +309,9 @@ type ScheduleInput struct {
 	Description string
 	Kind        Kind
 	CampaignID  string
+	// Recording says this service will be recorded, and every viewer is told
+	// so when they join. Off unless asked for.
+	Recording bool
 }
 
 // Schedule creates a session in the scheduled state.
@@ -331,6 +345,9 @@ func (s *Service) Schedule(ctx context.Context, in ScheduleInput) (*Session, err
 	if in.CampaignID != "" {
 		doc["campaignId"] = mongodb.ID(in.CampaignID)
 	}
+	if in.Recording {
+		doc["recording"] = true
+	}
 
 	res, err := s.sessions.InsertOne(ctx, doc)
 	if err != nil {
@@ -361,6 +378,21 @@ func (s *Service) EnsureIndexes(ctx context.Context) error {
 		Options: options.Index().SetName("church_live_status"),
 	}}); err != nil {
 		return fmt.Errorf("live: session indexes: %w", err)
+	}
+	if err := s.recordings.EnsureIndexes(ctx, []mongo.IndexModel{
+		{
+			Keys:    bson.D{{Key: "churchId", Value: 1}, {Key: "startedAt", Value: -1}},
+			Options: options.Index().SetName("church_recordings"),
+		},
+		{
+			// The sweeper's index, and NOT scoped to a church: retention runs
+			// across every tenant, and an index that started with churchId
+			// would leave it scanning.
+			Keys:    bson.D{{Key: "deleteAfter", Value: 1}, {Key: "status", Value: 1}},
+			Options: options.Index().SetName("recording_retention"),
+		},
+	}); err != nil {
+		return fmt.Errorf("live: recording indexes: %w", err)
 	}
 	return s.viewers.EnsureIndexes(ctx, []mongo.IndexModel{{
 		// One live seat per member per session. The unique index is what makes
