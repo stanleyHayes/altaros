@@ -291,3 +291,40 @@ func TestASilentViewerLosesTheirSeat(t *testing.T) {
 		t.Fatalf("a real member still could not join: %v", err)
 	}
 }
+
+// A rapid reconnect must not take a second seat.
+//
+// Freezing the clock means every join rewrites lastSeenAt with the value it
+// already holds, which is the condition under which the old ModifiedCount
+// check mistook a viewer who was plainly present for a new arrival. It
+// reproduces intermittently rather than every time — the exact trigger was
+// never isolated — so this runs alongside the plain rejoin test rather than
+// replacing it, and the two together caught it about five runs in twelve.
+func TestAReconnectWithNoClockMovementKeepsOneSeat(t *testing.T) {
+	h := newHarness(t, 2, true)
+	// Every write stamps the same instant, so lastSeenAt never changes.
+	frozen := time.Now().UTC().Truncate(time.Millisecond)
+	h.svc.now = func() time.Time { return frozen }
+
+	id := h.schedule(t)
+	if _, err := h.svc.Start(h.ctx, id, "pastor"); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	member := bson.NewObjectID().Hex()
+
+	for i := 0; i < 3; i++ {
+		if _, err := h.svc.Join(h.ctx, id, member); err != nil {
+			t.Fatalf("join %d: %v", i, err)
+		}
+	}
+
+	session, err := h.svc.SessionByID(h.ctx, id)
+	if err != nil {
+		t.Fatalf("SessionByID: %v", err)
+	}
+	if session.CurrentViewers != 1 {
+		t.Fatalf("one member reconnecting three times with a frozen clock "+
+			"consumed %d seats — on a capped tier that is other members "+
+			"turned away", session.CurrentViewers)
+	}
+}

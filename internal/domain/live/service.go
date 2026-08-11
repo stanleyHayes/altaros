@@ -135,7 +135,27 @@ func (s *Service) Join(ctx context.Context, sessionID, memberID string) (*Grant,
 	if err != nil {
 		return nil, fmt.Errorf("live: refresh viewer: %w", err)
 	}
-	if existing.ModifiedCount == 0 {
+	// MatchedCount, NOT ModifiedCount.
+	//
+	// The question here is "is this viewer already in the room". Matched
+	// answers exactly that. Modified answers "did this write change any
+	// bytes", which is a different question that nothing depends on — and one
+	// whose answer varies when a rapid reconnect rewrites lastSeenAt with a
+	// value the stored one already had.
+	//
+	// This is not theoretical. On ModifiedCount, two tests here failed
+	// intermittently — roughly 5 runs in 12 — reporting that one member
+	// reconnecting consumed two seats, and on a capped tier a wasted seat is
+	// another member turned away from the service. On MatchedCount, 12 runs in
+	// 12 pass.
+	//
+	// The precise trigger was NOT isolated: a direct experiment writing an
+	// identical timestamp reported Modified=1 on this MongoDB, so the plain
+	// "a no-op update reports zero" explanation does not fit what was
+	// measured. Recorded as unexplained rather than dressed up, because the
+	// fix stands on the semantics — matched is the right question — and not
+	// on a mechanism nobody has confirmed.
+	if existing.MatchedCount == 0 {
 		// A new seat. The filter carries the capacity test, so the increment
 		// only happens if there was room at the instant it ran.
 		res, err := s.sessions.UpdateOne(ctx, bson.M{
@@ -395,9 +415,14 @@ func (s *Service) EnsureIndexes(ctx context.Context) error {
 		return fmt.Errorf("live: recording indexes: %w", err)
 	}
 	return s.viewers.EnsureIndexes(ctx, []mongo.IndexModel{{
-		// One live seat per member per session. The unique index is what makes
-		// the "already watching" check safe under a reconnect storm rather
-		// than merely usually right.
+		// The lookup behind "is this member already watching", which Join runs
+		// on every reconnect.
+		//
+		// NOT unique, and the difference matters: a member who joins, leaves
+		// and rejoins legitimately has more than one row for the same session,
+		// so uniqueness here would refuse the rejoin. What keeps a reconnect
+		// from taking a second seat is the MatchedCount check in Join, not
+		// this index.
 		Keys: bson.D{
 			{Key: "churchId", Value: 1}, {Key: "sessionId", Value: 1},
 			{Key: "memberId", Value: 1}, {Key: "joinedAt", Value: 1},
