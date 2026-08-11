@@ -691,3 +691,78 @@ func SignPayload(key string, body []byte) string {
 func ErrIsRetryable(err error) bool {
 	return errors.Is(err, payments.ErrUnavailable)
 }
+
+// ChargeAuthorization charges an instrument the giver already authorised.
+//
+// POST /transaction/charge_authorization. Every guard from Initialize applies
+// unchanged — most importantly the subaccount one. A stored authorization
+// changes who confirms the charge, never where the money lands, and a one-tap
+// gift that settled to ALTAR OS instead of the church would be the exact
+// custody ADR-002 exists to prevent, arriving through a side door.
+func (g *Gateway) ChargeAuthorization(ctx context.Context, req payments.AuthorizationChargeRequest) (*payments.Verification, error) {
+	if g.configuredErr != nil {
+		return nil, g.configuredErr
+	}
+	if strings.TrimSpace(req.Reference) == "" {
+		return nil, fmt.Errorf("%w: reference is required for idempotency", payments.ErrProvider)
+	}
+	if strings.TrimSpace(req.Code) == "" {
+		return nil, fmt.Errorf("%w: no stored authorization to charge", payments.ErrProvider)
+	}
+	if strings.TrimSpace(req.SubaccountCode) == "" {
+		return nil, fmt.Errorf("%w: a charge must settle to the church's subaccount (ADR-002)",
+			payments.ErrProvider)
+	}
+	if req.Amount.Minor <= 0 {
+		return nil, fmt.Errorf("%w: amount must be positive", payments.ErrProvider)
+	}
+	if req.PlatformFee.Minor < 0 {
+		return nil, fmt.Errorf("%w: platform fee cannot be negative", payments.ErrProvider)
+	}
+	if req.PlatformFee.Minor >= req.Amount.Minor {
+		return nil, fmt.Errorf("%w: platform fee %s would consume the whole gift of %s",
+			payments.ErrProvider, req.PlatformFee, req.Amount)
+	}
+	email := strings.TrimSpace(req.Email)
+	if email == "" {
+		return nil, fmt.Errorf("%w: email is required by the provider", payments.ErrProvider)
+	}
+
+	body := map[string]any{
+		"authorization_code": req.Code,
+		"amount":             strconv.FormatInt(req.Amount.Minor, 10),
+		"currency":           req.Amount.Currency,
+		"email":              email,
+		"reference":          req.Reference,
+		"subaccount":         req.SubaccountCode,
+		"transaction_charge": req.PlatformFee.Minor,
+		"bearer":             g.feeBearer,
+	}
+	if len(req.Metadata) > 0 {
+		body["metadata"] = req.Metadata
+	}
+
+	var out struct {
+		Status  bool   `json:"status"`
+		Message string `json:"message"`
+		Data    struct {
+			Reference string `json:"reference"`
+			Status    string `json:"status"`
+		} `json:"data"`
+	}
+	if err := g.do(ctx, http.MethodPost, "/transaction/charge_authorization", body, &out); err != nil {
+		return nil, err
+	}
+
+	// Deliberately NOT trusting this response for the money.
+	//
+	// charge_authorization answers synchronously, but the authoritative
+	// account of what happened is Verify — the same rule the checkout flow
+	// follows, and the reason a webhook replay cannot double-credit. Treating
+	// this reply as settlement would make one-tap the only path in the system
+	// that grants value on the provider's optimistic answer.
+	if !out.Status {
+		return nil, fmt.Errorf("%w: %s", payments.ErrProvider, out.Message)
+	}
+	return g.Verify(ctx, req.Reference)
+}

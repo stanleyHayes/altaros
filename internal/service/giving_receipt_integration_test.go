@@ -407,3 +407,11 @@ func TestDuplicateGivingEventSendsOneReceipt(t *testing.T) {
 			"delivery had a different event id", sms.count())
 	}
 }
+
+// ChargeAuthorization satisfies payments.Gateway. One-tap giving is not what
+// this test exercises, so it refuses rather than pretending to succeed — a
+// double that silently returns a fake settlement would let a future test
+// believe money moved when nothing did.
+func (g *settledGateway) ChargeAuthorization(context.Context, payments.AuthorizationChargeRequest) (*payments.Verification, error) {
+	return nil, payments.ErrProvider
+}
