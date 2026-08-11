@@ -15,6 +15,9 @@ import { DevotionalScreen } from '../../screens/spiritual/DevotionalScreen';
 import { SermonsScreen } from '../../screens/spiritual/SermonsScreen';
 import { PrayerScreen } from '../../screens/spiritual/PrayerScreen';
 import { GivingHistoryScreen } from '../../screens/giving/GivingHistoryScreen';
+import { CampaignsScreen } from '../../screens/giving/CampaignsScreen';
+import { LiveScreen } from '../../screens/live/LiveScreen';
+import { LiveSessionScreen } from '../../screens/live/LiveSessionScreen';
 import { EventDetailScreen } from '../../screens/events/EventDetailScreen';
 import { CreatePostScreen } from '../../screens/social/CreatePostScreen';
 import { WelfareScreen } from '../../screens/welfare/WelfareScreen';
@@ -57,6 +60,11 @@ export type RootStackParamList = {
   // Data subject rights. Apple 5.1.1(v) requires the deletion path to be
   // reachable inside the app, not only from a website.
   Privacy: undefined;
+  // Fundraising appeals the church published to its members.
+  Campaigns: undefined;
+  // Live services, and the one-tap giving that happens inside them.
+  Live: undefined;
+  LiveSession: { sessionId: string; title: string; campaignId?: string };
 };
 
 const AuthStack = createNativeStackNavigator<AuthStackParamList>();
@@ -158,6 +166,25 @@ function MainNavigator() {
         name="MainTabs"
         component={BottomTabs}
         options={{ headerShown: false }}
+      />
+      <RootStack.Screen
+        name="Campaigns"
+        component={CampaignsScreen}
+        options={{ title: 'Appeals' }}
+      />
+      <RootStack.Screen
+        name="Live"
+        component={LiveScreen}
+        options={{ title: 'Live services' }}
+      />
+      <RootStack.Screen
+        name="LiveSession"
+        component={LiveSessionScreen}
+        options={{
+          // Full screen: a sermon behind a navigation bar is a smaller sermon,
+          // and the screen carries its own titled bar with a way out.
+          headerShown: false,
+        }}
       />
       <RootStack.Screen
         name="Devotional"

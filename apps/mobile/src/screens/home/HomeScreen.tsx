@@ -21,6 +21,11 @@ type HomeNav = NativeStackNavigationProp<RootStackParamList>;
 
 const quickActions = [
   { label: 'Give', icon: 'heart-outline' as const, route: 'Give' as const },
+  // Live and Appeals sit here rather than behind a menu. Both are things a
+  // church announces once and expects members to find immediately — an appeal
+  // three taps deep is an appeal most of a congregation never sees.
+  { label: 'Live', icon: 'videocam-outline' as const, screen: 'Live' as const },
+  { label: 'Appeals', icon: 'megaphone-outline' as const, screen: 'Campaigns' as const },
   { label: 'Events', icon: 'calendar-outline' as const, route: 'Events' as const },
   { label: 'Prayer', icon: 'sparkles-outline' as const, screen: 'Prayer' as const },
   { label: 'Care', icon: 'hand-left-outline' as const, screen: 'Welfare' as const },
