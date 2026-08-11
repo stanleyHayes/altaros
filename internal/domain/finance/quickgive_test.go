@@ -4,6 +4,12 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"go.mongodb.org/mongo-driver/v2/bson"
+
+	"github.com/hayfordstanley/altar-os/internal/platform/fieldcrypt"
+	"github.com/hayfordstanley/altar-os/internal/platform/mongodb"
+	"github.com/hayfordstanley/altar-os/internal/platform/payments"
 )
 
 // The danger in one-tap giving is not a stranger charging somebody — the
@@ -138,3 +144,194 @@ func mustJSON(t *testing.T, v any) string {
 }
 
 func contains(haystack, needle string) bool { return strings.Contains(haystack, needle) }
+
+// --- execution -------------------------------------------------------------
+
+func tapHarness(t *testing.T) *harness {
+	t.Helper()
+	h := newHarness(t)
+	cipher, err := fieldcrypt.New("test-payment-key-not-the-welfare-one")
+	if err != nil {
+		t.Fatalf("cipher: %v", err)
+	}
+	h.svc.WithPaymentCrypto(cipher)
+	if err := h.svc.EnsurePaymentMethodIndexes(h.ctx); err != nil {
+		t.Fatalf("EnsurePaymentMethodIndexes: %v", err)
+	}
+	return h
+}
+
+func saveMethod(t *testing.T, h *harness, memberID string) {
+	t.Helper()
+	if _, err := h.svc.SavePaymentMethod(h.ctx, memberID, &payments.Authorization{
+		Code: "AUTH_test_code", Last4: "4321", Brand: "visa", Reusable: true,
+	}); err != nil {
+		t.Fatalf("SavePaymentMethod: %v", err)
+	}
+}
+
+// The phone froze and the member pressed again. Same tap, one gift.
+func TestARetriedTapChargesOnce(t *testing.T) {
+	h := tapHarness(t)
+	member := "6a6f3460a6b0e0738ca16496"
+	saveMethod(t, h, member)
+
+	req := TapRequest{
+		MemberID: member, AmountMinor: 2_000, Currency: "GHS",
+		TapID: "tap-frozen-screen", Email: "ama@example.com",
+	}
+	first, err := h.svc.Tap(h.ctx, req)
+	if err != nil {
+		t.Fatalf("first tap: %v", err)
+	}
+	for i := 0; i < 4; i++ {
+		again, err := h.svc.Tap(h.ctx, req)
+		if err != nil {
+			t.Fatalf("retry %d: %v", i, err)
+		}
+		if again.ID != first.ID {
+			t.Fatalf("retry %d created a second gift (%s vs %s) — the member "+
+				"has been charged twice for one tap", i, again.ID.Hex(), first.ID.Hex())
+		}
+	}
+
+	n, err := h.svc.coll.CountDocuments(h.ctx, bson.M{"memberId": mongodb.ID(member)})
+	if err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("%d transactions recorded for one tap", n)
+	}
+}
+
+// A different tap id for the same amount, seconds apart, is a double press.
+func TestADoublePressIsRefused(t *testing.T) {
+	h := tapHarness(t)
+	member := "6a6f3460a6b0e0738ca16497"
+	saveMethod(t, h, member)
+
+	base := TapRequest{
+		MemberID: member, AmountMinor: 5_000, Currency: "GHS",
+		Email: "kwame@example.com",
+	}
+	first := base
+	first.TapID = "tap-one"
+	if _, err := h.svc.Tap(h.ctx, first); err != nil {
+		t.Fatalf("first tap: %v", err)
+	}
+
+	second := base
+	second.TapID = "tap-two" // genuinely a different tap, moments later
+	if _, err := h.svc.Tap(h.ctx, second); err != ErrTooSoon {
+		t.Fatalf("a second identical gift seconds later returned %v, want "+
+			"ErrTooSoon — that is the fumbled press this guard exists for", err)
+	}
+}
+
+// The charge must still carry the church's subaccount and our fee. A stored
+// authorization changes who confirms, never where the money lands (ADR-002).
+func TestAOneTapGiftStillSettlesToTheChurch(t *testing.T) {
+	h := tapHarness(t)
+	member := "6a6f3460a6b0e0738ca16498"
+	saveMethod(t, h, member)
+
+	if _, err := h.svc.Tap(h.ctx, TapRequest{
+		MemberID: member, AmountMinor: 10_000, Currency: "GHS",
+		TapID: "tap-settle", Email: "ada@example.com",
+	}); err != nil {
+		t.Fatalf("Tap: %v", err)
+	}
+
+	h.gw.mu.Lock()
+	defer h.gw.mu.Unlock()
+	if len(h.gw.authCharges) != 1 {
+		t.Fatalf("%d authorization charges", len(h.gw.authCharges))
+	}
+	got := h.gw.authCharges[0]
+	if got.SubaccountCode != testSubaccount {
+		t.Errorf("settled to %q, not the church's subaccount", got.SubaccountCode)
+	}
+	if got.PlatformFee.Minor != 10_000*150/10_000 {
+		t.Errorf("platform fee = %d", got.PlatformFee.Minor)
+	}
+	if got.Code == "" {
+		t.Error("no authorization code was sent")
+	}
+}
+
+// The credential is sealed at rest. A database dump must not yield something
+// that can move money.
+func TestTheStoredAuthorizationIsEncryptedAtRest(t *testing.T) {
+	h := tapHarness(t)
+	member := "6a6f3460a6b0e0738ca16499"
+	saveMethod(t, h, member)
+
+	var raw bson.M
+	if err := h.svc.methods.FindOne(h.ctx,
+		bson.M{"memberId": mongodb.ID(member)}, &raw); err != nil {
+		t.Fatalf("read raw: %v", err)
+	}
+	stored, _ := raw["code"].(string)
+	if stored == "AUTH_test_code" {
+		t.Fatal("the authorization is stored in the clear — a database dump " +
+			"would hand somebody a live payment credential")
+	}
+	if !fieldcrypt.IsEncrypted(stored) {
+		t.Errorf("the stored code carries no encryption marker: %q", stored)
+	}
+
+	// And the read path never hands it back.
+	shown, err := h.svc.PaymentMethodFor(h.ctx, member)
+	if err != nil {
+		t.Fatalf("PaymentMethodFor: %v", err)
+	}
+	if shown.Code != "" {
+		t.Error("the credential was returned to the caller")
+	}
+	if shown.Last4 != "4321" {
+		t.Errorf("last4 = %q; the member cannot tell which card this is", shown.Last4)
+	}
+}
+
+// Without a key, refuse to store rather than keep a live credential in clear.
+func TestWithoutAKeySavedPaymentsAreRefusedNotDowngraded(t *testing.T) {
+	h := newHarness(t) // no WithPaymentCrypto
+	if _, err := h.svc.SavePaymentMethod(h.ctx, "6a6f3460a6b0e0738ca1649a",
+		&payments.Authorization{Code: "AUTH_x", Reusable: true}); err != ErrPaymentKeyMissing {
+		t.Fatalf("SavePaymentMethod returned %v, want ErrPaymentKeyMissing", err)
+	}
+}
+
+// A provider that says an instrument is not reusable must be believed.
+func TestANonReusableAuthorizationIsNotSaved(t *testing.T) {
+	h := tapHarness(t)
+	if _, err := h.svc.SavePaymentMethod(h.ctx, "6a6f3460a6b0e0738ca1649b",
+		&payments.Authorization{Code: "AUTH_once", Reusable: false}); err != ErrMethodNotReusable {
+		t.Fatalf("a one-time authorization was saved (%v) — the member would "+
+			"get a one-tap button that fails when they use it", err)
+	}
+}
+
+// Forgetting removes the row, not a flag.
+func TestForgettingDestroysTheCredential(t *testing.T) {
+	h := tapHarness(t)
+	member := "6a6f3460a6b0e0738ca1649c"
+	saveMethod(t, h, member)
+
+	if err := h.svc.ForgetPaymentMethod(h.ctx, member); err != nil {
+		t.Fatalf("ForgetPaymentMethod: %v", err)
+	}
+	n, err := h.svc.methods.CountDocuments(h.ctx, bson.M{"memberId": mongodb.ID(member)})
+	if err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if n != 0 {
+		t.Fatal("the payment method row survived being forgotten — a revoked " +
+			"credential still in the database is still a credential")
+	}
+	if _, err := h.svc.Tap(h.ctx, TapRequest{
+		MemberID: member, AmountMinor: 2_000, Currency: "GHS", TapID: "tap-after-forget",
+	}); err != ErrNoPaymentMethod {
+		t.Errorf("a tap after forgetting returned %v", err)
+	}
+}

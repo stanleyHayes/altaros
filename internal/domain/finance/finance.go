@@ -13,6 +13,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 
+	"github.com/hayfordstanley/altar-os/internal/platform/fieldcrypt"
 	"github.com/hayfordstanley/altar-os/internal/platform/money"
 	"github.com/hayfordstanley/altar-os/internal/platform/mongodb"
 	"github.com/hayfordstanley/altar-os/internal/platform/payments"
@@ -62,11 +63,17 @@ type Service struct {
 	coll      *mongodb.TenantCollection
 	campaigns *mongodb.TenantCollection
 	pledges   *mongodb.TenantCollection
-	global    *mongo.Collection
-	gateway   payments.Gateway
-	pub       Publisher
-	dir       ChurchDirectory
-	now       func() time.Time
+	// methods holds saved payment authorizations for one-tap giving.
+	methods *mongodb.TenantCollection
+	// crypto seals those authorizations at rest. Nil means saved payments are
+	// switched off — the service refuses to store one rather than keeping a
+	// live payment credential in the clear, the same rule welfare follows.
+	crypto  *fieldcrypt.Cipher
+	global  *mongo.Collection
+	gateway payments.Gateway
+	pub     Publisher
+	dir     ChurchDirectory
+	now     func() time.Time
 }
 
 // NewService builds the finance service.
@@ -75,6 +82,7 @@ func NewService(db *mongodb.DB, gw payments.Gateway, dir ChurchDirectory, pub Pu
 		coll:      db.Tenant(Collection),
 		campaigns: db.Tenant(CampaignCollection),
 		pledges:   db.Tenant(PledgeCollection),
+		methods:   db.Tenant(PaymentMethodCollection),
 		// A webhook arrives from the provider with no session and therefore no
 		// tenant, so the transaction it refers to has to be found before the
 		// church is known. This is the one place finance reads across tenants,
