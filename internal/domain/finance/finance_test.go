@@ -36,6 +36,8 @@ type fakeGateway struct {
 	verifyErr error
 	// verifyCalls counts how often the provider was asked.
 	verifyCalls map[string]int
+	// authCharges records one-tap charges against stored instruments.
+	authCharges []payments.AuthorizationChargeRequest
 }
 
 func newFakeGateway() *fakeGateway {
@@ -53,6 +55,25 @@ func (f *fakeGateway) Name() string { return "paystack" }
 
 func (f *fakeGateway) CreateSubaccount(context.Context, payments.SubaccountRequest) (*payments.Subaccount, error) {
 	return &payments.Subaccount{Code: testSubaccount}, nil
+}
+
+// ChargeAuthorization stands in for a one-tap charge against a stored
+// instrument. Records what it was asked to do so a test can assert that the
+// church's subaccount and the platform fee still travelled with it — a saved
+// authorization changes who confirms a charge, never where the money lands.
+func (f *fakeGateway) ChargeAuthorization(_ context.Context, req payments.AuthorizationChargeRequest) (*payments.Verification, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.verifyErr != nil {
+		return nil, f.verifyErr
+	}
+	f.authCharges = append(f.authCharges, req)
+	return &payments.Verification{
+		Reference: req.Reference, Status: payments.StatusSuccess,
+		Amount: req.Amount, PlatformFee: req.PlatformFee,
+		SettledTo: req.SubaccountCode, Channel: "card",
+		ProviderRef: "auth_" + req.Reference,
+	}, nil
 }
 
 func (f *fakeGateway) Initialize(_ context.Context, req payments.ChargeRequest) (*payments.Charge, error) {

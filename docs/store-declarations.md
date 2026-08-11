@@ -42,6 +42,7 @@ tracking, and required for app functionality.
 | App activity → Other actions | Your discipleship journey | Yes |
 | Device or other IDs → Device or other IDs | Your registered devices | Yes |
 | Financial info → Other financial info | Pledges | Anonymised (legal retention — see below) |
+| Financial info → Payment info | Saved payment methods | Yes |
 | Financial info → Purchase history | Giving and payment records | Anonymised (legal retention — see below) |
 | Messages → Other in-app messages | Comments you wrote | Yes |
 | Messages → Other in-app messages | Messages we sent you | Yes |
@@ -68,6 +69,7 @@ Enforced by a daily sweeper, not merely documented.
 |---|---|---|
 | Message delivery history | 720 days | A church may need to show that a giving receipt or a service notice was sent, and two years covers any reasonable dispute. The message body is not needed after that. |
 | Registered devices | 360 days | A push token not seen for a year belongs to a phone that is gone. Keeping it serves nobody and it is an identifier for a specific device. |
+| Unused saved payment methods | 720 days | A card or wallet nobody has given with for two years is a credential we are holding for no reason. Removing it costs the member one extra step next time and removes a live payment authorisation from the database. |
 | Access and administration log | 2555 days | Seven years, matching the longest record-keeping obligation a church has. This is the log that answers 'did somebody look at a welfare case', so it outlives almost everything else on purpose. |
 | Resolved moderation reports | 720 days | A moderator's decision is worth keeping while it might be questioned. Two years after it was settled, it identifies who reported whom and serves no other purpose. |
 | Completed follow-up | 720 days | Closed follow-up records what was said about somebody's first visit. The pastoral value is in the weeks after; two years later it is a note about a person that nobody is using. |

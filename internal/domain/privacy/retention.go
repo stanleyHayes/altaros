@@ -75,6 +75,14 @@ var RetentionPolicy = []RetentionRule{
 			"specific device.",
 	},
 	{
+		Collection: "payment_methods", Label: "Unused saved payment methods",
+		Field: "lastUsedAt", KeepFor: 24 * 30 * 24 * time.Hour, KeepForDays: 720,
+		Because: "A card or wallet nobody has given with for two years is a " +
+			"credential we are holding for no reason. Removing it costs the " +
+			"member one extra step next time and removes a live payment " +
+			"authorisation from the database.",
+	},
+	{
 		Collection: "audit_log", Label: "Access and administration log",
 		Field: "at", KeepFor: 7 * 365 * 24 * time.Hour, KeepForDays: 2555,
 		Because: "Seven years, matching the longest record-keeping obligation a " +

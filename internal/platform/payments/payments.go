@@ -149,6 +149,10 @@ type Verification struct {
 	Metadata    map[string]string `json:"metadata"`
 	// FailureReason is set when Status is failed, for the giver to read.
 	FailureReason string `json:"failureReason,omitempty"`
+	// Authorization is the reusable instrument this charge produced, when the
+	// provider returned one. Present on every successful charge; whether it is
+	// KEPT is a separate decision the giver makes.
+	Authorization *Authorization `json:"-"`
 }
 
 // NetToChurch is what the church actually receives: the gift less the
@@ -215,8 +219,62 @@ type Gateway interface {
 	// Verify asks the provider what actually happened. The only source of
 	// truth for granting value.
 	Verify(ctx context.Context, reference string) (*Verification, error)
+	// ChargeAuthorization charges a payment instrument the giver has already
+	// authorised, with no interaction from them at all.
+	//
+	// This is what makes giving during a live service one tap instead of a
+	// trip through a mobile-money menu — and it is the most dangerous verb on
+	// this interface, because it moves money with nobody present to approve
+	// it. Implementations must still settle to the church's subaccount and
+	// carry the platform fee: a stored authorization changes WHO confirms the
+	// charge, never WHERE the money lands (ADR-002).
+	ChargeAuthorization(ctx context.Context, req AuthorizationChargeRequest) (*Verification, error)
+
 	// ParseWebhook authenticates and decodes an inbound webhook. It must
 	// return ErrInvalidSignature for anything it cannot prove came from the
 	// provider, and must never fall back to trusting an unsigned body.
 	ParseWebhook(signature string, body []byte) (*Event, error)
+}
+
+// AuthorizationChargeRequest charges a stored instrument.
+type AuthorizationChargeRequest struct {
+	// Reference is the idempotency key, exactly as on ChargeRequest. It
+	// matters more here: a double tap on a phone is far likelier than a
+	// double submit of a checkout form.
+	Reference string
+	// Code is the provider's authorization handle. It is a CREDENTIAL — it
+	// can move money — and must never be logged, returned to a client, or
+	// stored in the clear.
+	Code   string
+	Amount money.Amount
+	// SubaccountCode routes settlement to the church. Required, same as a
+	// fresh charge; an implementation must refuse a request without one.
+	SubaccountCode string
+	PlatformFee    money.Amount
+	Email          string
+	Metadata       map[string]string
+}
+
+// Authorization is a reusable payment instrument the giver has consented to.
+//
+// The display fields are what a person recognises their own card or wallet by.
+// There is deliberately no full number here and never will be: ALTAR OS does
+// not receive one, and storing what we cannot see is not a risk worth
+// inventing.
+type Authorization struct {
+	// Code is the credential. Encrypted at rest by the caller.
+	Code string `json:"-"`
+	// Last4, Brand, Bank and Channel are for showing a person which
+	// instrument they are about to use.
+	Last4   string `json:"last4,omitempty"`
+	Brand   string `json:"brand,omitempty"`
+	Bank    string `json:"bank,omitempty"`
+	Channel string `json:"channel,omitempty"`
+	// ExpiryMonth and ExpiryYear are absent for mobile money.
+	ExpiryMonth string `json:"expiryMonth,omitempty"`
+	ExpiryYear  string `json:"expiryYear,omitempty"`
+	// Reusable is the provider's own answer to whether this can be charged
+	// again. A one-time authorization stored as reusable is a saved payment
+	// method that fails at the worst moment.
+	Reusable bool `json:"reusable"`
 }

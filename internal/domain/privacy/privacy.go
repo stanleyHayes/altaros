@@ -174,6 +174,16 @@ var Holdings = []Holding{
 		IdentityFields: []string{"memberId", "note"},
 	},
 	{
+		// A saved authorization can move money. It goes when the account
+		// goes, and it is listed before the identity so a half-completed
+		// purge never leaves a live payment credential behind an erased
+		// person.
+		Collection: "payment_methods", Label: "Saved payment methods",
+		Field: "memberId", Disposition: Erased,
+		Because: "Removed completely, and the stored authorisation is destroyed " +
+			"so nothing can be charged again.",
+	},
+	{
 		Collection: "welfare_cases", Label: "Welfare and pastoral care records",
 		Field: "memberId", Disposition: Erased,
 		Because: "Removed completely. These are the most sensitive records we " +

@@ -29,9 +29,12 @@ import (
 // and the mapping is stated here rather than in somebody's head while they
 // tick boxes in the console at midnight.
 var playCategory = map[string]string{
-	"members":                  "Personal info → Name, Email address, Phone number, Other info",
-	"users":                    "Personal info → Name, Email address, Phone number",
-	"transactions":             "Financial info → Purchase history",
+	"members":      "Personal info → Name, Email address, Phone number, Other info",
+	"users":        "Personal info → Name, Email address, Phone number",
+	"transactions": "Financial info → Purchase history",
+	// Play has a category for exactly this, and it is the one a reviewer
+	// looks hardest at.
+	"payment_methods":          "Financial info → Payment info",
 	"pledges":                  "Financial info → Other financial info",
 	"welfare_cases":            "Personal info → Other info (sensitive: health and hardship)",
 	"prayer_requests":          "Messages → Other in-app messages",
