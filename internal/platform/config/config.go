@@ -110,6 +110,9 @@ type Config struct {
 	// card. When unset, saved payment methods are refused rather than stored
 	// in plaintext, which costs a feature instead of a congregation's cards.
 	PaymentKey string
+
+	// Live is the streaming server's configuration.
+	Live LiveConfig
 }
 
 // MongoConfig configures the MongoDB connection.
@@ -339,6 +342,13 @@ func Load(serviceName string) (*Config, error) {
 		},
 		WelfareKey: os.Getenv("WELFARE_ENCRYPTION_KEY"),
 		PaymentKey: os.Getenv("PAYMENT_ENCRYPTION_KEY"),
+		Live: LiveConfig{
+			SigningKey:     os.Getenv("LIVE_SIGNING_KEY"),
+			STUNURLs:       splitList(getenvOptional("LIVE_STUN_URLS", "stun:stun.l.google.com:19302")),
+			TURNURLs:       splitList(os.Getenv("LIVE_TURN_URLS")),
+			TURNUsername:   os.Getenv("LIVE_TURN_USERNAME"),
+			TURNCredential: os.Getenv("LIVE_TURN_CREDENTIAL"),
+		},
 		Anthropic: AnthropicConfig{
 			APIKey: os.Getenv("ANTHROPIC_API_KEY"),
 			Model:  getenv("ANTHROPIC_MODEL", "claude-opus-5"),
@@ -628,4 +638,46 @@ func sortStrings(s []string) {
 			s[j], s[j-1] = s[j-1], s[j]
 		}
 	}
+}
+
+// LiveConfig is what the streaming server needs.
+type LiveConfig struct {
+	// SigningKey signs room grants. Without it, live streaming is OFF.
+	//
+	// Refusing rather than falling back to unsigned grants: an unsigned grant
+	// is a live endpoint anyone reaches by guessing a room id, and it would
+	// look exactly like a working system from every angle except the one that
+	// matters.
+	SigningKey string
+
+	// STUNURLs let a client discover its own public address.
+	STUNURLs []string
+
+	// TURNURLs relay media when a direct path cannot be found.
+	//
+	// Effectively REQUIRED in this market rather than an optimisation. Ghanaian
+	// mobile networks are overwhelmingly behind carrier-grade NAT, where no
+	// amount of STUN produces a direct path; without a relay a large part of a
+	// congregation never connects, and the report reads "the app does not work
+	// on MTN". Startup warns loudly when this is empty.
+	TURNURLs       []string
+	TURNUsername   string
+	TURNCredential string
+}
+
+// Enabled reports whether live streaming can run at all.
+func (l LiveConfig) Enabled() bool { return strings.TrimSpace(l.SigningKey) != "" }
+
+// HasRelay reports whether a TURN relay is configured.
+func (l LiveConfig) HasRelay() bool { return len(l.TURNURLs) > 0 }
+
+// splitList reads a comma-separated setting.
+func splitList(raw string) []string {
+	out := []string{}
+	for _, part := range strings.Split(raw, ",") {
+		if trimmed := strings.TrimSpace(part); trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	return out
 }

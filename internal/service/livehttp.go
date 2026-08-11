@@ -26,14 +26,16 @@ func buildLive(d *deps.Deps) http.Handler { return standalone(liveRoutes(d)) }
 // would mean a church had to grant its own members the right to attend.
 func liveRoutes(d *deps.Deps) routeSet {
 	plans := plan.NewService(d.Mongo)
-	// No SFU is wired up yet. NotConfigured refuses every room with a
-	// named reason rather than pretending — a church that presses "go
-	// live" is told the feature is not switched on instead of watching a
-	// spinner while the product implies a broadcast nobody can join.
-	svc := live.NewService(d.Mongo, plans, live.NotConfigured{})
+	svc := live.NewService(d.Mongo, plans, mediaServerFor(d))
 	members := member.NewService(d.Mongo, d.Events, d.Config.DataRegion)
 
 	return func(r chi.Router) {
+		// The media signalling channel. OUTSIDE the auth middleware because a
+		// browser cannot set an Authorization header when opening a WebSocket;
+		// its credential is the room grant in the query string, which is why
+		// grants are narrow and short-lived rather than session tokens.
+		r.Get("/live/signal", handleLiveSignal(d))
+
 		r.Group(func(r chi.Router) {
 			r.Use(authenticated(d))
 			r.Use(resolvePermissions(d))
