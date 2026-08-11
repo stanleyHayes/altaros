@@ -154,6 +154,26 @@ effective = (role.permissions − user.revoked) ∪ user.granted, then dependenc
 
 ---
 
+### ADR-009 — Two money flows. We take a cut of giving; we bill churches for the software.
+**Decision (9 Aug 2026):** ALTAR OS has exactly two ways money moves, and they are kept apart on purpose.
+
+| | Giving | Subscription |
+|---|---|---|
+| Payer | a member | a church |
+| Payee | **the church**, directly | **ALTAR OS** |
+| Mechanism | Paystack subaccount; our percentage is the split | ordinary charge to our own merchant account |
+| Do we hold funds? | **Never** | It is our own revenue |
+
+**Why this does not breach ADR-002.** ADR-002's invariant is that ALTAR OS never takes custody of **church** money — because pooling tithes and disbursing them is *merchant aggregation* under Act 987 and needs a PSP Medium licence. Charging a church a subscription for our own software is not aggregation: it is a company invoicing its own customer for its own service, the same as any SaaS. No third party's money passes through us at any point. The licensing analysis is unchanged.
+
+**The line, stated so it is not crossed by accident.** The temptation will be to net the subscription out of a church's giving proceeds — "take it from what they raised this month" — because it is operationally tidier than collecting separately. **That is forbidden.** Deducting our fee from money members gave to their church means touching church funds on their way through, which is the custody ADR-002 exists to avoid, and it converts a clean SaaS invoice into exactly the arrangement that triggers licensing. Subscriptions are charged **directly to the church as payer**, on their own instrument, on their own cycle, and a failed subscription payment must never be recoverable from giving.
+
+**Consequences.**
+- ALTAR OS needs its own Paystack merchant account, separate from every church subaccount. Two sets of credentials, never interchangeable.
+- The commission rate on giving and the subscription price are both functions of the church's tier, but they are billed through different rails and reconciled separately.
+- A church in arrears loses tier *features* (streaming, viewer caps). Its members' giving keeps working, because that money was never ours to withhold and a congregation should not be punished for its church's unpaid invoice.
+- **App Store:** a subscription sold inside the iOS app is digital content and requires In-App Purchase (3.1.1). Tier upgrades therefore live on the web dashboard only; the app may show tier status and must not link out to buy (3.1.3). Donations remain exempt and unaffected.
+
 ## §2. Market context (research)
 
 The PDF has no competitive or market section. This is that section.
