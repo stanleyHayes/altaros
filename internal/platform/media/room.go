@@ -232,23 +232,53 @@ func (r *Room) Publishing() bool {
 	return r.publisher != nil
 }
 
+// addViewer seats a viewer, closing whatever they were connected with before.
+//
+// The displaced connection MUST be closed. Overwriting the map entry alone left
+// the old PeerConnection alive and forwarding media with nothing tracking it —
+// so one valid grant opened repeatedly was an unbounded pile of orphaned
+// connections, each holding sockets and copying every packet of the service to
+// nobody, until ICE eventually timed them out. A seat cap does not bound that,
+// because to the room it is all one viewer.
 func (r *Room) addViewer(v *viewer) error {
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	if r.closed {
+		r.mu.Unlock()
 		return ErrRoomClosed
 	}
+	displaced := r.viewers[v.id]
 	r.viewers[v.id] = v
+	r.mu.Unlock()
+
+	// Outside the lock: Close blocks while ICE shuts down.
+	if displaced != nil && displaced.pc != nil {
+		r.log.Debug("closing a viewer's previous connection",
+			"room", r.ID, "viewer", v.id)
+		_ = displaced.pc.Close()
+	}
 	return nil
 }
 
-func (r *Room) removeViewer(id string) {
+// removeViewer releases a seat, but only for the connection that actually left.
+//
+// Identity-checked against the stored pointer, not just the id. A member on a
+// flaky connection reconnects — socket B replaces socket A — and then socket
+// A's cleanup runs. Removing by id alone closed socket B: the member's WORKING
+// stream died because their dead one finished tearing down, which on a bad
+// mobile connection is a reconnect loop the member cannot escape.
+func (r *Room) removeViewer(id string, leaving *viewer) {
 	r.mu.Lock()
-	v, ok := r.viewers[id]
-	delete(r.viewers, id)
+	current, ok := r.viewers[id]
+	if ok && (leaving == nil || current == leaving) {
+		delete(r.viewers, id)
+	} else {
+		// Someone else is in this seat now. Leave them alone.
+		ok = false
+	}
 	r.mu.Unlock()
-	if ok && v.pc != nil {
-		_ = v.pc.Close()
+
+	if ok && current.pc != nil {
+		_ = current.pc.Close()
 	}
 }
 

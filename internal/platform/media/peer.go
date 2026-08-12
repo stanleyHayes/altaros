@@ -107,7 +107,7 @@ func (s *SFU) Watch(ctx context.Context, roomID, viewerID string, offer webrtc.S
 	for _, track := range room.currentTracks() {
 		sender, err := pc.AddTrack(track)
 		if err != nil {
-			room.removeViewer(viewerID)
+			room.removeViewer(viewerID, v)
 			return nil, nil, fmt.Errorf("media: attach track: %w", err)
 		}
 		v.senders[track.ID()] = sender
@@ -119,16 +119,16 @@ func (s *SFU) Watch(ctx context.Context, roomID, viewerID string, offer webrtc.S
 		case webrtc.PeerConnectionStateFailed,
 			webrtc.PeerConnectionStateClosed,
 			webrtc.PeerConnectionStateDisconnected:
-			room.removeViewer(viewerID)
+			room.removeViewer(viewerID, v)
 		}
 	})
 
 	answer, err := s.negotiate(ctx, pc, offer)
 	if err != nil {
-		room.removeViewer(viewerID)
+		room.removeViewer(viewerID, v)
 		return nil, nil, err
 	}
-	return answer, func() { room.removeViewer(viewerID) }, nil
+	return answer, func() { room.removeViewer(viewerID, v) }, nil
 }
 
 // negotiate completes the offer/answer exchange.

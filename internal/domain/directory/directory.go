@@ -111,8 +111,9 @@ func NewService(db *mongodb.DB, baseHost string) *Service {
 // maxResults bounds a public listing.
 //
 // A public, unauthenticated, cross-tenant query is the cheapest thing on this
-// platform for a stranger to ask for repeatedly. It is bounded here as well as
-// rate-limited at the edge.
+// platform for a stranger to ask for repeatedly. This bounds the SIZE of one
+// answer; the rate is bounded separately by the throttle on the routes, which
+// this comment previously claimed existed before it did.
 const maxResults = 60
 
 // listedChurchFilter is the church opt-in, in one place.

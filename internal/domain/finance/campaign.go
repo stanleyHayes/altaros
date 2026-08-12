@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"strings"
 	"time"
 
@@ -41,6 +42,8 @@ var (
 	ErrCampaignTarget = errors.New("finance: a campaign needs a target above zero")
 	// ErrCampaignDates means the campaign ends before it starts.
 	ErrCampaignDates = errors.New("finance: a campaign must end after it starts")
+	// ErrCampaignImage means the cover image is not a usable https URL.
+	ErrCampaignImage = errors.New("finance: a cover image must be an https link")
 )
 
 // Campaign is a fundraising appeal.
@@ -141,7 +144,7 @@ type CampaignInput struct {
 	StartDate    time.Time
 	EndDate      time.Time
 	IsActive     *bool
-	// CoverImageURL is checked against the media rules before it is stored.
+	// CoverImageURL is the picture on the appeal, validated by normalise.
 	CoverImageURL string
 }
 
@@ -206,7 +209,49 @@ func (in CampaignInput) normalise() (CampaignInput, error) {
 		return out, ErrCampaignDates
 	}
 	out.StartDate, out.EndDate = out.StartDate.UTC(), out.EndDate.UTC()
+
+	image, err := normaliseImageURL(in.CoverImageURL)
+	if err != nil {
+		return out, err
+	}
+	out.CoverImageURL = image
 	return out, nil
+}
+
+// maxImageURL bounds a stored URL. Anything longer is not a link to a picture.
+const maxImageURL = 2048
+
+// normaliseImageURL checks a cover image before it is stored.
+//
+// This is the only field on a campaign that a church supplies and the whole
+// internet renders — appeals go to the congregation, to the church's public
+// site, and to the ALTAR OS directory. It was previously documented as
+// "checked against the media rules" and checked by nothing, which is the
+// dangerous combination: the next person to wire it up reads the comment and
+// trusts it.
+//
+// https ONLY. Not http, because a plain-http image on an https page is blocked
+// as mixed content and shows a church a broken appeal; and not javascript: or
+// data:, which are not pictures at all and are how an image field becomes a
+// script on somebody else's page.
+func normaliseImageURL(raw string) (string, error) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return "", nil
+	}
+	if len(trimmed) > maxImageURL {
+		return "", ErrCampaignImage
+	}
+	parsed, err := url.Parse(trimmed)
+	if err != nil {
+		return "", ErrCampaignImage
+	}
+	// Scheme compared lower-cased: "JavaScript:" and "jAvAsCrIpT:" are the
+	// same URL to a browser and a different string to a naive check.
+	if !strings.EqualFold(parsed.Scheme, "https") || parsed.Host == "" {
+		return "", ErrCampaignImage
+	}
+	return trimmed, nil
 }
 
 // EnsureCampaignIndexes creates what campaigns are read by.
@@ -253,6 +298,9 @@ func (s *Service) CreateCampaign(ctx context.Context, in CampaignInput) (*Campai
 	}
 	if clean.Description != "" {
 		doc["description"] = clean.Description
+	}
+	if clean.CoverImageURL != "" {
+		doc["coverImageUrl"] = clean.CoverImageURL
 	}
 	if scope.UserID != "" {
 		doc["createdBy"] = mongodb.ID(scope.UserID)
@@ -348,6 +396,9 @@ func (s *Service) UpdateCampaign(ctx context.Context, id string, in CampaignInpu
 		set["isActive"] = *clean.IsActive
 	}
 	update := bson.M{"$set": set}
+	if clean.CoverImageURL != "" {
+		set["coverImageUrl"] = clean.CoverImageURL
+	}
 	if clean.Description != "" {
 		set["description"] = clean.Description
 	} else {

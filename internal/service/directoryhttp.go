@@ -10,6 +10,7 @@ import (
 	"github.com/hayfordstanley/altar-os/internal/domain/rbac"
 	"github.com/hayfordstanley/altar-os/internal/platform/deps"
 	"github.com/hayfordstanley/altar-os/internal/platform/httpx"
+	"github.com/hayfordstanley/altar-os/internal/platform/ratelimit"
 	"github.com/hayfordstanley/altar-os/internal/platform/tenancy"
 )
 
@@ -37,8 +38,18 @@ func directoryRoutes(d *deps.Deps) routeSet {
 	return func(r chi.Router) {
 		// Public. Deliberately no tenant, no token, and no parameters — there
 		// is nothing a caller can vary, so there is nothing to get wrong.
-		r.Get("/directory/churches", handleDirectoryChurches(svc))
-		r.Get("/directory/campaigns", handleDirectoryCampaigns(svc))
+		//
+		// THROTTLED, because "no parameters" does not mean "free". Each of
+		// these is an unauthenticated cross-tenant query against two
+		// collections, and it is the cheapest request on the platform for a
+		// stranger to repeat. PublicSite rather than PublicLookup: this is a
+		// marketing page meant to be read by search engines and crawlers, so
+		// the limit has to admit real traffic while keeping a scraper from
+		// walking it for free.
+		r.With(throttle(d, ratelimit.PublicSite)).
+			Get("/directory/churches", handleDirectoryChurches(svc))
+		r.With(throttle(d, ratelimit.PublicSite)).
+			Get("/directory/campaigns", handleDirectoryCampaigns(svc))
 
 		r.Group(func(r chi.Router) {
 			r.Use(authenticated(d))

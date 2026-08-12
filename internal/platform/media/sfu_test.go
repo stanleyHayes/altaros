@@ -336,3 +336,93 @@ func sampleFrame() mediapkg.Sample {
 		Duration: 20 * time.Millisecond,
 	}
 }
+
+// One grant, two sockets. The displaced connection must be CLOSED, not merely
+// dropped from the map — otherwise a single valid credential opened repeatedly
+// piles up orphaned connections, each still copying every packet of the service
+// to nobody. A seat cap does not bound that, because to the room it is one
+// viewer.
+func TestReconnectingClosesTheDisplacedConnection(t *testing.T) {
+	s := testSFU(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	roomID, err := s.OpenRoom(ctx, "session-displace", "broadcast")
+	if err != nil {
+		t.Fatalf("OpenRoom: %v", err)
+	}
+	publisher := newClient(t)
+	answer, _, err := s.Publish(ctx, roomID, publisher.offerVideo(t))
+	if err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+	publisher.accept(t, answer)
+	publisher.sendVideo(t)
+	waitForTracks(t, s, roomID, 1)
+
+	first := newClient(t)
+	if _, _, err := s.Watch(ctx, roomID, "member-1", first.offerReceive(t)); err != nil {
+		t.Fatalf("first Watch: %v", err)
+	}
+	room, _ := s.Room(roomID)
+	firstPC := room.viewerPC("member-1")
+
+	second := newClient(t)
+	if _, _, err := s.Watch(ctx, roomID, "member-1", second.offerReceive(t)); err != nil {
+		t.Fatalf("second Watch: %v", err)
+	}
+
+	if room.Viewers() != 1 {
+		t.Fatalf("one member on two sockets occupies %d seats", room.Viewers())
+	}
+	// The displaced connection is closed rather than left running.
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		if firstPC.ConnectionState() == webrtc.PeerConnectionStateClosed {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatal("the displaced connection was left open, forwarding media to nobody")
+}
+
+// A member on a flaky connection reconnects, then the OLD socket finishes
+// tearing down. That teardown must not close the new connection — doing so
+// killed the member's working stream because their dead one caught up, which on
+// a bad mobile connection is a reconnect loop they cannot escape.
+func TestAnOldSocketClosingDoesNotKillTheNewOne(t *testing.T) {
+	s := testSFU(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	roomID, err := s.OpenRoom(ctx, "session-stale", "broadcast")
+	if err != nil {
+		t.Fatalf("OpenRoom: %v", err)
+	}
+
+	first := newClient(t)
+	_, releaseFirst, err := s.Watch(ctx, roomID, "member-1", first.offerReceive(t))
+	if err != nil {
+		t.Fatalf("first Watch: %v", err)
+	}
+
+	second := newClient(t)
+	if _, _, err := s.Watch(ctx, roomID, "member-1", second.offerReceive(t)); err != nil {
+		t.Fatalf("second Watch: %v", err)
+	}
+	room, _ := s.Room(roomID)
+	currentPC := room.viewerPC("member-1")
+
+	// The stale socket's cleanup fires now.
+	releaseFirst()
+
+	if room.viewerPC("member-1") == nil {
+		t.Fatal("a stale socket's teardown evicted the member's live connection")
+	}
+	if currentPC.ConnectionState() == webrtc.PeerConnectionStateClosed {
+		t.Fatal("a stale socket's teardown closed the member's working stream")
+	}
+	if room.Viewers() != 1 {
+		t.Fatalf("viewers = %d, want 1", room.Viewers())
+	}
+}

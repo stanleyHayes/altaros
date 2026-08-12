@@ -20,6 +20,7 @@ import (
 	"github.com/hayfordstanley/altar-os/internal/platform/money"
 	"github.com/hayfordstanley/altar-os/internal/platform/payments"
 	"github.com/hayfordstanley/altar-os/internal/platform/payments/paystack"
+	"github.com/hayfordstanley/altar-os/internal/platform/ratelimit"
 	"github.com/hayfordstanley/altar-os/internal/platform/tenancy"
 )
 
@@ -82,8 +83,10 @@ func financeRoutes(d *deps.Deps) routeSet {
 
 		// The church's own public website. Unauthenticated by design — the
 		// tenant is the resolved host, and the query returns only campaigns
-		// the church published to the public.
-		r.Get("/finance/public/campaigns", handlePublicCampaigns(svc))
+		// the church published to the public. Throttled on the same rule as
+		// the rest of that site, since it is part of the same page.
+		r.With(throttle(d, ratelimit.PublicSite)).
+			Get("/finance/public/campaigns", handlePublicCampaigns(svc))
 
 		r.Group(func(r chi.Router) {
 			r.Use(authenticated(d))
@@ -480,22 +483,24 @@ func handleStartGiving(svc *finance.Service, directory *churchDirectory, members
 //
 // campaignInput is the wire shape of a giving campaign.
 type campaignInput struct {
-	Title        string     `json:"title"`
-	Description  string     `json:"description"`
-	TargetAmount int64      `json:"targetAmount"`
-	Currency     string     `json:"currency"`
-	StartDate    *time.Time `json:"startDate"`
-	EndDate      *time.Time `json:"endDate"`
-	IsActive     *bool      `json:"isActive"`
+	Title         string     `json:"title"`
+	Description   string     `json:"description"`
+	TargetAmount  int64      `json:"targetAmount"`
+	Currency      string     `json:"currency"`
+	StartDate     *time.Time `json:"startDate"`
+	EndDate       *time.Time `json:"endDate"`
+	IsActive      *bool      `json:"isActive"`
+	CoverImageURL string     `json:"coverImageUrl"`
 }
 
 func (in campaignInput) toDomain() finance.CampaignInput {
 	out := finance.CampaignInput{
-		Title:        in.Title,
-		Description:  in.Description,
-		TargetAmount: in.TargetAmount,
-		Currency:     in.Currency,
-		IsActive:     in.IsActive,
+		Title:         in.Title,
+		Description:   in.Description,
+		TargetAmount:  in.TargetAmount,
+		Currency:      in.Currency,
+		IsActive:      in.IsActive,
+		CoverImageURL: in.CoverImageURL,
 	}
 	if in.StartDate != nil {
 		out.StartDate = *in.StartDate
@@ -1004,6 +1009,9 @@ func writeFinanceError(w http.ResponseWriter, err error) {
 		httpx.Error(w, http.StatusBadRequest, "Set a target above zero.")
 	case errors.Is(err, finance.ErrCampaignDates):
 		httpx.Error(w, http.StatusBadRequest, "The campaign has to end after it starts.")
+	case errors.Is(err, finance.ErrCampaignImage):
+		httpx.Error(w, http.StatusBadRequest,
+			"The cover image must be an https link to a picture.")
 	case errors.Is(err, finance.ErrCampaignVisibility):
 		// Was falling through to 500. An unrecognised audience is the client
 		// sending something wrong, and a 500 tells a church its server broke
