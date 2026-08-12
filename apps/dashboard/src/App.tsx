@@ -12,6 +12,9 @@ import ForgotPasswordPage from "@/pages/ForgotPasswordPage";
 import DashboardPage from "@/pages/DashboardPage";
 import MembersPage from "@/pages/MembersPage";
 import FinancePage from "@/pages/FinancePage";
+import CampaignsPage from "@/pages/CampaignsPage";
+import LivePage from "@/pages/LivePage";
+import PlanPage from "@/pages/PlanPage";
 import EventsPage from "@/pages/EventsPage";
 import CommunicationsPage from "@/pages/CommunicationsPage";
 import AnalyticsPage from "@/pages/AnalyticsPage";
@@ -90,6 +93,30 @@ export default function App() {
                     element={
                       <Guarded path="/finance">
                         <FinancePage />
+                      </Guarded>
+                    }
+                  />
+                  <Route
+                    path="campaigns"
+                    element={
+                      <Guarded path="/campaigns">
+                        <CampaignsPage />
+                      </Guarded>
+                    }
+                  />
+                  <Route
+                    path="live"
+                    element={
+                      <Guarded path="/live">
+                        <LivePage />
+                      </Guarded>
+                    }
+                  />
+                  <Route
+                    path="plan"
+                    element={
+                      <Guarded path="/plan">
+                        <PlanPage />
                       </Guarded>
                     }
                   />

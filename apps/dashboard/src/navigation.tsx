@@ -11,6 +11,9 @@ import {
   AutoAwesome as AiIcon,
   Hub as InterChurchIcon,
   Settings as SettingsIcon,
+  Campaign as CampaignIcon,
+  Videocam as VideocamIcon,
+  CardMembership as PlanIcon,
 } from '@mui/icons-material';
 import type { NavRequirement } from '@altar-os/permissions';
 
@@ -58,6 +61,23 @@ export const NAV_ITEMS: NavItem[] = [
     path: '/finance',
     icon: <FinanceIcon />,
     requires: ['finance:read'],
+    inSidebar: true,
+  },
+  {
+    label: 'Appeals',
+    path: '/campaigns',
+    icon: <CampaignIcon />,
+    requires: ['finance:read'],
+    inSidebar: true,
+  },
+  {
+    // Runs on the event permissions rather than a new resource: a live service
+    // IS an event with a camera, and the people who run one are the people who
+    // already schedule services.
+    label: 'Live',
+    path: '/live',
+    icon: <VideocamIcon />,
+    requires: ['event:read'],
     inSidebar: true,
   },
   {
@@ -114,6 +134,15 @@ export const NAV_ITEMS: NavItem[] = [
     path: '/people',
     icon: <PeopleIcon />,
     requires: ['user:read'],
+    inSidebar: true,
+  },
+  {
+    // The subscription is a settings decision — it commits the church to a
+    // monthly bill and changes the commission on every gift.
+    label: 'Plan',
+    path: '/plan',
+    icon: <PlanIcon />,
+    requires: ['settings:read'],
     inSidebar: true,
   },
   {

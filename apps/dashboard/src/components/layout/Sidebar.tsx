@@ -16,10 +16,26 @@ interface SidebarProps { open: boolean; onClose: () => void; collapsed: boolean;
 const sections = [
   { label: "Church pulse", paths: ["/dashboard", "/analytics"] },
   { label: "People & care", paths: ["/members", "/families", "/departments", "/people"] },
-  { label: "Ministry work", paths: ["/events", "/communications", "/ai", "/inter-church"] },
-  { label: "Stewardship", paths: ["/finance"] },
-  { label: "Workspace", paths: ["/settings"] },
+  { label: "Ministry work", paths: ["/events", "/live", "/communications", "/ai", "/inter-church"] },
+  { label: "Stewardship", paths: ["/finance", "/campaigns"] },
+  { label: "Workspace", paths: ["/settings", "/plan"] },
 ];
+
+/**
+ * Anything in NAV_ITEMS that no section claims.
+ *
+ * Without this a page added to NAV_ITEMS but forgotten here VANISHES: the route
+ * works, the permission passes, and the link is simply absent — which is
+ * indistinguishable from a permission problem and sends whoever is debugging it
+ * to the wrong file. It happened the first time this list was extended.
+ *
+ * The grouping stays hand-written because the order is an editorial decision,
+ * but forgetting it can no longer hide a page.
+ */
+function ungroupedPaths(items: NavItem[]): string[] {
+  const grouped = new Set(sections.flatMap((section) => section.paths));
+  return items.filter((item) => !grouped.has(item.path)).map((item) => item.path);
+}
 
 function BrandMark() {
   return <Box sx={{ width: 42, height: 42, borderRadius: "14px", bgcolor: "primary.light", color: "primary.dark", display: "grid", placeItems: "center", flex: "0 0 auto" }}><svg width="27" height="27" viewBox="0 0 48 48" fill="none"><path d="M10 31V22C10 14.3 16.3 8 24 8s14 6.3 14 14v9M24 24v14" stroke="currentColor" strokeWidth="6" strokeLinecap="round" /></svg></Box>;
@@ -61,7 +77,7 @@ export default function Sidebar({ open, onClose, collapsed, onToggleCollapse }: 
 
     <Box sx={{ flex: 1, overflowY: "auto", pb: 2, scrollbarWidth: "thin", scrollbarColor: "rgba(109,213,196,.2) transparent" }}>
       {isLoading ? <List>{Array.from({ length: 8 }, (_, i) => <Box key={i} sx={{ display: "flex", gap: 1.4, px: 2.4, py: 1.25 }}><Skeleton variant="rounded" width={22} height={22} sx={{ bgcolor: "rgba(255,255,255,.08)" }} />{!collapsed && <Skeleton width={90 + i * 5} sx={{ bgcolor: "rgba(255,255,255,.08)" }} />}</Box>)}</List> :
-        sections.map((section) => {
+        [...sections, { label: "More", paths: ungroupedPaths(items) }].map((section) => {
           const group = section.paths.map((path) => items.find((item) => item.path === path)).filter(Boolean) as NavItem[];
           if (!group.length) return null;
           return <Box key={section.label} sx={{ mt: collapsed ? 1 : 1.4 }}>
