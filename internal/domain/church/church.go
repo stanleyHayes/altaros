@@ -139,6 +139,16 @@ type Church struct {
 	IsActive  bool      `bson:"isActive"                 json:"isActive"`
 	CreatedAt time.Time `bson:"createdAt"                json:"createdAt"`
 	UpdatedAt time.Time `bson:"updatedAt"                json:"updatedAt"`
+	// ListedInDirectory opts this church into the public directory on ALTAR
+	// OS's own marketing site.
+	//
+	// Off by default and separate from every other visibility setting in the
+	// product. Running a public church website is a decision about reaching
+	// your own community; appearing on a software company's homepage beside
+	// other churches is a decision about your public identity, and one does
+	// not imply the other. A campaign's own directory opt-in is separate
+	// again — see finance.Campaign.ListedInDirectory.
+	ListedInDirectory bool `bson:"listedInDirectory,omitempty" json:"listedInDirectory"`
 }
 
 // Department is a ministry within a branch (choir, youth, ushers, media).

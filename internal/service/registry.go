@@ -70,6 +70,7 @@ func routeBuilders() map[string]func(*deps.Deps) routeSet {
 		"privacy":       privacyRoutes,
 		"live":          liveRoutes,
 		"plan":          planRoutes,
+		"directory":     directoryRoutes,
 	}
 }
 
@@ -113,6 +114,7 @@ func init() {
 		"privacy":       buildPrivacy,
 		"live":          buildLive,
 		"plan":          buildPlan,
+		"directory":     buildDirectory,
 		"ai":            placeholder("ai", "sermon assistant, member insights, prayer chat"),
 		"notification":  buildNotification,
 	}
