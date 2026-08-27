@@ -1,4 +1,4 @@
-import { get, post, put, del } from "./api";
+import { get, post, put } from "./api";
 
 export interface Transaction {
   id: string;
@@ -40,6 +40,20 @@ export interface Campaign {
   createdAt: string;
 }
 
+export interface Summary {
+  currency: string;
+  // All amounts are in minor units (pesewas for GHS)
+  income: number;
+  gross: number;
+  expenses: number;
+  balance: number;
+  providerFees: number;
+  platformFees: number;
+  levy: number;
+  count: number;
+  byType: Record<string, number>;
+}
+
 export interface CreateCampaignPayload {
   name: string;
   description?: string;
@@ -75,6 +89,15 @@ export interface PaginatedResponse<T> {
 }
 
 const FinanceService = {
+  /** Summary of income, expenses, and fees over an optional window. */
+  async getSummary(params?: {
+    from?: string;
+    to?: string;
+    currency?: string;
+  }): Promise<Summary> {
+    return get<Summary>("/finance/summary", { params });
+  },
+
   /** Transactions. Returns a bare array — the endpoint is not paginated. */
   async getTransactions(
     params?: TransactionSearchParams,
@@ -102,7 +125,12 @@ const FinanceService = {
   async createTransaction(
     payload: CreateTransactionPayload,
   ): Promise<Transaction> {
-    return post<Transaction>("/finance/transactions", payload);
+    // POST /finance/transactions does not exist. Money recorded by hand —
+    // the notes and coins counted after a service — goes to /finance/cash,
+    // which is the only write path that does not run a payment through
+    // Paystack. amountMinor is sent explicitly so the server never has to
+    // guess whether a decimal string meant cedis or pesewas.
+    return post<Transaction>("/finance/cash", payload);
   },
 
   async getCampaigns(): Promise<Campaign[]> {
@@ -124,8 +152,16 @@ const FinanceService = {
     return put<Campaign>(`/finance/campaigns/${id}`, payload);
   },
 
-  async deleteCampaign(id: string): Promise<void> {
-    return del<void>(`/finance/campaigns/${id}`);
+  /**
+   * Close a campaign. There is no delete, and there should not be.
+   *
+   * DELETE /finance/campaigns/{id} does not exist: giving is recorded
+   * against a campaign, so removing one would leave the church's ledger
+   * showing income against a fund that no longer exists. Closing stops new
+   * gifts and keeps the history answerable.
+   */
+  async closeCampaign(id: string): Promise<void> {
+    await post<unknown>(`/finance/campaigns/${id}/close`, {});
   },
 };
 

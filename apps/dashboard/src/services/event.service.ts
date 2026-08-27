@@ -1,4 +1,4 @@
-import { get, post, put, del } from "./api";
+import { get, post, patch, del } from "./api";
 
 /**
  * One check-in.
@@ -28,7 +28,6 @@ export interface Event {
   capacity?: number;
   rsvpCount: number;
   attendanceCount: number;
-  status: "upcoming" | "ongoing" | "completed" | "cancelled";
   churchId: string;
   createdAt: string;
   updatedAt: string;
@@ -53,33 +52,37 @@ export interface RsvpPayload {
   status: "attending" | "declined" | "maybe";
 }
 
-export interface AttendancePayload {
-  eventId: string;
+export interface CheckInPayload {
   memberIds: string[];
   date: string;
 }
 
 export interface EventSearchParams {
-  status?: string;
-  startDate?: string;
-  endDate?: string;
-  page?: number;
+  from?: string;
+  to?: string;
   limit?: number;
-}
-
-export interface PaginatedResponse<T> {
-  data: T[];
-  total: number;
-  page: number;
-  limit: number;
-  totalPages: number;
 }
 
 const EventService = {
   async getAll(
     params?: EventSearchParams,
-  ): Promise<PaginatedResponse<Event>> {
-    return get<PaginatedResponse<Event>>("/events", { params });
+  ): Promise<{ events: Event[] }> {
+    return get<{ events: Event[] }>("/events", { params });
+  },
+
+  /**
+   * The next occurrences, already expanded.
+   *
+   * A dedicated endpoint rather than filtering getAll: recurring events are
+   * stored as a rule, so "the next four things happening" cannot be derived
+   * client-side from the event list without re-implementing the recurrence
+   * expansion the server already does.
+   */
+  async upcoming(limit?: number): Promise<Event[]> {
+    const res = await get<{ events: Event[] }>("/events/upcoming", {
+      params: limit ? { limit } : undefined,
+    });
+    return res?.events ?? [];
   },
 
   async getById(id: string): Promise<Event> {
@@ -91,7 +94,7 @@ const EventService = {
   },
 
   async update(id: string, payload: UpdateEventPayload): Promise<Event> {
-    return put<Event>(`/events/${id}`, payload);
+    return patch<Event>(`/events/${id}`, payload);
   },
 
   async remove(id: string): Promise<void> {
@@ -102,8 +105,8 @@ const EventService = {
     return post<void>(`/events/${payload.eventId}/rsvp`, payload);
   },
 
-  async recordAttendance(payload: AttendancePayload): Promise<void> {
-    return post<void>(`/events/${payload.eventId}/attendance`, payload);
+  async checkIn(eventId: string, payload: CheckInPayload): Promise<void> {
+    return post<void>(`/events/${eventId}/check-in`, payload);
   },
 
   /**

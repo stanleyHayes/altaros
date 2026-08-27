@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useCallback, useEffect } from "react";
 import {
   Box,
   Typography,
@@ -11,6 +11,9 @@ import {
   TextField,
   IconButton,
   Tooltip,
+  Alert,
+  CircularProgress,
+  Snackbar,
 } from "@mui/material";
 import {
   Add as AddIcon,
@@ -31,6 +34,11 @@ import CampaignCard from "@/components/finance/CampaignCard";
 import CampaignFormDialog, {
   type CampaignFormData,
 } from "@/components/finance/CampaignFormDialog";
+import FinanceService, {
+  type Transaction,
+  type Campaign,
+  type Summary,
+} from "@/services/finance.service";
 
 interface TransactionRow {
   id: string;
@@ -44,132 +52,35 @@ interface TransactionRow {
   [key: string]: unknown;
 }
 
-interface CampaignItem {
-  id: string;
-  name: string;
-  description: string;
-  goalAmount: number;
-  currentAmount: number;
-  startDate: string;
-  endDate?: string;
-  status: "active" | "completed" | "paused";
+/**
+ * Format amount from minor units (pesewas) to GHS currency string.
+ * The API returns all monetary values in minor units (100 pesewas = 1 GHS).
+ */
+function formatGHS(amountInPesewas: number): string {
+  const amountInGHS = amountInPesewas / 100;
+  return new Intl.NumberFormat("en-GH", {
+    style: "currency",
+    currency: "GHS",
+    maximumFractionDigits: 0,
+  }).format(amountInGHS);
 }
 
-// TODO: Replace with real API data from FinanceService
-const sampleTransactions: TransactionRow[] = [
-  {
-    id: "1",
-    type: "tithe",
-    amount: "$500.00",
-    memberName: "John Smith",
-    date: "2026-03-28",
-    method: "online",
-    status: "completed",
-    description: "Monthly tithe",
-  },
-  {
-    id: "2",
-    type: "offering",
-    amount: "$150.00",
-    memberName: "Sarah Johnson",
-    date: "2026-03-27",
-    method: "cash",
-    status: "completed",
-    description: "Sunday offering",
-  },
-  {
-    id: "3",
-    type: "donation",
-    amount: "$1,000.00",
-    memberName: "Grace Adekunle",
-    date: "2026-03-26",
-    method: "bank_transfer",
-    status: "completed",
-    description: "Building fund donation",
-  },
-  {
-    id: "4",
-    type: "tithe",
-    amount: "$350.00",
-    memberName: "David Okafor",
-    date: "2026-03-25",
-    method: "card",
-    status: "completed",
-    description: "Monthly tithe",
-  },
-  {
-    id: "5",
-    type: "offering",
-    amount: "$75.00",
-    memberName: "Emily Brown",
-    date: "2026-03-24",
-    method: "cash",
-    status: "completed",
-    description: "Mid-week offering",
-  },
-  {
-    id: "6",
-    type: "expense",
-    amount: "$2,500.00",
-    memberName: "--",
-    date: "2026-03-23",
-    method: "bank_transfer",
-    status: "completed",
-    description: "Utility payment",
-  },
-  {
-    id: "7",
-    type: "donation",
-    amount: "$250.00",
-    memberName: "James Taylor",
-    date: "2026-03-22",
-    method: "online",
-    status: "pending",
-    description: "Youth camp sponsorship",
-  },
-];
-
-const sampleCampaigns: CampaignItem[] = [
-  {
-    id: "1",
-    name: "Building Fund",
-    description: "New worship center construction project",
-    goalAmount: 500000,
-    currentAmount: 287500,
-    startDate: "2025-01-01",
-    endDate: "2026-12-31",
-    status: "active",
-  },
-  {
-    id: "2",
-    name: "Mission Trip 2026",
-    description: "Annual mission trip to support communities in need",
-    goalAmount: 25000,
-    currentAmount: 18200,
-    startDate: "2026-01-15",
-    endDate: "2026-06-30",
-    status: "active",
-  },
-  {
-    id: "3",
-    name: "Youth Scholarship Fund",
-    description: "Supporting youth education and development",
-    goalAmount: 15000,
-    currentAmount: 15000,
-    startDate: "2025-06-01",
-    endDate: "2025-12-31",
-    status: "completed",
-  },
-  {
-    id: "4",
-    name: "Community Food Bank",
-    description: "Monthly food distribution program for local families",
-    goalAmount: 10000,
-    currentAmount: 3400,
-    startDate: "2026-02-01",
-    status: "active",
-  },
-];
+/**
+ * Map a Transaction from the API to what the table renders.
+ * The table needs flat non-optional strings; the wire type has optionals.
+ */
+function toTransactionRow(t: Transaction): TransactionRow {
+  return {
+    id: t.id,
+    type: t.type,
+    amount: formatGHS(t.amount),
+    memberName: t.memberName ?? "--",
+    date: (t.date ?? t.createdAt ?? "").slice(0, 10),
+    method: t.method,
+    status: t.status,
+    description: t.description ?? "",
+  };
+}
 
 const typeColorMap: Record<string, "primary" | "success" | "warning" | "error" | "info"> = {
   tithe: "primary",
@@ -182,16 +93,51 @@ const typeColorMap: Record<string, "primary" | "success" | "warning" | "error" |
 export default function FinancePage() {
   const [tabIndex, setTabIndex] = useState(0);
   const [formOpen, setFormOpen] = useState(false);
-  const [transactions, setTransactions] =
-    useState<TransactionRow[]>(sampleTransactions);
+  const [transactions, setTransactions] = useState<TransactionRow[]>([]);
+  const [campaigns, setCampaigns] = useState<Campaign[]>([]);
+  const [summary, setSummary] = useState<Summary | null>(null);
+
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+
   const [typeFilter, setTypeFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState("all");
 
-  // Campaign state
-  const [campaigns, setCampaigns] = useState<CampaignItem[]>(sampleCampaigns);
   const [campaignFormOpen, setCampaignFormOpen] = useState(false);
-  const [editCampaign, setEditCampaign] = useState<CampaignItem | null>(null);
-  const [deleteCampaign, setDeleteCampaign] = useState<CampaignItem | null>(null);
+  const [editCampaign, setEditCampaign] = useState<Campaign | null>(null);
+  const [deleteCampaign, setDeleteCampaign] = useState<Campaign | null>(null);
+
+  /**
+   * Load all finance data. The page shows money, so if load fails, we show
+   * an error and a retry button, not mock data that would mislead a church
+   * about its finances.
+   */
+  const load = useCallback(async () => {
+    setLoading(true);
+    setLoadError(null);
+    try {
+      const [summaryData, transactionsData, campaignsData] = await Promise.all([
+        FinanceService.getSummary(),
+        FinanceService.getTransactions(),
+        FinanceService.getCampaigns(),
+      ]);
+
+      setSummary(summaryData);
+      setTransactions(transactionsData.map(toTransactionRow));
+      setCampaigns(campaignsData);
+    } catch {
+      setLoadError(
+        "We could not load your finance data. Check your connection and try again."
+      );
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
 
   const filteredTransactions = transactions.filter((t) => {
     if (typeFilter !== "all" && t.type !== typeFilter) return false;
@@ -199,67 +145,96 @@ export default function FinancePage() {
     return true;
   });
 
-  const handleAddTransaction = async (data: TransactionFormData) => {
-    // TODO: Call FinanceService.createTransaction
-    const newRow: TransactionRow = {
-      id: String(Date.now()),
-      type: data.type,
-      amount: `$${Number(data.amount).toFixed(2)}`,
-      memberName: data.memberName || "--",
-      date: data.date,
-      method: data.method,
-      status: "completed",
-      description: data.description || "",
-    };
-    setTransactions((prev) => [newRow, ...prev]);
-  };
+  const handleAddTransaction = useCallback(
+    async (data: TransactionFormData) => {
+      try {
+        const created = await FinanceService.createTransaction({
+          type: data.type as Transaction["type"],
+          amount: Math.round(Number(data.amount) * 100), // Convert GHS to pesewas
+          method: data.method as Transaction["method"],
+          description: data.description,
+          date: data.date,
+        });
+        setTransactions((prev) => [toTransactionRow(created), ...prev]);
+        setFormOpen(false);
+        setNotice("Transaction recorded.");
+      } catch {
+        setNotice(
+          "We could not save that transaction. Please check the details and try again."
+        );
+      }
+    },
+    []
+  );
 
-  const handleCampaignCreate = () => {
+  const handleCampaignCreate = useCallback(() => {
     setEditCampaign(null);
     setCampaignFormOpen(true);
-  };
+  }, []);
 
-  const handleCampaignEdit = (campaign: CampaignItem) => {
+  const handleCampaignEdit = useCallback((campaign: Campaign) => {
     setEditCampaign(campaign);
     setCampaignFormOpen(true);
-  };
+  }, []);
 
-  const handleCampaignFormSubmit = async (data: CampaignFormData) => {
-    if (editCampaign) {
-      setCampaigns((prev) =>
-        prev.map((c) =>
-          c.id === editCampaign.id
-            ? {
-                ...c,
-                name: data.name,
-                description: data.description || "",
-                goalAmount: Number(data.goalAmount),
-                startDate: data.startDate,
-                endDate: data.endDate,
-              }
-            : c,
-        ),
-      );
-    } else {
-      const newCampaign: CampaignItem = {
-        id: String(Date.now()),
-        name: data.name,
-        description: data.description || "",
-        goalAmount: Number(data.goalAmount),
-        currentAmount: 0,
-        startDate: data.startDate,
-        endDate: data.endDate,
-        status: "active",
-      };
-      setCampaigns((prev) => [...prev, newCampaign]);
-    }
-  };
+  const handleCampaignFormSubmit = useCallback(
+    async (data: CampaignFormData) => {
+      try {
+        if (editCampaign) {
+          const updated = await FinanceService.updateCampaign(editCampaign.id, {
+            name: data.name,
+            description: data.description,
+            goalAmount: Math.round(Number(data.goalAmount) * 100), // Convert to pesewas
+            startDate: data.startDate,
+            endDate: data.endDate,
+          });
+          setCampaigns((prev) =>
+            prev.map((c) => (c.id === updated.id ? updated : c))
+          );
+          setNotice(`${data.name} updated.`);
+        } else {
+          const created = await FinanceService.createCampaign({
+            name: data.name,
+            description: data.description,
+            goalAmount: Math.round(Number(data.goalAmount) * 100), // Convert to pesewas
+            startDate: data.startDate,
+            endDate: data.endDate,
+          });
+          setCampaigns((prev) => [created, ...prev]);
+          setNotice(`${data.name} created.`);
+        }
+        setCampaignFormOpen(false);
+      } catch {
+        setNotice(
+          "We could not save that campaign. Please check the details and try again."
+        );
+      }
+    },
+    [editCampaign]
+  );
 
-  const handleCampaignDelete = () => {
+  /**
+   * Close a campaign rather than delete it.
+   *
+   * There is no delete endpoint, deliberately: giving is recorded against a
+   * campaign, so removing one would leave the ledger showing income for a
+   * fund that no longer exists. Closing stops new gifts and keeps the
+   * history answerable. The campaign stays in the list, marked closed.
+   */
+  const handleCampaignClose = useCallback(async () => {
     if (!deleteCampaign) return;
-    setCampaigns((prev) => prev.filter((c) => c.id !== deleteCampaign.id));
+    const target = deleteCampaign;
     setDeleteCampaign(null);
-  };
+    try {
+      await FinanceService.closeCampaign(target.id);
+      setCampaigns((prev) =>
+        prev.map((c) => (c.id === target.id ? { ...c, isActive: false } : c)),
+      );
+      setNotice(`${target.name} is now closed to new giving.`);
+    } catch {
+      setNotice("We could not close that campaign. Please try again.");
+    }
+  }, [deleteCampaign]);
 
   const transactionColumns: Column<TransactionRow>[] = [
     {
@@ -340,165 +315,209 @@ export default function FinancePage() {
         </Button>
       </Box>
 
-      {/* Stat Cards */}
-      <Grid container spacing={3} sx={{ mb: 4 }}>
-        <Grid size={{ xs: 12, sm: 6, md: 3 }}>
-          <StatCard
-            title="Total Income"
-            value="$24,580"
-            icon={<TotalIcon />}
-            change={8.5}
-            changeLabel="vs last month"
-            iconBgColor="primary.light"
-            iconColor="primary.main"
-          />
-        </Grid>
-        <Grid size={{ xs: 12, sm: 6, md: 3 }}>
-          <StatCard
-            title="Tithes"
-            value="$14,200"
-            icon={<TitheIcon />}
-            change={12}
-            changeLabel="vs last month"
-            iconBgColor="success.light"
-            iconColor="success.main"
-          />
-        </Grid>
-        <Grid size={{ xs: 12, sm: 6, md: 3 }}>
-          <StatCard
-            title="Offerings"
-            value="$6,380"
-            icon={<OfferingIcon />}
-            change={-3.2}
-            changeLabel="vs last month"
-            iconBgColor="warning.light"
-            iconColor="warning.main"
-          />
-        </Grid>
-        <Grid size={{ xs: 12, sm: 6, md: 3 }}>
-          <StatCard
-            title="Donations"
-            value="$4,000"
-            icon={<DonationIcon />}
-            change={22}
-            changeLabel="vs last month"
-            iconBgColor="info.light"
-            iconColor="info.main"
-          />
-        </Grid>
-      </Grid>
-
-      {/* Tabs */}
-      <Tabs
-        value={tabIndex}
-        onChange={(_, v) => setTabIndex(v)}
-        sx={{ mb: 3, borderBottom: 1, borderColor: "divider" }}
-      >
-        <Tab label="Transactions" />
-        <Tab label="Campaigns" />
-      </Tabs>
-
-      {/* Transactions Tab */}
-      {tabIndex === 0 && (
-        <DataTable
-          columns={transactionColumns}
-          rows={filteredTransactions}
-          getRowId={(row) => row.id}
-          searchPlaceholder="Search transactions..."
-          toolbar={
-            <Box sx={{ display: "flex", gap: 1 }}>
-              <TextField
-                select
-                size="small"
-                value={typeFilter}
-                onChange={(e) => setTypeFilter(e.target.value)}
-                sx={{ minWidth: 130 }}
-                label="Type"
-              >
-                <MenuItem value="all">All Types</MenuItem>
-                <MenuItem value="tithe">Tithe</MenuItem>
-                <MenuItem value="offering">Offering</MenuItem>
-                <MenuItem value="donation">Donation</MenuItem>
-                <MenuItem value="expense">Expense</MenuItem>
-                <MenuItem value="other">Other</MenuItem>
-              </TextField>
-              <TextField
-                select
-                size="small"
-                value={statusFilter}
-                onChange={(e) => setStatusFilter(e.target.value)}
-                sx={{ minWidth: 130 }}
-                label="Status"
-              >
-                <MenuItem value="all">All Statuses</MenuItem>
-                <MenuItem value="completed">Completed</MenuItem>
-                <MenuItem value="pending">Pending</MenuItem>
-                <MenuItem value="failed">Failed</MenuItem>
-              </TextField>
-            </Box>
+      {loadError && (
+        <Alert
+          severity="error"
+          sx={{ mb: 2 }}
+          action={
+            <Button color="inherit" size="small" onClick={() => void load()}>
+              Retry
+            </Button>
           }
-        />
+        >
+          {loadError}
+        </Alert>
       )}
 
-      {/* Campaigns Tab */}
-      {tabIndex === 1 && (
-        <Box>
-          <Box sx={{ display: "flex", justifyContent: "flex-end", mb: 2 }}>
-            <Button
-              variant="contained"
-              startIcon={<AddIcon />}
-              onClick={handleCampaignCreate}
-            >
-              Add Campaign
-            </Button>
-          </Box>
-          <Grid container spacing={3}>
-            {campaigns.map((campaign) => (
-              <Grid key={campaign.id} size={{ xs: 12, sm: 6, md: 4 }}>
-                <Box sx={{ position: "relative" }}>
-                  <CampaignCard
-                    name={campaign.name}
-                    description={campaign.description}
-                    goalAmount={campaign.goalAmount}
-                    currentAmount={campaign.currentAmount}
-                    startDate={campaign.startDate}
-                    endDate={campaign.endDate}
-                    status={campaign.status}
-                  />
-                  <Box
-                    sx={{
-                      position: "absolute",
-                      top: 8,
-                      right: 8,
-                      display: "flex",
-                      gap: 0.5,
-                    }}
-                  >
-                    <Tooltip title="Edit">
-                      <IconButton
-                        size="small"
-                        sx={{ bgcolor: "background.paper", boxShadow: 1 }}
-                        onClick={() => handleCampaignEdit(campaign)}
-                      >
-                        <EditIcon fontSize="small" />
-                      </IconButton>
-                    </Tooltip>
-                    <Tooltip title="Delete">
-                      <IconButton
-                        size="small"
-                        color="error"
-                        sx={{ bgcolor: "background.paper", boxShadow: 1 }}
-                        onClick={() => setDeleteCampaign(campaign)}
-                      >
-                        <DeleteIcon fontSize="small" />
-                      </IconButton>
-                    </Tooltip>
-                  </Box>
-                </Box>
-              </Grid>
-            ))}
-          </Grid>
+      {loading ? (
+        <Box sx={{ display: "flex", justifyContent: "center", py: 8 }}>
+          <CircularProgress />
         </Box>
+      ) : (
+        <>
+          {/* Stat Cards */}
+          <Grid container spacing={3} sx={{ mb: 4 }}>
+            <Grid size={{ xs: 12, sm: 6, md: 3 }}>
+              <StatCard
+                title="Total Income"
+                value={summary ? formatGHS(summary.income) : "No data"}
+                icon={<TotalIcon />}
+                iconBgColor="primary.light"
+                iconColor="primary.main"
+              />
+            </Grid>
+            <Grid size={{ xs: 12, sm: 6, md: 3 }}>
+              <StatCard
+                title="Tithes"
+                value={
+                  summary && summary.byType.TITHE
+                    ? formatGHS(summary.byType.TITHE)
+                    : "No data"
+                }
+                icon={<TitheIcon />}
+                iconBgColor="success.light"
+                iconColor="success.main"
+              />
+            </Grid>
+            <Grid size={{ xs: 12, sm: 6, md: 3 }}>
+              <StatCard
+                title="Offerings"
+                value={
+                  summary && summary.byType.OFFERING
+                    ? formatGHS(summary.byType.OFFERING)
+                    : "No data"
+                }
+                icon={<OfferingIcon />}
+                iconBgColor="warning.light"
+                iconColor="warning.main"
+              />
+            </Grid>
+            <Grid size={{ xs: 12, sm: 6, md: 3 }}>
+              <StatCard
+                title="Donations"
+                value={
+                  summary && summary.byType.DONATION
+                    ? formatGHS(summary.byType.DONATION)
+                    : "No data"
+                }
+                icon={<DonationIcon />}
+                iconBgColor="info.light"
+                iconColor="info.main"
+              />
+            </Grid>
+          </Grid>
+
+          {/* Tabs */}
+          <Tabs
+            value={tabIndex}
+            onChange={(_, v) => setTabIndex(v)}
+            sx={{ mb: 3, borderBottom: 1, borderColor: "divider" }}
+          >
+            <Tab label="Transactions" />
+            <Tab label="Campaigns" />
+          </Tabs>
+
+          {/* Transactions Tab */}
+          {tabIndex === 0 && (
+            <>
+              {transactions.length === 0 ? (
+                <Box sx={{ py: 4, textAlign: "center" }}>
+                  <Typography color="textSecondary">
+                    No transactions recorded yet.
+                  </Typography>
+                </Box>
+              ) : (
+                <DataTable
+                  columns={transactionColumns}
+                  rows={filteredTransactions}
+                  getRowId={(row) => row.id}
+                  searchPlaceholder="Search transactions..."
+                  toolbar={
+                    <Box sx={{ display: "flex", gap: 1 }}>
+                      <TextField
+                        select
+                        size="small"
+                        value={typeFilter}
+                        onChange={(e) => setTypeFilter(e.target.value)}
+                        sx={{ minWidth: 130 }}
+                        label="Type"
+                      >
+                        <MenuItem value="all">All Types</MenuItem>
+                        <MenuItem value="tithe">Tithe</MenuItem>
+                        <MenuItem value="offering">Offering</MenuItem>
+                        <MenuItem value="donation">Donation</MenuItem>
+                        <MenuItem value="expense">Expense</MenuItem>
+                        <MenuItem value="other">Other</MenuItem>
+                      </TextField>
+                      <TextField
+                        select
+                        size="small"
+                        value={statusFilter}
+                        onChange={(e) => setStatusFilter(e.target.value)}
+                        sx={{ minWidth: 130 }}
+                        label="Status"
+                      >
+                        <MenuItem value="all">All Statuses</MenuItem>
+                        <MenuItem value="completed">Completed</MenuItem>
+                        <MenuItem value="pending">Pending</MenuItem>
+                        <MenuItem value="failed">Failed</MenuItem>
+                      </TextField>
+                    </Box>
+                  }
+                />
+              )}
+            </>
+          )}
+
+          {/* Campaigns Tab */}
+          {tabIndex === 1 && (
+            <Box>
+              <Box sx={{ display: "flex", justifyContent: "flex-end", mb: 2 }}>
+                <Button
+                  variant="contained"
+                  startIcon={<AddIcon />}
+                  onClick={handleCampaignCreate}
+                >
+                  Add Campaign
+                </Button>
+              </Box>
+              {campaigns.length === 0 ? (
+                <Box sx={{ py: 4, textAlign: "center" }}>
+                  <Typography color="textSecondary">
+                    No campaigns created yet.
+                  </Typography>
+                </Box>
+              ) : (
+                <Grid container spacing={3}>
+                  {campaigns.map((campaign) => (
+                    <Grid key={campaign.id} size={{ xs: 12, sm: 6, md: 4 }}>
+                      <Box sx={{ position: "relative" }}>
+                        <CampaignCard
+                          name={campaign.name}
+                          description={campaign.description}
+                          goalAmount={campaign.goalAmount}
+                          currentAmount={campaign.currentAmount}
+                          startDate={campaign.startDate}
+                          endDate={campaign.endDate}
+                          status={campaign.status}
+                        />
+                        <Box
+                          sx={{
+                            position: "absolute",
+                            top: 8,
+                            right: 8,
+                            display: "flex",
+                            gap: 0.5,
+                          }}
+                        >
+                          <Tooltip title="Edit">
+                            <IconButton
+                              size="small"
+                              sx={{ bgcolor: "background.paper", boxShadow: 1 }}
+                              onClick={() => handleCampaignEdit(campaign)}
+                            >
+                              <EditIcon fontSize="small" />
+                            </IconButton>
+                          </Tooltip>
+                          <Tooltip title="Delete">
+                            <IconButton
+                              size="small"
+                              color="error"
+                              sx={{ bgcolor: "background.paper", boxShadow: 1 }}
+                              onClick={() => setDeleteCampaign(campaign)}
+                            >
+                              <DeleteIcon fontSize="small" />
+                            </IconButton>
+                          </Tooltip>
+                        </Box>
+                      </Box>
+                    </Grid>
+                  ))}
+                </Grid>
+              )}
+            </Box>
+          )}
+        </>
       )}
 
       {/* Add Transaction Dialog */}
@@ -519,7 +538,7 @@ export default function FinancePage() {
             ? {
                 name: editCampaign.name,
                 description: editCampaign.description,
-                goalAmount: String(editCampaign.goalAmount),
+                goalAmount: String(editCampaign.goalAmount / 100), // Convert back to GHS for display
                 startDate: editCampaign.startDate,
                 endDate: editCampaign.endDate,
               }
@@ -530,12 +549,23 @@ export default function FinancePage() {
       {/* Delete Campaign Confirmation */}
       <ConfirmDialog
         open={!!deleteCampaign}
-        title="Delete Campaign"
-        message={`Are you sure you want to delete "${deleteCampaign?.name}"? This action cannot be undone.`}
-        confirmLabel="Delete"
+        title="Close campaign"
+        message={
+          `"${deleteCampaign?.name}" will stop accepting new gifts. Everything ` +
+          `already given to it is kept — a campaign cannot be deleted, because ` +
+          `the giving recorded against it has to stay answerable.`
+        }
+        confirmLabel="Close campaign"
         confirmColor="error"
-        onConfirm={handleCampaignDelete}
+        onConfirm={() => void handleCampaignClose()}
         onCancel={() => setDeleteCampaign(null)}
+      />
+
+      <Snackbar
+        open={!!notice}
+        autoHideDuration={5000}
+        onClose={() => setNotice(null)}
+        message={notice ?? ""}
       />
     </Box>
   );

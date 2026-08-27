@@ -51,28 +51,33 @@ export interface Campaign {
 
 const GivingService = {
   async initiatePayment(payload: InitiatePaymentPayload): Promise<PaymentResponse> {
-    // TODO: Replace with actual API call
-    return post<PaymentResponse>("/giving/initiate", payload);
+    return post<PaymentResponse>("/finance/give", payload);
   },
 
-  async verifyPayment(reference: string): Promise<GivingRecord> {
-    // TODO: Replace with actual API call
-    return get<GivingRecord>(`/giving/verify/${reference}`);
-  },
-
-  async getHistory(page = 1, limit = 20): Promise<{ data: GivingRecord[]; total: number }> {
-    // TODO: Replace with actual API call
-    return get(`/giving/history?page=${page}&limit=${limit}`);
+  /**
+   * The caller's own giving.
+   *
+   * No page or limit arguments, because the endpoint has no paging and
+   * accepting them would be a promise the server never made — a caller
+   * asking for page 2 would silently receive page 1 with no error.
+   */
+  async getHistory(): Promise<GivingRecord[]> {
+    const records = await get<GivingRecord[]>("/finance/me/giving");
+    return Array.isArray(records) ? records : [];
   },
 
   async getSummary(): Promise<GivingSummary> {
-    // TODO: Replace with actual API call
-    return get<GivingSummary>("/giving/summary");
+    // Note: GET /finance/summary requires finance:read permission and is for admins.
+    // Members see their own giving via /finance/me/giving. This method should not
+    // be called by member-facing UI. Left for potential staff/admin use.
+    return get<GivingSummary>("/finance/summary");
   },
 
   async getCampaigns(): Promise<Campaign[]> {
-    // TODO: Replace with actual API call
-    return get<Campaign[]>("/giving/campaigns");
+    // GET /finance/me/campaigns returns {"campaigns": [...]} wrapped format,
+    // but api.ts unwraps it to just the array
+    const response = await get<{ campaigns: Campaign[] }>("/finance/me/campaigns");
+    return response.campaigns || [];
   },
 };
 

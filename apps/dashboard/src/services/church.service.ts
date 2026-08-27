@@ -25,6 +25,22 @@ export interface CreateChurchPayload {
 
 export type UpdateChurchPayload = Partial<CreateChurchPayload>;
 
+export interface VisibleChurch {
+  id: string;
+  churchId: string;
+  churchName: string;
+  city: string;
+  country: string;
+  denomination: string;
+  memberCount: number;
+  logoUrl?: string;
+  description: string;
+  services: { day: string; time: string; name: string }[];
+  isVerified: boolean;
+  rating: number;
+  reviewCount: number;
+}
+
 const ChurchService = {
   async getAll(): Promise<Church[]> {
     return get<Church[]>("/churches");
@@ -32,6 +48,14 @@ const ChurchService = {
 
   async getById(id: string): Promise<Church> {
     return get<Church>(`/churches/${id}`);
+  },
+
+  async getCurrent(): Promise<Church> {
+    return get<Church>("/churches/current");
+  },
+
+  async getVisible(): Promise<VisibleChurch[]> {
+    return get<VisibleChurch[]>("/churches/visible");
   },
 
   async create(payload: CreateChurchPayload): Promise<Church> {

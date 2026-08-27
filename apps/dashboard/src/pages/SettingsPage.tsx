@@ -1,3 +1,4 @@
+import { useState, useEffect, useCallback } from "react";
 import { useForm, Controller } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod/v3";
@@ -15,6 +16,8 @@ import {
   Divider,
   Chip,
   Avatar,
+  CircularProgress,
+  Alert,
 } from "@mui/material";
 import {
   Save as SaveIcon,
@@ -27,6 +30,7 @@ import {
   CreditCardRounded,
 } from "@mui/icons-material";
 import { useSnackbar } from "notistack";
+import ChurchService, { type Church } from "@/services/church.service";
 
 const settingsSchema = z.object({
   churchName: z.string().min(1, "Church name is required"),
@@ -46,20 +50,20 @@ const settingsSchema = z.object({
 
 type SettingsFormData = z.infer<typeof settingsSchema>;
 
-const mockSettings: SettingsFormData = {
-  churchName: "Grace Chapel International",
-  slug: "grace-chapel",
-  address: "18 Boundary Road, East Legon",
-  city: "Accra",
-  country: "Ghana",
-  phone: "+233 30 255 0184",
-  email: "hello@gracechapel.org",
-  website: "https://gracechapel.org",
+const defaultSettings: SettingsFormData = {
+  churchName: "",
+  slug: "",
+  address: "",
+  city: "",
+  country: "",
+  phone: "",
+  email: "",
+  website: "",
   timezone: "Africa/Accra",
   currency: "GHS",
   fiscalYearStart: "January",
   defaultLanguage: "en",
-  allowPublicRegistration: true,
+  allowPublicRegistration: false,
 };
 
 const timezones = [
@@ -118,23 +122,109 @@ const languages = [
 
 export default function SettingsPage() {
   const { enqueueSnackbar } = useSnackbar();
+  const [currentChurch, setCurrentChurch] = useState<Church | null>(null);
+  const [isLoadingChurch, setIsLoadingChurch] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
 
   const {
     control,
     handleSubmit,
     formState: { errors, isDirty },
+    reset,
   } = useForm<SettingsFormData>({
     resolver: zodResolver(settingsSchema),
-    defaultValues: mockSettings,
+    defaultValues: defaultSettings,
   });
 
-  const onSubmit = async (_data: SettingsFormData) => {
-    // TODO: Call API to save settings
-    enqueueSnackbar("Settings saved successfully", { variant: "success" });
+  // Load current church settings on mount
+  const loadChurch = useCallback(async () => {
+    setIsLoadingChurch(true);
+    setLoadError(null);
+    try {
+      const church = await ChurchService.getCurrent();
+      setCurrentChurch(church);
+      // Populate form with current church data. Fields without backend
+      // support (website, fiscalYearStart, defaultLanguage, allowPublicRegistration)
+      // are left with placeholder defaults and won't persist.
+      reset({
+        churchName: church.name,
+        slug: church.slug,
+        address: church.address || "",
+        city: "",
+        country: "",
+        phone: church.phone || "",
+        email: church.email || "",
+        website: church.website || "",
+        timezone: "Africa/Accra",
+        currency: "GHS",
+        fiscalYearStart: "January",
+        defaultLanguage: "en",
+        allowPublicRegistration: false,
+      });
+    } catch {
+      setLoadError("Failed to load church settings. Please refresh the page.");
+    } finally {
+      setIsLoadingChurch(false);
+    }
+  }, [reset]);
+
+  useEffect(() => {
+    void loadChurch();
+  }, [loadChurch]);
+
+  const onSubmit = async (data: SettingsFormData) => {
+    if (!currentChurch?.id) {
+      enqueueSnackbar("Church information not loaded", { variant: "error" });
+      return;
+    }
+
+    setIsSaving(true);
+    try {
+      // Only send fields the Go backend accepts (churchInput struct)
+      const updatePayload = {
+        name: data.churchName,
+        slug: data.slug,
+        address: data.address,
+        city: data.city,
+        country: data.country,
+        phone: data.phone,
+        email: data.email,
+        timezone: data.timezone,
+        currency: data.currency,
+      };
+
+      const updated = await ChurchService.update(currentChurch.id, updatePayload);
+      setCurrentChurch(updated);
+      reset(data);
+      enqueueSnackbar("Settings saved successfully", { variant: "success" });
+    } catch (error) {
+      // Keep form open with values intact on error so nothing typed is lost
+      const message =
+        error instanceof Error
+          ? error.message
+          : "Failed to save settings. Please try again.";
+      enqueueSnackbar(message, { variant: "error" });
+    } finally {
+      setIsSaving(false);
+    }
   };
+
+  if (isLoadingChurch) {
+    return (
+      <Box sx={{ display: "flex", justifyContent: "center", alignItems: "center", minHeight: 400 }}>
+        <CircularProgress />
+      </Box>
+    );
+  }
 
   return (
     <Box>
+      {loadError && (
+        <Alert severity="error" sx={{ mb: 2 }}>
+          {loadError}
+        </Alert>
+      )}
       <Box
         sx={{
           display: "flex",
@@ -151,12 +241,12 @@ export default function SettingsPage() {
         <Box><Typography variant="overline" sx={{ color: "primary.light" }}>Workspace control</Typography><Typography variant="h3" sx={{ mt: 1, color: "white" }}>Settings that fit your church.</Typography><Typography sx={{ mt: 1.2, color: "rgba(255,255,255,.58)", maxWidth: 600 }}>Identity, member access, communication preferences and plan details in one accountable place.</Typography></Box>
         <Button
           variant="contained"
-          startIcon={<SaveIcon />}
+          startIcon={isSaving ? <CircularProgress size={20} sx={{ color: "primary.dark" }} /> : <SaveIcon />}
           onClick={handleSubmit(onSubmit)}
-          disabled={!isDirty}
+          disabled={!isDirty || isSaving || isLoadingChurch}
           sx={{ bgcolor: "primary.light", color: "primary.dark", "&:hover": { bgcolor: "#BFEDE5" } }}
         >
-          Save Changes
+          {isSaving ? "Saving..." : "Save Changes"}
         </Button>
       </Box>
 
@@ -294,7 +384,8 @@ export default function SettingsPage() {
                       fullWidth
                       label="Website"
                       error={!!errors.website}
-                      helperText={errors.website?.message}
+                      helperText={errors.website?.message || "Not yet persisted to backend"}
+                      disabled
                     />
                   )}
                 />
@@ -439,7 +530,8 @@ export default function SettingsPage() {
                       select
                       label="Fiscal Year Start"
                       error={!!errors.fiscalYearStart}
-                      helperText={errors.fiscalYearStart?.message}
+                      helperText={errors.fiscalYearStart?.message || "Not yet persisted to backend"}
+                      disabled
                     >
                       {months.map((m) => (
                         <MenuItem key={m} value={m}>
@@ -461,7 +553,8 @@ export default function SettingsPage() {
                       select
                       label="Default Language"
                       error={!!errors.defaultLanguage}
-                      helperText={errors.defaultLanguage?.message}
+                      helperText={errors.defaultLanguage?.message || "Not yet persisted to backend"}
+                      disabled
                     >
                       {languages.map((l) => (
                         <MenuItem key={l.value} value={l.value}>
@@ -482,6 +575,7 @@ export default function SettingsPage() {
                         <Switch
                           checked={field.value}
                           onChange={field.onChange}
+                          disabled
                         />
                       }
                       label="Allow Public Registration"
@@ -490,6 +584,9 @@ export default function SettingsPage() {
                 />
                 <Typography variant="caption" color="text.secondary" sx={{ display: "block", ml: 6 }}>
                   When enabled, new members can register themselves through the public website
+                </Typography>
+                <Typography variant="caption" color="error" sx={{ display: "block", ml: 6 }}>
+                  Not yet persisted to backend
                 </Typography>
               </Grid>
             </Grid>

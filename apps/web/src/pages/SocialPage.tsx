@@ -1,166 +1,182 @@
-import { useState } from "react";
+import { useState, useEffect, useCallback } from "react";
 import Box from "@mui/material/Box";
 import Fab from "@mui/material/Fab";
 import Collapse from "@mui/material/Collapse";
+import CircularProgress from "@mui/material/CircularProgress";
+import Alert from "@mui/material/Alert";
 import AddRoundedIcon from "@mui/icons-material/AddRounded";
 import PostCard from "@/components/social/PostCard";
 import CommentSection from "@/components/social/CommentSection";
 import CreatePostDialog from "@/components/social/CreatePostDialog";
 import PageIntro from "@/components/ui/PageIntro";
+import { useSnackbar } from "notistack";
+import SocialService, { SocialPost, Comment, PostType } from "@/services/social.service";
+import { ApiError } from "@/services/api";
 
-interface Comment {
-  id: string;
-  authorName: string;
-  authorAvatarUrl?: string;
-  content: string;
-  createdAt: string;
-}
-
-// Mock comments keyed by post ID
-const mockComments: Record<string, Comment[]> = {
-  "1": [
-    {
-      id: "c1",
-      authorName: "Michael Brown",
-      content: "So happy for you, Sarah! God is good!",
-      createdAt: "1 hour ago",
-    },
-    {
-      id: "c2",
-      authorName: "Lisa Chen",
-      content: "Congratulations! What a testimony!",
-      createdAt: "45 min ago",
-    },
-  ],
-  "2": [
-    {
-      id: "c3",
-      authorName: "Grace Okonkwo",
-      content: "That sermon changed my perspective too. So powerful.",
-      createdAt: "4 hours ago",
-    },
-  ],
-  "3": [
-    {
-      id: "c4",
-      authorName: "David Williams",
-      content: "Praise God! Praying for a full recovery.",
-      createdAt: "20 hours ago",
-    },
-    {
-      id: "c5",
-      authorName: "Sarah Johnson",
-      content: "Wonderful news! God answers prayers.",
-      createdAt: "18 hours ago",
-    },
-    {
-      id: "c6",
-      authorName: "Pastor James",
-      content: "We continue to keep your mother in our prayers.",
-      createdAt: "16 hours ago",
-    },
-  ],
-};
-
-// TODO: Replace with actual API data
-const mockPosts = [
-  {
-    id: "1",
-    authorName: "Sarah Johnson",
-    content:
-      "God has been so faithful! After months of searching, I finally got the job I prayed for. Never give up on God's timing!",
-    type: "testimony" as const,
-    likesCount: 24,
-    commentsCount: 8,
-    isLikedByMe: false,
-    createdAt: "2 hours ago",
-  },
-  {
-    id: "2",
-    authorName: "David Williams",
-    content:
-      "Sunday's sermon on walking in faith really spoke to me. I've been meditating on Hebrews 11:1 all week. What a powerful word!",
-    type: "general" as const,
-    likesCount: 15,
-    commentsCount: 3,
-    isLikedByMe: true,
-    createdAt: "5 hours ago",
-  },
-  {
-    id: "3",
-    authorName: "Grace Okonkwo",
-    content:
-      "Praise the Lord! My mother's surgery went well and she is recovering. Thank you all for your prayers.",
-    type: "praise_report" as const,
-    likesCount: 42,
-    commentsCount: 12,
-    isLikedByMe: false,
-    createdAt: "Yesterday",
-  },
-];
+type PostComments = Record<string, Comment[]>;
 
 export default function SocialPage() {
   const [createOpen, setCreateOpen] = useState(false);
   const [expandedPostId, setExpandedPostId] = useState<string | null>(null);
-  const [comments, setComments] =
-    useState<Record<string, Comment[]>>(mockComments);
+  const [posts, setPosts] = useState<SocialPost[]>([]);
+  const [comments, setComments] = useState<PostComments>({});
+  const [loadingPosts, setLoadingPosts] = useState(true);
+  const [postError, setPostError] = useState<string | null>(null);
+  const { enqueueSnackbar } = useSnackbar();
+
+  const loadPosts = useCallback(async () => {
+    try {
+      setLoadingPosts(true);
+      setPostError(null);
+      const data = await SocialService.getFeed(1);
+      setPosts(data.data || []);
+    } catch (error) {
+      const message = error instanceof ApiError ? error.message : "Failed to load posts";
+      setPostError(message);
+      enqueueSnackbar(message, { variant: "error" });
+    } finally {
+      setLoadingPosts(false);
+    }
+  }, [enqueueSnackbar]);
+
+  // Load posts on mount
+  useEffect(() => {
+    loadPosts();
+  }, [loadPosts]);
 
   const handleCreatePost = async (data: {
     content: string;
     type: string;
     imageUrl?: string;
   }) => {
-    // TODO: Call SocialService.createPost(data)
-    console.log("Post created:", data);
+    try {
+      // Cast type string to PostType for API call
+      const newPost = await SocialService.createPost({
+        content: data.content,
+        type: data.type as PostType,
+        imageUrl: data.imageUrl,
+      });
+      // Prepend new post to feed
+      setPosts((prev) => [newPost, ...prev]);
+      setCreateOpen(false);
+      enqueueSnackbar("Post created successfully", { variant: "success" });
+    } catch (error) {
+      const message = error instanceof ApiError ? error.message : "Failed to create post";
+      enqueueSnackbar(message, { variant: "error" });
+    }
   };
 
-  const toggleComments = (postId: string) => {
-    setExpandedPostId((prev) => (prev === postId ? null : postId));
+  const toggleComments = async (postId: string) => {
+    // If already expanded, collapse it
+    if (expandedPostId === postId) {
+      setExpandedPostId(null);
+      return;
+    }
+
+    // If not already loaded, fetch comments
+    if (!comments[postId]) {
+      try {
+        const postComments = await SocialService.getComments(postId);
+        setComments((prev) => ({
+          ...prev,
+          [postId]: postComments,
+        }));
+      } catch (error) {
+        const message = error instanceof ApiError ? error.message : "Failed to load comments";
+        enqueueSnackbar(message, { variant: "error" });
+        return;
+      }
+    }
+
+    setExpandedPostId(postId);
   };
 
-  const handleAddComment = (postId: string, content: string) => {
-    const newComment: Comment = {
-      id: `c${Date.now()}`,
-      authorName: "You",
-      content,
-      createdAt: "Just now",
-    };
-    setComments((prev) => ({
-      ...prev,
-      [postId]: [...(prev[postId] || []), newComment],
-    }));
+  const handleAddComment = async (postId: string, content: string) => {
+    try {
+      const newComment = await SocialService.addComment(postId, content);
+      setComments((prev) => ({
+        ...prev,
+        [postId]: [...(prev[postId] || []), newComment],
+      }));
+    } catch (error) {
+      const message = error instanceof ApiError ? error.message : "Failed to add comment";
+      enqueueSnackbar(message, { variant: "error" });
+    }
   };
+
+  const handleLikePost = async (postId: string) => {
+    try {
+      const post = posts.find((p) => p.id === postId);
+      if (!post) return;
+
+      if (post.isLikedByMe) {
+        await SocialService.unlikePost(postId);
+      } else {
+        await SocialService.likePost(postId);
+      }
+
+      // Update local state
+      setPosts((prev) =>
+        prev.map((p) =>
+          p.id === postId
+            ? {
+                ...p,
+                isLikedByMe: !p.isLikedByMe,
+                likesCount: p.isLikedByMe ? p.likesCount - 1 : p.likesCount + 1,
+              }
+            : p
+        )
+      );
+    } catch (error) {
+      const message = error instanceof ApiError ? error.message : "Failed to update like";
+      enqueueSnackbar(message, { variant: "error" });
+    }
+  };
+
+  if (loadingPosts) {
+    return (
+      <Box sx={{ py: 2, display: "flex", justifyContent: "center", alignItems: "center", minHeight: "80vh" }}>
+        <CircularProgress />
+      </Box>
+    );
+  }
 
   return (
     <Box sx={{ py: 2, position: "relative", minHeight: "80vh" }}>
       <PageIntro eyebrow="Church community" title="Stay connected" copy="Encouragement, testimony and practical updates from people in your church." />
 
+      {postError && (
+        <Alert severity="error" sx={{ mb: 2 }} onClose={() => setPostError(null)}>
+          {postError}
+        </Alert>
+      )}
+
       <Box sx={{ display: "flex", flexDirection: "column", gap: 2 }}>
-        {mockPosts.map((post) => (
-          <Box key={post.id}>
-            <PostCard
-              authorName={post.authorName}
-              content={post.content}
-              type={post.type}
-              likesCount={post.likesCount}
-              commentsCount={
-                (comments[post.id]?.length ?? 0) || post.commentsCount
-              }
-              isLikedByMe={post.isLikedByMe}
-              createdAt={post.createdAt}
-              onLike={() => {
-                // TODO: Call SocialService.likePost / unlikePost
-              }}
-              onComment={() => toggleComments(post.id)}
-            />
-            <Collapse in={expandedPostId === post.id} unmountOnExit>
-              <CommentSection
-                comments={comments[post.id] || []}
-                onAddComment={(content) => handleAddComment(post.id, content)}
+        {posts.length === 0 ? (
+          <Alert severity="info">No posts yet. Be the first to share your testimony or encouragement!</Alert>
+        ) : (
+          posts.map((post) => (
+            <Box key={post.id}>
+              <PostCard
+                authorName={post.authorName}
+                content={post.content}
+                type={post.type}
+                likesCount={post.likesCount}
+                commentsCount={comments[post.id]?.length ?? post.commentsCount}
+                isLikedByMe={post.isLikedByMe}
+                createdAt={post.createdAt}
+                onLike={() => handleLikePost(post.id)}
+                onComment={() => toggleComments(post.id)}
               />
-            </Collapse>
-          </Box>
-        ))}
+              <Collapse in={expandedPostId === post.id} unmountOnExit>
+                <CommentSection
+                  comments={comments[post.id] || []}
+                  onAddComment={(content) => handleAddComment(post.id, content)}
+                />
+              </Collapse>
+            </Box>
+          ))
+        )}
       </Box>
 
       <Fab

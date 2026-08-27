@@ -27,6 +27,15 @@ export default function CampaignCard({
 }: CampaignCardProps) {
   const progress = Math.min((raisedAmount / targetAmount) * 100, 100);
 
+  // Format amount in pesewas (minor units) to GHS currency
+  const formatGHS = (amountInMinorUnits: number) => {
+    return new Intl.NumberFormat("en-GH", {
+      style: "currency",
+      currency: "GHS",
+      maximumFractionDigits: 0,
+    }).format(amountInMinorUnits / 100);
+  };
+
   return (
     <Card>
       {imageUrl && (
@@ -63,10 +72,10 @@ export default function CampaignCard({
             }}
           >
             <Typography variant="caption" color="primary.main" sx={{ fontWeight: 600 }}>
-              ${raisedAmount.toLocaleString()} raised
+              {formatGHS(raisedAmount)} raised
             </Typography>
             <Typography variant="caption" color="text.secondary">
-              of ${targetAmount.toLocaleString()}
+              of {formatGHS(targetAmount)}
             </Typography>
           </Box>
           <LinearProgress

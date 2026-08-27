@@ -76,7 +76,7 @@ export default function GivingForm({ onSubmit }: GivingFormProps) {
                   onClick={() => setValue("amount", amt)}
                   sx={{ minWidth: 72 }}
                 >
-                  ${amt}
+                  GHS {amt}
                 </Button>
               ))}
             </Box>
@@ -92,7 +92,7 @@ export default function GivingForm({ onSubmit }: GivingFormProps) {
             slotProps={{
               input: {
                 startAdornment: (
-                  <InputAdornment position="start">$</InputAdornment>
+                  <InputAdornment position="start">GHS</InputAdornment>
                 ),
               },
             }}

@@ -1,11 +1,10 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import Box from "@mui/material/Box";
 import Typography from "@mui/material/Typography";
 import Card from "@mui/material/Card";
 import CardContent from "@mui/material/CardContent";
 import Avatar from "@mui/material/Avatar";
 import Button from "@mui/material/Button";
-import Chip from "@mui/material/Chip";
 import Divider from "@mui/material/Divider";
 import List from "@mui/material/List";
 import ListItem from "@mui/material/ListItem";
@@ -16,8 +15,8 @@ import ListSubheader from "@mui/material/ListSubheader";
 import Switch from "@mui/material/Switch";
 import Snackbar from "@mui/material/Snackbar";
 import Alert from "@mui/material/Alert";
+import Skeleton from "@mui/material/Skeleton";
 import EditRoundedIcon from "@mui/icons-material/EditRounded";
-import GroupRoundedIcon from "@mui/icons-material/GroupRounded";
 import NotificationsRoundedIcon from "@mui/icons-material/NotificationsRounded";
 import LanguageRoundedIcon from "@mui/icons-material/LanguageRounded";
 import LogoutRoundedIcon from "@mui/icons-material/LogoutRounded";
@@ -30,10 +29,19 @@ import CampaignRoundedIcon from "@mui/icons-material/CampaignRounded";
 import WarningRoundedIcon from "@mui/icons-material/WarningRounded";
 import SaveRoundedIcon from "@mui/icons-material/SaveRounded";
 import { useAuth } from "@/hooks/useAuth";
+import GivingService from "@/services/giving.service";
 
-// TODO: Replace mock data with API calls
-const mockGroups = ["Worship Team", "Men's Fellowship", "Ushering Dept"];
-const mockGivingTotal = 2450.0;
+/**
+ * Format pesewas (minor units) to GHS currency.
+ * The API returns all money in pesewas (1 GHS = 100 pesewas).
+ */
+function formatCurrency(pesewas: number): string {
+  return new Intl.NumberFormat("en-GH", {
+    style: "currency",
+    currency: "GHS",
+    maximumFractionDigits: 0,
+  }).format(pesewas / 100);
+}
 
 interface NotificationPrefs {
   emailEnabled: boolean;
@@ -61,6 +69,37 @@ export default function ProfilePage() {
 
   const [prefs, setPrefs] = useState<NotificationPrefs>(defaultPrefs);
   const [snackOpen, setSnackOpen] = useState(false);
+  const [givingTotal, setGivingTotal] = useState<number | null>(null);
+  const [givingLoading, setGivingLoading] = useState(true);
+  const [givingError, setGivingError] = useState(false);
+
+  // Fetch giving history for the year
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const records = await GivingService.getHistory();
+        if (cancelled) return;
+        // Filter to current year and sum amounts
+        const now = new Date();
+        const currentYear = now.getFullYear();
+        const yearTotal = records
+          .filter((r) => {
+            const recordYear = new Date(r.date).getFullYear();
+            return recordYear === currentYear && r.status === "success";
+          })
+          .reduce((sum, r) => sum + r.amount, 0);
+        setGivingTotal(yearTotal);
+      } catch {
+        if (!cancelled) setGivingError(true);
+      } finally {
+        if (!cancelled) setGivingLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const handleToggle = useCallback(
     (key: keyof NotificationPrefs) => {
@@ -121,23 +160,15 @@ export default function ProfilePage() {
         </CardContent>
       </Card>
 
-      {/* Groups */}
+      {/* Groups - Coming Soon */}
       <Typography variant="h6" sx={{ mb: 1 }}>
         My Groups & Departments
       </Typography>
       <Card sx={{ mb: 2 }}>
         <CardContent sx={{ p: 2 }}>
-          <Box sx={{ display: "flex", flexWrap: "wrap", gap: 1 }}>
-            {mockGroups.map((group) => (
-              <Chip
-                key={group}
-                label={group}
-                icon={<GroupRoundedIcon />}
-                variant="outlined"
-                color="primary"
-              />
-            ))}
-          </Box>
+          <Typography variant="body2" color="text.secondary">
+            Departments and groups will appear here. Coming soon.
+          </Typography>
         </CardContent>
       </Card>
 
@@ -167,9 +198,22 @@ export default function ProfilePage() {
             <Typography variant="body2" sx={{ opacity: 0.8 }}>
               Total this year
             </Typography>
-            <Typography variant="h4" sx={{ fontWeight: 700 }}>
-              ${mockGivingTotal.toLocaleString(undefined, { minimumFractionDigits: 2 })}
-            </Typography>
+            {givingLoading ? (
+              <Skeleton
+                variant="text"
+                width={120}
+                height={40}
+                sx={{ bgcolor: "rgba(255, 255, 255, 0.2)" }}
+              />
+            ) : givingError ? (
+              <Typography variant="body2" sx={{ opacity: 0.9 }}>
+                Unable to load
+              </Typography>
+            ) : (
+              <Typography variant="h4" sx={{ fontWeight: 700 }}>
+                {formatCurrency(givingTotal ?? 0)}
+              </Typography>
+            )}
           </Box>
         </CardContent>
       </Card>

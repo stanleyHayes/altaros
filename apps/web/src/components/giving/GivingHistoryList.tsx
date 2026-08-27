@@ -35,6 +35,15 @@ export default function GivingHistoryList({ records }: GivingHistoryListProps) {
     );
   }
 
+  // Format amount in pesewas (minor units) to GHS currency
+  const formatGHS = (amountInMinorUnits: number) => {
+    return new Intl.NumberFormat("en-GH", {
+      style: "currency",
+      currency: "GHS",
+      maximumFractionDigits: 0,
+    }).format(amountInMinorUnits / 100);
+  };
+
   return (
     <Card>
       <CardContent sx={{ p: 0 }}>
@@ -67,7 +76,7 @@ export default function GivingHistoryList({ records }: GivingHistoryListProps) {
                 </Typography>
               </Box>
               <Typography variant="subtitle1" color="primary.main" sx={{ fontWeight: 700 }}>
-                ${record.amount.toFixed(2)}
+                {formatGHS(record.amount)}
               </Typography>
             </Box>
             {index < records.length - 1 && <Divider />}

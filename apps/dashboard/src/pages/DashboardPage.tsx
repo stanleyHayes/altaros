@@ -1,6 +1,8 @@
+import { useState, useCallback, useEffect } from 'react';
 import {
   Box,
   Typography,
+  Stack,
   Card,
   CardContent,
   Table,
@@ -10,17 +12,14 @@ import {
   TableRow,
   Chip,
   Avatar,
-  List,
-  ListItem,
-  ListItemAvatar,
-  ListItemText,
+  Alert,
+  Button,
+  CircularProgress,
 } from '@mui/material';
 import {
   People as PeopleIcon,
   AccountBalance as FinanceIcon,
-  Event as EventIcon,
   TrendingUp as TrendingUpIcon,
-  CalendarToday as CalendarIcon,
 } from '@mui/icons-material';
 import {
   AreaChart,
@@ -37,102 +36,9 @@ import type { ReactNode } from 'react';
 import { usePermissions } from '@altar-os/permissions';
 import StatCard from '@/components/ui/StatCard';
 import PageSkeleton from '@/components/ui/PageSkeleton';
-
-// TODO: Replace with real API data from FinanceService & MemberService
-const givingTrendsData = [
-  { month: 'Apr', amount: 18200 },
-  { month: 'May', amount: 21500 },
-  { month: 'Jun', amount: 19800 },
-  { month: 'Jul', amount: 22400 },
-  { month: 'Aug', amount: 20100 },
-  { month: 'Sep', amount: 23600 },
-  { month: 'Oct', amount: 21900 },
-  { month: 'Nov', amount: 25200 },
-  { month: 'Dec', amount: 31800 },
-  { month: 'Jan', amount: 22100 },
-  { month: 'Feb', amount: 23400 },
-  { month: 'Mar', amount: 24580 },
-];
-
-const attendanceTrendsData = [
-  { week: 'W1', attendance: 312 },
-  { week: 'W2', attendance: 345 },
-  { week: 'W3', attendance: 298 },
-  { week: 'W4', attendance: 367 },
-  { week: 'W5', attendance: 389 },
-  { week: 'W6', attendance: 354 },
-  { week: 'W7', attendance: 412 },
-  { week: 'W8', attendance: 398 },
-];
-
-const recentMembers = [
-  {
-    id: '1',
-    name: 'Grace Adekunle',
-    email: 'grace@example.com',
-    status: 'active',
-    joined: '2026-03-25',
-  },
-  {
-    id: '2',
-    name: 'David Okafor',
-    email: 'david@example.com',
-    status: 'active',
-    joined: '2026-03-22',
-  },
-  {
-    id: '3',
-    name: 'Sarah Johnson',
-    email: 'sarah@example.com',
-    status: 'visitor',
-    joined: '2026-03-20',
-  },
-  {
-    id: '4',
-    name: 'Michael Chen',
-    email: 'michael@example.com',
-    status: 'active',
-    joined: '2026-03-18',
-  },
-  {
-    id: '5',
-    name: 'Amara Diallo',
-    email: 'amara@example.com',
-    status: 'active',
-    joined: '2026-03-15',
-  },
-];
-
-const upcomingEvents = [
-  {
-    id: '1',
-    title: 'Sunday Worship Service',
-    date: '2026-03-30',
-    time: '9:00 AM',
-    location: 'Main Sanctuary',
-  },
-  {
-    id: '2',
-    title: 'Mid-Week Bible Study',
-    date: '2026-04-01',
-    time: '6:30 PM',
-    location: 'Fellowship Hall',
-  },
-  {
-    id: '3',
-    title: 'Youth Group Meeting',
-    date: '2026-04-03',
-    time: '5:00 PM',
-    location: 'Youth Center',
-  },
-  {
-    id: '4',
-    title: 'Community Outreach',
-    date: '2026-04-05',
-    time: '10:00 AM',
-    location: 'City Park',
-  },
-];
+import AnalyticsService, { type Trend, type Engagement } from '@/services/analytics.service';
+import EventService, { type Event as EventItem } from '@/services/event.service';
+import MemberService, { type Member } from '@/services/member.service';
 
 /** A panel and the permission its DATA belongs to. */
 interface Panel {
@@ -161,86 +67,226 @@ interface Panel {
  * the space the hidden ones gave up.
  */
 export default function DashboardPage() {
-  const { permissions, isLoading } = usePermissions();
+  const { permissions, isLoading: permissionsLoading } = usePermissions();
 
+  // Data state
+  const [engagement, setEngagement] = useState<Engagement | null>(null);
+  const [members, setMembers] = useState<Member[]>([]);
+  const [givingTrend, setGivingTrend] = useState<Trend | null>(null);
+  const [attendanceTrend, setAttendanceTrend] = useState<Trend | null>(null);
+  const [upcoming, setUpcoming] = useState<EventItem[]>([]);
+
+  // Error state
+  const [dataErrors, setDataErrors] = useState<Record<string, string>>({});
+
+  // Load all dashboard data
+  const loadData = useCallback(async () => {
+    setDataErrors({});
+    const errors: Record<string, string> = {};
+
+    // Load engagement data (needed for member count and recent givers)
+    try {
+      const data = await AnalyticsService.engagement({ days: 56 });
+      setEngagement(data);
+    } catch {
+      errors.engagement = 'Could not load engagement data';
+    }
+
+    // Load member list for recent members table
+    try {
+      const data = await MemberService.getAll({ limit: 5 });
+      setMembers(data);
+    } catch {
+      errors.members = 'Could not load members';
+    }
+
+    // What is happening next. GET /events/upcoming rather than filtering the
+    // event list: recurring events are stored as a rule, so the next few
+    // occurrences cannot be derived here without re-implementing the
+    // recurrence expansion the server already does.
+    try {
+      setUpcoming(await EventService.upcoming(5));
+    } catch {
+      errors.upcoming = 'Could not load upcoming events';
+    }
+
+    // Load giving trend (values are in pesewas/minor units)
+    try {
+      const data = await AnalyticsService.givingTrend({ grain: 'week' });
+      setGivingTrend(data);
+    } catch {
+      errors.givingTrend = 'Could not load giving trends';
+    }
+
+    // Load attendance trend
+    try {
+      const data = await AnalyticsService.attendanceTrend({ grain: 'week' });
+      setAttendanceTrend(data);
+    } catch {
+      errors.attendanceTrend = 'Could not load attendance trends';
+    }
+
+    setDataErrors(errors);
+  }, []);
+
+  useEffect(() => {
+    void loadData();
+  }, [loadData]);
+
+  // Compute stat cards from real data
   const stats = [
     {
       key: 'members',
       requires: 'member:read',
-      node: (
+      node: engagement ? (
         <StatCard
           title="Total Members"
-          value="1,248"
+          value={String(engagement.members)}
           icon={<PeopleIcon />}
-          change={12}
-          changeLabel="vs last month"
+          change={undefined}
+          changeLabel="congregation"
           iconBgColor="info.light"
           iconColor="info.main"
         />
+      ) : (
+        <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: 180 }}>
+          <CircularProgress />
+        </Box>
       ),
     },
     {
       key: 'giving',
       requires: 'finance:read',
-      node: (
+      node: givingTrend ? (
         <StatCard
           title="Total Giving"
-          value="$24,580"
+          value={new Intl.NumberFormat('en-GH', {
+            style: 'currency',
+            currency: 'GHS',
+            maximumFractionDigits: 0,
+          }).format(givingTrend.total / 100)}
           icon={<FinanceIcon />}
-          change={8.5}
-          changeLabel="vs last month"
+          change={givingTrend.changePercent ?? undefined}
+          changeLabel="vs previous period"
           iconBgColor="success.light"
           iconColor="success.main"
         />
+      ) : (
+        <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: 180 }}>
+          <CircularProgress />
+        </Box>
       ),
     },
     {
-      key: 'attendance',
+      key: 'engagement',
       requires: 'report:read',
-      node: (
+      node: engagement ? (
         <StatCard
-          title="Attendance Rate"
-          value="78%"
+          title="Recently Engaged"
+          value={String(engagement.engaged)}
           icon={<TrendingUpIcon />}
-          change={5.2}
-          changeLabel="vs last month"
+          change={undefined}
+          changeLabel={`in last ${engagement.windowDays} days`}
           iconBgColor="warning.light"
           iconColor="warning.main"
         />
-      ),
-    },
-    {
-      key: 'events',
-      requires: 'event:read',
-      node: (
-        <StatCard
-          title="Active Events"
-          value="6"
-          icon={<EventIcon />}
-          change={-2}
-          changeLabel="vs last month"
-          iconBgColor="secondary.light"
-          iconColor="secondary.dark"
-        />
+      ) : (
+        <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: 180 }}>
+          <CircularProgress />
+        </Box>
       ),
     },
   ].filter((stat) => permissions.has(stat.requires));
 
+  // Convert trend points to chart format, using bucket labels as keys
+  const givingChartData = givingTrend?.points.map((point) => ({
+    label: point.bucket,
+    value: point.value,
+  })) ?? [];
+
+  const attendanceChartData = attendanceTrend?.points.map((point) => ({
+    label: point.bucket,
+    value: point.value,
+  })) ?? [];
+
   const panels: Panel[] = [
+    {
+      key: 'upcoming-events',
+      requires: 'event:read',
+      weight: 5,
+      body: dataErrors.upcoming ? (
+        <Alert
+          severity="error"
+          action={
+            <Button color="inherit" size="small" onClick={() => void loadData()}>
+              Retry
+            </Button>
+          }
+        >
+          {dataErrors.upcoming}
+        </Alert>
+      ) : (
+        <>
+          <Typography variant="h6" sx={{ fontWeight: 600, mb: 2 }}>
+            Upcoming Events
+          </Typography>
+          {upcoming.length === 0 ? (
+            <Typography variant="body2" color="text.secondary">
+              Nothing scheduled yet.
+            </Typography>
+          ) : (
+            <Stack spacing={1.5}>
+              {upcoming.map((event) => (
+                <Box key={`${event.id}-${event.startDate}`}>
+                  <Typography variant="body2" sx={{ fontWeight: 600 }}>
+                    {event.title}
+                  </Typography>
+                  <Typography variant="caption" color="text.secondary">
+                    {new Date(event.startDate).toLocaleString([], {
+                      weekday: 'short',
+                      day: 'numeric',
+                      month: 'short',
+                      hour: '2-digit',
+                      minute: '2-digit',
+                    })}
+                    {event.location ? ` · ${event.location}` : ''}
+                  </Typography>
+                </Box>
+              ))}
+            </Stack>
+          )}
+        </>
+      ),
+    },
     {
       key: 'giving-trends',
       requires: 'finance:read',
       weight: 7,
-      body: (
+      body: dataErrors.givingTrend ? (
+        <Alert
+          severity="error"
+          action={
+            <Button color="inherit" size="small" onClick={() => void loadData()}>
+              Retry
+            </Button>
+          }
+        >
+          {dataErrors.givingTrend}
+        </Alert>
+      ) : givingTrend && givingChartData.length > 0 ? (
         <>
           <Typography variant="h6" sx={{ fontWeight: 600, mb: 0.5 }}>
             Giving Trends
           </Typography>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
-            Last 12 months
+            {givingTrend.grain === 'day'
+              ? 'Last 30 days'
+              : givingTrend.grain === 'week'
+                ? 'Last 12 weeks'
+                : 'Last 12 months'}
           </Typography>
           <ResponsiveContainer width="100%" height={280}>
-            <AreaChart data={givingTrendsData}>
+            <AreaChart data={givingChartData}>
               <defs>
                 <linearGradient id="givingGradient" x1="0" y1="0" x2="0" y2="1">
                   <stop offset="5%" stopColor="#1976d2" stopOpacity={0.3} />
@@ -248,19 +294,30 @@ export default function DashboardPage() {
                 </linearGradient>
               </defs>
               <CartesianGrid strokeDasharray="3 3" vertical={false} />
-              <XAxis dataKey="month" axisLine={false} tickLine={false} fontSize={12} />
+              <XAxis dataKey="label" axisLine={false} tickLine={false} fontSize={12} />
               <YAxis
                 axisLine={false}
                 tickLine={false}
                 fontSize={12}
-                tickFormatter={(val) => `$${(val / 1000).toFixed(0)}k`}
+                tickFormatter={(val) => `GHS ${(val / 100000).toFixed(0)}k`}
               />
               <Tooltip
-                formatter={(value: any) => [`$${Number(value).toLocaleString()}`, 'Giving']}
+                formatter={(value: unknown) => [
+                  // Cedis, not dollars. This chart is the first thing a
+                  // pastor sees, and it was labelling Ghanaian giving with a
+                  // dollar sign — the amounts were right and the currency
+                  // was not, which is the kind of wrong that gets believed.
+                  new Intl.NumberFormat('en-GH', {
+                    style: 'currency',
+                    currency: 'GHS',
+                    maximumFractionDigits: 0,
+                  }).format(Number(value) / 100),
+                  'Giving',
+                ]}
               />
               <Area
                 type="monotone"
-                dataKey="amount"
+                dataKey="value"
                 stroke="#1976d2"
                 strokeWidth={2}
                 fill="url(#givingGradient)"
@@ -268,37 +325,71 @@ export default function DashboardPage() {
             </AreaChart>
           </ResponsiveContainer>
         </>
+      ) : (
+        <Typography variant="body2" color="text.secondary">
+          No giving data available yet.
+        </Typography>
       ),
     },
     {
       key: 'attendance-trends',
       requires: 'report:read',
       weight: 5,
-      body: (
+      body: dataErrors.attendanceTrend ? (
+        <Alert
+          severity="error"
+          action={
+            <Button color="inherit" size="small" onClick={() => void loadData()}>
+              Retry
+            </Button>
+          }
+        >
+          {dataErrors.attendanceTrend}
+        </Alert>
+      ) : attendanceTrend && attendanceChartData.length > 0 ? (
         <>
           <Typography variant="h6" sx={{ fontWeight: 600, mb: 0.5 }}>
             Attendance Trends
           </Typography>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
-            Last 8 weeks
+            {attendanceTrend.grain === 'day'
+              ? 'Last 30 days'
+              : attendanceTrend.grain === 'week'
+                ? 'Last 12 weeks'
+                : 'Last 12 months'}
           </Typography>
           <ResponsiveContainer width="100%" height={280}>
-            <BarChart data={attendanceTrendsData}>
+            <BarChart data={attendanceChartData}>
               <CartesianGrid strokeDasharray="3 3" vertical={false} />
-              <XAxis dataKey="week" axisLine={false} tickLine={false} fontSize={12} />
+              <XAxis dataKey="label" axisLine={false} tickLine={false} fontSize={12} />
               <YAxis axisLine={false} tickLine={false} fontSize={12} />
-              <Tooltip formatter={(value: any) => [value, 'Attendance']} />
-              <Bar dataKey="attendance" fill="#9c27b0" radius={[4, 4, 0, 0]} maxBarSize={40} />
+              <Tooltip formatter={(value: unknown) => [String(value), 'Attendance']} />
+              <Bar dataKey="value" fill="#9c27b0" radius={[4, 4, 0, 0]} maxBarSize={40} />
             </BarChart>
           </ResponsiveContainer>
         </>
+      ) : (
+        <Typography variant="body2" color="text.secondary">
+          No attendance data available yet.
+        </Typography>
       ),
     },
     {
       key: 'recent-members',
       requires: 'member:read',
       weight: 7,
-      body: (
+      body: dataErrors.members ? (
+        <Alert
+          severity="error"
+          action={
+            <Button color="inherit" size="small" onClick={() => void loadData()}>
+              Retry
+            </Button>
+          }
+        >
+          {dataErrors.members}
+        </Alert>
+      ) : members.length > 0 ? (
         <>
           <Typography variant="h6" sx={{ fontWeight: 600, mb: 2 }}>
             Recent Members
@@ -317,7 +408,7 @@ export default function DashboardPage() {
                 </TableRow>
               </TableHead>
               <TableBody>
-                {recentMembers.map((member) => (
+                {members.map((member) => (
                   <TableRow key={member.id} hover>
                     <TableCell>
                       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
@@ -329,31 +420,28 @@ export default function DashboardPage() {
                             bgcolor: 'primary.main',
                           }}
                         >
-                          {member.name
-                            .split(' ')
-                            .map((n) => n[0])
-                            .join('')}
+                          {(member.firstName[0] + member.lastName[0]).toUpperCase()}
                         </Avatar>
                         <Typography variant="body2" sx={{ fontWeight: 500 }}>
-                          {member.name}
+                          {member.firstName} {member.lastName}
                         </Typography>
                       </Box>
                     </TableCell>
                     <TableCell>
                       <Typography variant="body2" color="text.secondary">
-                        {member.email}
+                        {member.email ?? '—'}
                       </Typography>
                     </TableCell>
                     <TableCell>
                       <Chip
                         label={member.status}
                         size="small"
-                        color={member.status === 'active' ? 'success' : 'info'}
+                        color={member.status === 'active' ? 'success' : member.status === 'inactive' ? 'default' : 'info'}
                       />
                     </TableCell>
                     <TableCell>
                       <Typography variant="body2" color="text.secondary">
-                        {member.joined}
+                        {(member.memberSince ?? member.createdAt ?? '').slice(0, 10)}
                       </Typography>
                     </TableCell>
                   </TableRow>
@@ -362,57 +450,10 @@ export default function DashboardPage() {
             </Table>
           </Box>
         </>
-      ),
-    },
-    {
-      key: 'upcoming-events',
-      requires: 'event:read',
-      weight: 5,
-      body: (
-        <>
-          <Typography variant="h6" sx={{ fontWeight: 600, mb: 2 }}>
-            Upcoming Events
-          </Typography>
-          <List disablePadding>
-            {upcomingEvents.map((event) => (
-              <ListItem
-                key={event.id}
-                sx={{
-                  px: 0,
-                  borderBottom: '1px solid',
-                  borderColor: 'divider',
-                  '&:last-child': { borderBottom: 'none' },
-                }}
-              >
-                <ListItemAvatar>
-                  <Avatar
-                    variant="rounded"
-                    sx={{
-                      bgcolor: 'primary.light',
-                      color: 'primary.main',
-                      width: 44,
-                      height: 44,
-                    }}
-                  >
-                    <CalendarIcon fontSize="small" />
-                  </Avatar>
-                </ListItemAvatar>
-                <ListItemText
-                  primary={
-                    <Typography variant="body2" sx={{ fontWeight: 600 }}>
-                      {event.title}
-                    </Typography>
-                  }
-                  secondary={
-                    <Typography variant="caption" color="text.secondary">
-                      {event.date} at {event.time} &middot; {event.location}
-                    </Typography>
-                  }
-                />
-              </ListItem>
-            ))}
-          </List>
-        </>
+      ) : (
+        <Typography variant="body2" color="text.secondary">
+          No members found.
+        </Typography>
       ),
     },
   ].filter((panel) => permissions.has(panel.requires));
@@ -421,7 +462,7 @@ export default function DashboardPage() {
   // declared width with nothing beside it.
   const spanFor = (panel: Panel) => (panels.length === 1 ? 12 : panel.weight);
 
-  if (isLoading) {
+  if (permissionsLoading) {
     return <PageSkeleton />;
   }
 

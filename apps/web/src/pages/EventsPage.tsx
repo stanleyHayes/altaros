@@ -1,104 +1,134 @@
+import { useState, useEffect } from "react";
 import Box from "@mui/material/Box";
+import CircularProgress from "@mui/material/CircularProgress";
+import Alert from "@mui/material/Alert";
+import Typography from "@mui/material/Typography";
 import EventCard from "@/components/events/EventCard";
 import PageIntro from "@/components/ui/PageIntro";
+import EventService, { ChurchEvent, RsvpStatus } from "@/services/event.service";
+import { useAuth } from "@/hooks/useAuth";
+import { ApiError } from "@/services/api";
 
-// TODO: Replace with actual API data
-const mockEvents = [
-  {
-    id: "1",
-    title: "Easter Sunday Celebration",
-    description:
-      "Join us for a special Easter worship service with communion, praise, and fellowship. Invite your family and friends!",
-    date: "2026-03-30",
-    dayOfWeek: "Sun",
-    dayNum: "30",
-    month: "Mar",
-    startTime: "9:00 AM",
-    endTime: "12:00 PM",
-    location: "Main Auditorium",
-    category: "Worship",
-    rsvpCount: 156,
-    myRsvp: "going",
-  },
-  {
-    id: "2",
-    title: "Midweek Bible Study",
-    description:
-      "Deep dive into the book of Romans with Pastor James. Open discussion and Q&A session.",
-    date: "2026-04-01",
-    dayOfWeek: "Wed",
-    dayNum: "01",
-    month: "Apr",
-    startTime: "6:30 PM",
-    endTime: "8:00 PM",
-    location: "Room 201",
-    category: "Study",
-    rsvpCount: 34,
-  },
-  {
-    id: "3",
-    title: "Youth Fellowship Night",
-    description:
-      "A night of games, worship, and word for the youth. Ages 13-25 welcome.",
-    date: "2026-04-04",
-    dayOfWeek: "Fri",
-    dayNum: "04",
-    month: "Apr",
-    startTime: "5:00 PM",
-    endTime: "8:00 PM",
-    location: "Youth Center",
-    category: "Youth",
-    rsvpCount: 48,
-  },
-  {
-    id: "4",
-    title: "Community Outreach",
-    description:
-      "Serving our local community through food distribution and neighbourhood clean-up.",
-    date: "2026-04-12",
-    dayOfWeek: "Sat",
-    dayNum: "12",
-    month: "Apr",
-    startTime: "8:00 AM",
-    endTime: "1:00 PM",
-    location: "Church Parking Lot",
-    category: "Outreach",
-    rsvpCount: 22,
-  },
-];
+// Helper to parse date string and extract components for EventCard display
+function parseDateForDisplay(dateString: string) {
+  try {
+    const date = new Date(dateString);
+    const dayOfWeek = date.toLocaleDateString("en-US", { weekday: "short" });
+    const dayNum = String(date.getDate()).padStart(2, "0");
+    const month = date.toLocaleDateString("en-US", { month: "short" });
+    return { dayOfWeek, dayNum, month };
+  } catch {
+    // Fallback if date parsing fails
+    return { dayOfWeek: "", dayNum: "", month: "" };
+  }
+}
 
 export default function EventsPage() {
+  const { user } = useAuth();
+  const [events, setEvents] = useState<ChurchEvent[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  // Load events on mount
+  useEffect(() => {
+    const fetchEvents = async () => {
+      try {
+        setLoading(true);
+        setError(null);
+        const data = await EventService.getEvents();
+        setEvents(data);
+      } catch (err) {
+        const message = err instanceof ApiError ? err.message : "Failed to load events";
+        setError(message);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchEvents();
+  }, []);
+
+  const handleRsvp = async (eventId: string) => {
+    if (!user?.memberId) {
+      setError("Unable to determine your member ID");
+      return;
+    }
+
+    try {
+      await EventService.rsvp(eventId, "going" as RsvpStatus);
+
+      // Update the event's RSVP status optimistically
+      setEvents((prev) =>
+        prev.map((e) => (e.id === eventId ? { ...e, myRsvp: "going" } : e))
+      );
+    } catch (err) {
+      const message = err instanceof ApiError ? err.message : "Failed to RSVP";
+      setError(message);
+    }
+  };
+
+  // Note: code parameter is provided by EventCard but not used in current API implementation
+  const handleCheckIn = async (eventId: string, _code: string) => {
+    if (!user?.memberId) {
+      setError("Unable to determine your member ID");
+      return;
+    }
+
+    try {
+      await EventService.checkIn(eventId, user.memberId);
+      // On success, show a success message (component will handle dialog close)
+    } catch (err) {
+      const message = err instanceof ApiError ? err.message : "Check-in failed";
+      setError(message);
+    }
+  };
+
   return (
     <Box sx={{ py: 2 }}>
       <PageIntro eyebrow="Gather together" title="Events" copy="Services, groups and moments where your church community meets." />
 
-      <Box sx={{ display: "flex", flexDirection: "column", gap: 2 }}>
-        {mockEvents.map((event) => (
-          <EventCard
-            key={event.id}
-            title={event.title}
-            description={event.description}
-            date={event.date}
-            dayOfWeek={event.dayOfWeek}
-            dayNum={event.dayNum}
-            month={event.month}
-            startTime={event.startTime}
-            endTime={event.endTime}
-            location={event.location}
-            category={event.category}
-            rsvpCount={event.rsvpCount}
-            myRsvp={event.myRsvp}
-            onRsvp={() => {
-              // TODO: Call EventService.rsvp(event.id, "going")
-              console.log("RSVP for event:", event.id);
-            }}
-            onCheckIn={(code) => {
-              // TODO: Call POST /events/check-in/:code with memberId
-              console.log("Check-in for event:", event.id, "code:", code);
-            }}
-          />
-        ))}
-      </Box>
+      {error && (
+        <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError(null)}>
+          {error}
+        </Alert>
+      )}
+
+      {loading ? (
+        <Box sx={{ display: "flex", justifyContent: "center", py: 4 }}>
+          <CircularProgress />
+        </Box>
+      ) : events.length === 0 ? (
+        <Box sx={{ textAlign: "center", py: 4 }}>
+          <Typography variant="body2" color="text.secondary">
+            No upcoming events at the moment.
+          </Typography>
+        </Box>
+      ) : (
+        <Box sx={{ display: "flex", flexDirection: "column", gap: 2 }}>
+          {events.map((event) => {
+            const { dayOfWeek, dayNum, month } = parseDateForDisplay(event.date);
+            return (
+              <EventCard
+                key={event.id}
+                title={event.title}
+                description={event.description}
+                date={event.date}
+                dayOfWeek={dayOfWeek}
+                dayNum={dayNum}
+                month={month}
+                startTime={event.startTime}
+                endTime={event.endTime}
+                location={event.location}
+                category={event.category}
+                rsvpCount={event.rsvpCount}
+                myRsvp={event.myRsvp}
+                onRsvp={() => handleRsvp(event.id)}
+                onCheckIn={(code) => handleCheckIn(event.id, code)}
+              />
+            );
+          })}
+        </Box>
+      )}
     </Box>
   );
 }

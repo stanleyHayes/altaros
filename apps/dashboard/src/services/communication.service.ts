@@ -1,92 +1,77 @@
-import { get, post, put, del } from "./api";
+import { get, post } from "./api";
 
-export interface Message {
+/** Campaign represents both messages and announcements — distinguished by channel. */
+export interface Campaign {
   id: string;
-  subject: string;
+  churchId: string;
+  name: string;
+  channel: "push" | "sms" | "email" | "announcement";
+  subject?: string;
   body: string;
-  type: "email" | "sms" | "push";
-  recipients: string[];
-  recipientCount: number;
-  status: "draft" | "scheduled" | "sent" | "failed";
-  scheduledAt?: string;
+  filter: Record<string, unknown>;
+  state: "draft" | "scheduled" | "sending" | "sent" | "cancelled" | "failed";
+  scheduledFor?: string;
+  approvedCostMinor?: number;
+  approvedCurrency?: string;
+  recipients: number;
+  sent: number;
+  suppressed: number;
+  failed: number;
+  actualCostMinor?: number;
+  lastError?: string;
+  createdBy?: string;
   sentAt?: string;
-  churchId: string;
-  createdBy: string;
-  createdAt: string;
-}
-
-export interface CreateMessagePayload {
-  subject: string;
-  body: string;
-  type: Message["type"];
-  recipients: string[];
-  scheduledAt?: string;
-}
-
-export interface Announcement {
-  id: string;
-  title: string;
-  content: string;
-  priority: "low" | "normal" | "high" | "urgent";
-  isPublished: boolean;
-  publishedAt?: string;
-  expiresAt?: string;
-  churchId: string;
-  createdBy: string;
   createdAt: string;
   updatedAt: string;
 }
 
-export interface CreateAnnouncementPayload {
-  title: string;
-  content: string;
-  priority?: Announcement["priority"];
-  isPublished?: boolean;
-  expiresAt?: string;
+/** Payload for creating a campaign (message or announcement). */
+export interface CreateCampaignPayload {
+  name: string;
+  channel: "push" | "sms" | "email" | "announcement";
+  subject?: string;
+  body: string;
+  filter?: Record<string, unknown>;
+  scheduledFor?: string;
 }
 
-export type UpdateAnnouncementPayload = Partial<CreateAnnouncementPayload>;
+/** Response envelope from campaigns list endpoint. */
+interface CampaignsResponse {
+  campaigns: Campaign[];
+}
 
 const CommunicationService = {
-  async getMessages(): Promise<Message[]> {
-    return get<Message[]>("/communications/messages");
+  /** List all campaigns. */
+  async getCampaigns(): Promise<Campaign[]> {
+    const response = await get<CampaignsResponse>("/communication/campaigns");
+    return response.campaigns;
   },
 
-  async getMessageById(id: string): Promise<Message> {
-    return get<Message>(`/communications/messages/${id}`);
+  /** Get a single campaign by ID. */
+  async getCampaign(id: string): Promise<Campaign> {
+    return get<Campaign>(`/communication/campaigns/${id}`);
   },
 
-  async createMessage(payload: CreateMessagePayload): Promise<Message> {
-    return post<Message>("/communications/messages", payload);
+  /** Create a new campaign (message or announcement). */
+  async createCampaign(payload: CreateCampaignPayload): Promise<Campaign> {
+    return post<Campaign>("/communication/campaigns", payload);
   },
 
-  async sendMessage(id: string): Promise<Message> {
-    return post<Message>(`/communications/messages/${id}/send`);
+  /** Send a campaign to its audience. */
+  async sendCampaign(id: string): Promise<Campaign> {
+    return post<Campaign>(`/communication/campaigns/${id}/send`);
   },
 
-  async getAnnouncements(): Promise<Announcement[]> {
-    return get<Announcement[]>("/communications/announcements");
-  },
-
-  async getAnnouncementById(id: string): Promise<Announcement> {
-    return get<Announcement>(`/communications/announcements/${id}`);
-  },
-
-  async createAnnouncement(
-    payload: CreateAnnouncementPayload,
-  ): Promise<Announcement> {
-    return post<Announcement>("/communications/announcements", payload);
-  },
-
-  async updateAnnouncement(
-    id: string,
-    payload: UpdateAnnouncementPayload,
-  ): Promise<Announcement> {
-    return put<Announcement>(`/communications/announcements/${id}`, payload);
-  },
-
-  async deleteAnnouncement(id: string): Promise<void> {
-    return del<void>(`/communications/announcements/${id}`);
+  /**
+   * Cancel a campaign. There is no delete, and the UI must not offer one.
+   *
+   * DELETE /communication/campaigns/{id} does not exist. A campaign that has
+   * gone out has reached real phones, so there is nothing to take back and no
+   * honest way to erase the record of having sent it; one that has not gone
+   * out is cancelled so it never does.
+   */
+  async cancelCampaign(id: string): Promise<Campaign> {
+    return post<Campaign>(`/communication/campaigns/${id}/cancel`);
   },
 };
 

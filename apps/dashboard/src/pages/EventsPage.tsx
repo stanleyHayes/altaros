@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useCallback, useEffect } from "react";
 import {
   Box,
   Typography,
@@ -6,6 +6,9 @@ import {
   Grid,
   ToggleButtonGroup,
   ToggleButton,
+  Alert,
+  CircularProgress,
+  Snackbar,
 } from "@mui/material";
 import {
   Add as AddIcon,
@@ -19,151 +22,138 @@ import EventFormDialog, {
   type EventFormData,
 } from "@/components/events/EventFormDialog";
 import AttendanceDialog from "@/components/events/AttendanceDialog";
+import EventService, { type Event } from "@/services/event.service";
 
-interface EventItem {
-  id: string;
-  title: string;
-  description: string;
-  location: string;
-  startDate: string;
-  endDate?: string;
-  rsvpCount: number;
-  capacity?: number;
+interface EventItem extends Event {
   status: "upcoming" | "ongoing" | "completed" | "cancelled";
-  isRecurring: boolean;
   [key: string]: unknown;
 }
 
-// TODO: Replace with real API data from EventService
-const sampleEvents: EventItem[] = [
-  {
-    id: "1",
-    title: "Sunday Worship Service",
-    description:
-      "Weekly worship service with praise and the Word. Everyone is welcome to attend.",
-    location: "Main Sanctuary",
-    startDate: "2026-03-30T09:00:00",
-    endDate: "2026-03-30T11:30:00",
-    rsvpCount: 245,
-    capacity: 400,
-    status: "upcoming",
-    isRecurring: true,
-  },
-  {
-    id: "2",
-    title: "Mid-Week Bible Study",
-    description:
-      "Deep dive into the book of Romans. Bring your Bible and study materials.",
-    location: "Fellowship Hall",
-    startDate: "2026-04-01T18:30:00",
-    endDate: "2026-04-01T20:00:00",
-    rsvpCount: 68,
-    capacity: 100,
-    status: "upcoming",
-    isRecurring: true,
-  },
-  {
-    id: "3",
-    title: "Youth Group Meeting",
-    description: "Fun, fellowship, and faith-building for teens ages 13-18.",
-    location: "Youth Center",
-    startDate: "2026-04-03T17:00:00",
-    endDate: "2026-04-03T19:00:00",
-    rsvpCount: 42,
-    status: "upcoming",
-    isRecurring: true,
-  },
-  {
-    id: "4",
-    title: "Community Outreach",
-    description:
-      "Monthly food distribution and community service at City Park.",
-    location: "City Park",
-    startDate: "2026-04-05T10:00:00",
-    endDate: "2026-04-05T14:00:00",
-    rsvpCount: 35,
-    status: "upcoming",
-    isRecurring: false,
-  },
-  {
-    id: "5",
-    title: "Easter Celebration",
-    description:
-      "Special Easter service with choir performance, drama, and fellowship dinner.",
-    location: "Main Sanctuary",
-    startDate: "2026-04-05T08:00:00",
-    endDate: "2026-04-05T13:00:00",
-    rsvpCount: 380,
-    capacity: 500,
-    status: "upcoming",
-    isRecurring: false,
-  },
-  {
-    id: "6",
-    title: "Marriage Retreat",
-    description: "A weekend getaway for couples to strengthen their bond.",
-    location: "Lakeside Resort",
-    startDate: "2026-04-18T14:00:00",
-    endDate: "2026-04-20T12:00:00",
-    rsvpCount: 24,
-    capacity: 30,
-    status: "upcoming",
-    isRecurring: false,
-  },
-];
+/**
+ * Calculate event status based on current time and event dates.
+ *
+ * Status is not a field in the backend — it's derived from comparing the
+ * event's start/end dates to now.
+ */
+function calculateStatus(
+  startDate: string,
+  endDate?: string,
+): "upcoming" | "ongoing" | "completed" | "cancelled" {
+  const now = new Date();
+  const start = new Date(startDate);
+  const end = endDate ? new Date(endDate) : start;
+
+  if (now < start) return "upcoming";
+  if (now > end) return "completed";
+  return "ongoing";
+}
 
 export default function EventsPage() {
-  const [events, setEvents] = useState<EventItem[]>(sampleEvents);
+  const [events, setEvents] = useState<EventItem[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
   const [formOpen, setFormOpen] = useState(false);
   const [editEvent, setEditEvent] = useState<EventItem | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<EventItem | null>(null);
   const [attendanceEvent, setAttendanceEvent] = useState<EventItem | null>(null);
 
-  const handleCreate = () => {
+  const load = useCallback(async () => {
+    setLoading(true);
+    setLoadError(null);
+    try {
+      const result = await EventService.getAll();
+      const eventsWithStatus = result.events.map((e) => ({
+        ...e,
+        status: calculateStatus(e.startDate, e.endDate),
+      }));
+      setEvents(eventsWithStatus);
+    } catch {
+      // The list stays empty and SAYS so. Falling back to placeholder events
+      // here would be worse than an error: a church cannot tell invented
+      // events from real ones.
+      setLoadError("We could not load your events. Check your connection and try again.");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const handleCreate = useCallback(() => {
     setEditEvent(null);
     setFormOpen(true);
-  };
+  }, []);
 
-  const handleEdit = (id: string) => {
+  const handleEdit = useCallback((id: string) => {
     const ev = events.find((e) => e.id === id) ?? null;
     setEditEvent(ev);
     setFormOpen(true);
-  };
+  }, [events]);
 
-  const handleFormSubmit = async (data: EventFormData) => {
-    // TODO: Call EventService.create or EventService.update
-    if (editEvent) {
-      setEvents((prev) =>
-        prev.map((e) =>
-          e.id === editEvent.id
-            ? { ...e, ...data, isRecurring: data.isRecurring, capacity: data.capacity ? Number(data.capacity) : undefined }
-            : e,
-        ),
-      );
-    } else {
-      const newEvent: EventItem = {
-        id: String(Date.now()),
-        title: data.title,
-        description: data.description ?? "",
-        location: data.location ?? "",
-        startDate: data.startDate,
-        endDate: data.endDate,
-        rsvpCount: 0,
-        capacity: data.capacity ? Number(data.capacity) : undefined,
-        status: "upcoming",
-        isRecurring: data.isRecurring,
-      };
-      setEvents((prev) => [newEvent, ...prev]);
-    }
-  };
+  const handleFormSubmit = useCallback(
+    async (data: EventFormData) => {
+      try {
+        if (editEvent) {
+          const updated = await EventService.update(editEvent.id, {
+            title: data.title,
+            description: data.description,
+            location: data.location,
+            startDate: data.startDate,
+            endDate: data.endDate,
+            capacity: data.capacity ? Number(data.capacity) : undefined,
+            isRecurring: data.isRecurring,
+          });
+          const eventWithStatus = {
+            ...updated,
+            status: calculateStatus(updated.startDate, updated.endDate),
+          };
+          setEvents((prev) =>
+            prev.map((e) => (e.id === eventWithStatus.id ? eventWithStatus : e)),
+          );
+          setNotice(`${updated.title} updated.`);
+        } else {
+          const created = await EventService.create({
+            title: data.title,
+            description: data.description,
+            location: data.location,
+            startDate: data.startDate,
+            endDate: data.endDate,
+            capacity: data.capacity ? Number(data.capacity) : undefined,
+            isRecurring: data.isRecurring,
+          });
+          const eventWithStatus = {
+            ...created,
+            status: calculateStatus(created.startDate, created.endDate),
+          };
+          setEvents((prev) => [eventWithStatus, ...prev]);
+          setNotice(`${created.title} added.`);
+        }
+        setFormOpen(false);
+      } catch {
+        // Left open with the values intact — closing the form on failure
+        // discards what someone just typed and implies it saved.
+        setNotice("That did not save. Please check the details and try again.");
+      }
+    },
+    [editEvent],
+  );
 
-  const handleDelete = () => {
+  const handleDelete = useCallback(async () => {
     if (!deleteTarget) return;
-    // TODO: Call EventService.remove
-    setEvents((prev) => prev.filter((e) => e.id !== deleteTarget.id));
+    const target = deleteTarget;
     setDeleteTarget(null);
-  };
+    try {
+      await EventService.remove(target.id);
+      setEvents((prev) => prev.filter((e) => e.id !== target.id));
+      setNotice(`${target.title} deleted.`);
+    } catch {
+      setNotice("We could not delete that event. Please try again.");
+    }
+  }, [deleteTarget]);
 
   const listColumns: Column<EventItem>[] = [
     { id: "title", label: "Title", minWidth: 200 },
@@ -234,7 +224,25 @@ export default function EventsPage() {
         </Box>
       </Box>
 
-      {viewMode === "grid" ? (
+      {loadError && (
+        <Alert
+          severity="error"
+          sx={{ mb: 2 }}
+          action={
+            <Button color="inherit" size="small" onClick={() => void load()}>
+              Retry
+            </Button>
+          }
+        >
+          {loadError}
+        </Alert>
+      )}
+
+      {loading ? (
+        <Box sx={{ display: "flex", justifyContent: "center", py: 8 }}>
+          <CircularProgress />
+        </Box>
+      ) : viewMode === "grid" ? (
         <Grid container spacing={3}>
           {events.map((event) => (
             <Grid key={event.id} size={{ xs: 12, sm: 6, md: 4 }}>
@@ -306,8 +314,15 @@ export default function EventsPage() {
         message={`Are you sure you want to delete "${deleteTarget?.title}"? This action cannot be undone.`}
         confirmLabel="Delete"
         confirmColor="error"
-        onConfirm={handleDelete}
+        onConfirm={() => void handleDelete()}
         onCancel={() => setDeleteTarget(null)}
+      />
+
+      <Snackbar
+        open={!!notice}
+        autoHideDuration={5000}
+        onClose={() => setNotice(null)}
+        message={notice ?? ""}
       />
     </Box>
   );
