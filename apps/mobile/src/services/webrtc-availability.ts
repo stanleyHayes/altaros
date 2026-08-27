@@ -47,7 +47,7 @@ let cached: WebRTCModule | null | undefined;
 export function loadWebRTC(): WebRTCModule | null {
   if (cached !== undefined) return cached;
   try {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires, global-require
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
     const mod = require('react-native-webrtc') as Partial<WebRTCModule>;
     cached =
       mod && typeof mod.RTCPeerConnection === 'function'
