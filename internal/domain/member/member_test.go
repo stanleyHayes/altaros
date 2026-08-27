@@ -452,7 +452,7 @@ func TestUpdateNormalisesACorrectedPhoneNumber(t *testing.T) {
 	}
 
 	// Written the way a person types it, not the way it is stored.
-	updated, err := svc.Update(ctx, created.ID.String(), Input{
+	updated, err := svc.Update(ctx, created.ID.Hex(), Input{
 		FirstName: "Ama", LastName: "Owusu",
 		Phone: "024 400 0222", Email: "ama@example.org",
 	})
@@ -487,7 +487,7 @@ func TestUpdateClearsAFieldTheChurchEmptied(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 
-	updated, err := svc.Update(ctx, created.ID.String(), Input{
+	updated, err := svc.Update(ctx, created.ID.Hex(), Input{
 		FirstName: "Kofi", LastName: "Boateng", Phone: "0244000333",
 	})
 	if err != nil {
