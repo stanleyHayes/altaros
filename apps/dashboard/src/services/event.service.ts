@@ -1,5 +1,21 @@
 import { get, post, put, del } from "./api";
 
+/**
+ * One check-in.
+ *
+ * Records who DID attend, keyed by member id — there is no name on it and no
+ * row for someone who stayed away. A screen listing the whole roster with a
+ * present/absent mark therefore has to join this against the members list;
+ * attendance alone cannot answer "who was missing".
+ */
+export interface AttendanceRecord {
+  id: string;
+  eventId: string;
+  memberId: string;
+  occurrenceAt: string;
+  method: string;
+}
+
 export interface Event {
   id: string;
   title: string;
@@ -90,10 +106,19 @@ const EventService = {
     return post<void>(`/events/${payload.eventId}/attendance`, payload);
   },
 
+  /**
+   * Check-ins for an event.
+   *
+   * The declared return type used to promise `memberName` on every row. The
+   * endpoint has never sent one — attendance is keyed by member id — so any
+   * screen that trusted the type rendered undefined where a name should be.
+   */
   async getAttendance(
     eventId: string,
-  ): Promise<{ memberId: string; memberName: string; date: string }[]> {
-    return get(`/events/${eventId}/attendance`);
+  ): Promise<{ attendance: AttendanceRecord[]; total: number }> {
+    return get<{ attendance: AttendanceRecord[]; total: number }>(
+      `/events/${eventId}/attendance`,
+    );
   },
 };
 

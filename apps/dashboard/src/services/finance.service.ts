@@ -48,15 +48,22 @@ export interface CreateCampaignPayload {
   endDate?: string;
 }
 
+/**
+ * What GET /finance/transactions actually reads.
+ *
+ * It previously advertised startDate, endDate, page, sortBy and sortOrder.
+ * The endpoint reads none of those — the date range is `from`/`to`, and there
+ * is no paging or sorting — so a caller passing startDate got the UNFILTERED
+ * ledger back with no error to say the filter was dropped. On a giving screen
+ * that is not a cosmetic bug: it silently shows more than was asked for.
+ */
 export interface TransactionSearchParams {
+  memberId?: string;
   type?: string;
   status?: string;
-  startDate?: string;
-  endDate?: string;
-  page?: number;
-  limit?: number;
-  sortBy?: string;
-  sortOrder?: "asc" | "desc";
+  direction?: "in" | "out";
+  from?: string;
+  to?: string;
 }
 
 export interface PaginatedResponse<T> {
@@ -68,12 +75,24 @@ export interface PaginatedResponse<T> {
 }
 
 const FinanceService = {
+  /** Transactions. Returns a bare array — the endpoint is not paginated. */
   async getTransactions(
     params?: TransactionSearchParams,
-  ): Promise<PaginatedResponse<Transaction>> {
-    return get<PaginatedResponse<Transaction>>("/finance/transactions", {
-      params,
-    });
+  ): Promise<Transaction[]> {
+    const txs = await get<Transaction[]>("/finance/transactions", { params });
+    return Array.isArray(txs) ? txs : [];
+  },
+
+  /**
+   * One member's giving.
+   *
+   * Requires finance:read — ?memberId= makes the underlying endpoint a
+   * congregation-wide giving reader, so it is guarded as one. A caller
+   * without that permission gets a 403, which the drawer shows as "not
+   * available to you" rather than as an error.
+   */
+  async getMemberGiving(memberId: string): Promise<Transaction[]> {
+    return FinanceService.getTransactions({ memberId, direction: "in" });
   },
 
   async getTransactionById(id: string): Promise<Transaction> {

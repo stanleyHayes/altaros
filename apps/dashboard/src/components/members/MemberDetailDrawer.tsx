@@ -1,6 +1,9 @@
+import { useEffect, useState } from "react";
 import {
   Drawer,
   Box,
+  CircularProgress,
+  Alert,
   Typography,
   Avatar,
   Chip,
@@ -22,6 +25,7 @@ import {
   Home as HomeIcon,
   Cake as CakeIcon,
 } from "@mui/icons-material";
+import FinanceService, { type Transaction } from "@/services/finance.service";
 
 interface MemberDetail {
   id: string;
@@ -43,20 +47,56 @@ interface MemberDetailDrawerProps {
   member: MemberDetail | null;
 }
 
-// TODO: Replace with real giving history from FinanceService
-const mockGivingHistory = [
-  { date: "2026-03-15", type: "Tithe", amount: "$500" },
-  { date: "2026-02-15", type: "Tithe", amount: "$500" },
-  { date: "2026-02-01", type: "Offering", amount: "$100" },
-  { date: "2026-01-15", type: "Tithe", amount: "$500" },
-  { date: "2026-01-05", type: "Donation", amount: "$250" },
-];
+/**
+ * Money is shown in the currency the transaction was recorded in.
+ *
+ * The placeholder this replaced was hardcoded to US dollars in a platform
+ * that runs on Ghana cedis, so the numbers were not merely invented — they
+ * were invented in the wrong currency, on a screen a church would read as its
+ * own record of what somebody gave.
+ */
+function money(minor: number, currency: string): string {
+  return new Intl.NumberFormat("en-GH", {
+    style: "currency",
+    currency: currency || "GHS",
+  }).format(minor / 100);
+}
 
 export default function MemberDetailDrawer({
   open,
   onClose,
   member,
 }: MemberDetailDrawerProps) {
+  const [giving, setGiving] = useState<Transaction[]>([]);
+  const [givingState, setGivingState] = useState<
+    "loading" | "ready" | "forbidden" | "error"
+  >("loading");
+
+  const memberId = member?.id;
+  useEffect(() => {
+    if (!open || !memberId) return;
+    let cancelled = false;
+    setGivingState("loading");
+    (async () => {
+      try {
+        const txs = await FinanceService.getMemberGiving(memberId);
+        if (!cancelled) {
+          setGiving(txs);
+          setGivingState("ready");
+        }
+      } catch (err) {
+        if (cancelled) return;
+        // Reading a member's giving needs finance:read. Someone without it
+        // is not seeing an outage, so it must not be reported as one.
+        const status = (err as { response?: { status?: number } })?.response?.status;
+        setGivingState(status === 403 ? "forbidden" : "error");
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [open, memberId]);
+
   if (!member) return null;
 
   const fullName = `${member.firstName} ${member.lastName}`;
@@ -208,18 +248,46 @@ export default function MemberDetailDrawer({
               </TableCell>
             </TableRow>
           </TableHead>
+          {givingState === "loading" && (
+            <Box sx={{ display: "flex", justifyContent: "center", py: 3 }}>
+              <CircularProgress size={22} />
+            </Box>
+          )}
+          {givingState === "forbidden" && (
+            <Alert severity="info" sx={{ mb: 1 }}>
+              Giving records are not available to your role.
+            </Alert>
+          )}
+          {givingState === "error" && (
+            <Alert severity="warning" sx={{ mb: 1 }}>
+              We could not load this member’s giving.
+            </Alert>
+          )}
           <TableBody>
-            {mockGivingHistory.map((entry, idx) => (
-              <TableRow key={idx}>
+            {givingState === "ready" && giving.length === 0 && (
+              <TableRow>
+                <TableCell colSpan={3} sx={{ py: 2, border: 0 }}>
+                  <Typography variant="body2" color="text.secondary">
+                    No giving recorded yet.
+                  </Typography>
+                </TableCell>
+              </TableRow>
+            )}
+            {giving.map((entry) => (
+              <TableRow key={entry.id}>
                 <TableCell sx={{ py: 0.5 }}>
-                  <Typography variant="body2">{entry.date}</Typography>
+                  <Typography variant="body2">
+                    {(entry.date ?? entry.createdAt ?? "").slice(0, 10)}
+                  </Typography>
                 </TableCell>
                 <TableCell sx={{ py: 0.5 }}>
-                  <Typography variant="body2">{entry.type}</Typography>
+                  <Typography variant="body2" sx={{ textTransform: "capitalize" }}>
+                    {entry.type}
+                  </Typography>
                 </TableCell>
                 <TableCell sx={{ py: 0.5 }} align="right">
                   <Typography variant="body2" sx={{ fontWeight: 500 }}>
-                    {entry.amount}
+                    {money(entry.amount, entry.currency)}
                   </Typography>
                 </TableCell>
               </TableRow>

@@ -1,9 +1,11 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
+  Alert,
   Avatar,
   Box,
   Button,
   Chip,
+  CircularProgress,
   Dialog,
   DialogActions,
   DialogContent,
@@ -26,6 +28,8 @@ import QrCodeScannerIcon from "@mui/icons-material/QrCodeScanner";
 import CheckCircleIcon from "@mui/icons-material/CheckCircle";
 import RadioButtonUncheckedIcon from "@mui/icons-material/RadioButtonUnchecked";
 import DownloadIcon from "@mui/icons-material/Download";
+import MemberService from "@/services/member.service";
+import EventService from "@/services/event.service";
 
 interface AttendanceDialogProps {
   open: boolean;
@@ -41,16 +45,6 @@ interface AttendeeRow {
   checkedIn: boolean;
   checkedInAt?: string;
 }
-
-// TODO: Replace with real API data (GET /events/:id/attendance).
-const MOCK_ATTENDEES: AttendeeRow[] = [
-  { id: "1", name: "Kwame Mensah", phone: "+233 24 123 4567", checkedIn: true, checkedInAt: "09:12" },
-  { id: "2", name: "Ama Owusu", phone: "+233 20 987 6543", checkedIn: true, checkedInAt: "09:18" },
-  { id: "3", name: "Kofi Boateng", phone: "+233 55 234 5678", checkedIn: false },
-  { id: "4", name: "Abena Sarpong", phone: "+233 27 345 6789", checkedIn: true, checkedInAt: "09:31" },
-  { id: "5", name: "Yaw Darko", phone: "+233 24 456 7890", checkedIn: false },
-  { id: "6", name: "Akosua Frimpong", phone: "+233 50 567 8901", checkedIn: false },
-];
 
 function initials(name: string) {
   return name
@@ -68,7 +62,101 @@ export default function AttendanceDialog({
   eventId,
 }: AttendanceDialogProps) {
   const [query, setQuery] = useState("");
-  const [attendees, setAttendees] = useState<AttendeeRow[]>(MOCK_ATTENDEES);
+  const [attendees, setAttendees] = useState<AttendeeRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!open || !eventId) return;
+    let cancelled = false;
+    setLoading(true);
+    setLoadError(null);
+    (async () => {
+      try {
+        // Two requests, joined here. Attendance records say who checked IN,
+        // keyed by member id with no name on them; the roster supplies both
+        // the names and the people who did not come. Neither answers "who was
+        // missing" alone.
+        const [members, attendance] = await Promise.all([
+          MemberService.getAll(),
+          EventService.getAttendance(eventId),
+        ]);
+        if (cancelled) return;
+
+        const checkedInAt = new Map<string, string>();
+        for (const record of attendance?.attendance ?? []) {
+          checkedInAt.set(record.memberId, record.occurrenceAt);
+        }
+
+        setAttendees(
+          members.map((m) => {
+            const at = checkedInAt.get(m.id);
+            return {
+              id: m.id,
+              name: `${m.firstName} ${m.lastName}`.trim(),
+              phone: m.phone ?? "",
+              checkedIn: at !== undefined,
+              checkedInAt: at
+                ? new Date(at).toLocaleTimeString([], {
+                    hour: "2-digit",
+                    minute: "2-digit",
+                  })
+                : undefined,
+            };
+          }),
+        );
+      } catch {
+        if (!cancelled) {
+          // No fallback roster. An attendance sheet of invented people is
+          // worse than an empty one: it gets marked, saved and believed.
+          setLoadError("We could not load the attendance list. Please try again.");
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [open, eventId]);
+
+  /**
+   * Export the sheet as CSV.
+   *
+   * Built in the browser from the rows already on screen rather than fetched:
+   * there is no export endpoint, and the button previously logged to the
+   * console and did nothing, which reads to an usher as a broken download.
+   *
+   * Fields are quoted and embedded quotes doubled — a member whose name or
+   * address contains a comma would otherwise shift every later column, and
+   * one starting with = or + is prefixed so a spreadsheet treats it as text
+   * rather than a formula.
+   */
+  const exportCsv = () => {
+    const cell = (value: string) => {
+      const safe = /^[=+\-@]/.test(value) ? `'${value}` : value;
+      return `"${safe.replace(/"/g, '""')}"`;
+    };
+    const rows = [
+      ["Name", "Phone", "Checked in", "Time"],
+      ...attendees.map((a) => [
+        a.name,
+        a.phone,
+        a.checkedIn ? "yes" : "no",
+        a.checkedInAt ?? "",
+      ]),
+    ];
+    const csv = rows.map((r) => r.map(cell).join(",")).join("\r\n");
+
+    const url = URL.createObjectURL(
+      new Blob([`\uFEFF${csv}`], { type: "text/csv;charset=utf-8" }),
+    );
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `attendance-${eventTitle.replace(/[^a-z0-9]+/gi, "-").toLowerCase()}.csv`;
+    link.click();
+    URL.revokeObjectURL(url);
+  };
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -128,6 +216,16 @@ export default function AttendanceDialog({
       <Divider />
 
       <DialogContent sx={{ pt: 2.5 }}>
+        {loadError && (
+          <Alert severity="error" sx={{ mb: 2 }}>
+            {loadError}
+          </Alert>
+        )}
+        {loading && (
+          <Box sx={{ display: "flex", justifyContent: "center", py: 4 }}>
+            <CircularProgress size={26} />
+          </Box>
+        )}
         <Stack
           direction="row"
           spacing={1.5}
@@ -227,10 +325,7 @@ export default function AttendanceDialog({
       <DialogActions sx={{ px: 3, py: 2 }}>
         <Button
           startIcon={<DownloadIcon />}
-          onClick={() => {
-            // TODO: wire to GET /events/:id/attendance/export
-            console.info("Export attendance for event", eventId);
-          }}
+          onClick={exportCsv}
           sx={{ mr: "auto" }}
         >
           Export
