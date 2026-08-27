@@ -119,6 +119,8 @@ func handleUpdateMember(svc *member.Service) http.HandlerFunc {
 			Email       string `json:"email"`
 			Gender      string `json:"gender"`
 			HouseholdID string `json:"householdId"`
+			Address     string `json:"address"`
+			DateOfBirth string `json:"dateOfBirth"`
 		}
 		if err := decode(r, &req); err != nil {
 			httpx.Error(w, http.StatusBadRequest, "Malformed request body")
@@ -135,6 +137,8 @@ func handleUpdateMember(svc *member.Service) http.HandlerFunc {
 			Email:       req.Email,
 			Gender:      req.Gender,
 			HouseholdID: req.HouseholdID,
+			Address:     req.Address,
+			DateOfBirth: req.DateOfBirth,
 		})
 		if err != nil {
 			writeMemberError(w, err)
@@ -154,6 +158,8 @@ func handleCreateMember(svc *member.Service) http.HandlerFunc {
 			Gender      string `json:"gender"`
 			Status      string `json:"status"`
 			HouseholdID string `json:"householdId"`
+			Address     string `json:"address"`
+			DateOfBirth string `json:"dateOfBirth"`
 		}
 		if err := decode(r, &req); err != nil {
 			httpx.Error(w, http.StatusBadRequest, "Malformed request body")
@@ -168,6 +174,8 @@ func handleCreateMember(svc *member.Service) http.HandlerFunc {
 			Gender:      req.Gender,
 			Status:      member.Status(req.Status),
 			HouseholdID: req.HouseholdID,
+			Address:     req.Address,
+			DateOfBirth: req.DateOfBirth,
 		})
 		if err != nil {
 			writeMemberError(w, err)
@@ -244,6 +252,8 @@ func writeMemberError(w http.ResponseWriter, err error) {
 		httpx.Error(w, http.StatusConflict, "A member with that phone number already exists.")
 	case errors.Is(err, member.ErrNameRequired):
 		httpx.Error(w, http.StatusBadRequest, "A first or last name is required.")
+	case errors.Is(err, member.ErrInvalidDateOfBirth):
+		httpx.Error(w, http.StatusBadRequest, "Date of birth must be in YYYY-MM-DD form.")
 	case errors.Is(err, member.ErrInvalidStatus):
 		httpx.Error(w, http.StatusBadRequest, "That status is not recognised.")
 	case errors.Is(err, tenancy.ErrNoTenant):

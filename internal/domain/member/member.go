@@ -65,6 +65,8 @@ var (
 	ErrNameRequired = errors.New("member: a first or last name is required")
 	// ErrInvalidStatus means an unrecognised status was supplied.
 	ErrInvalidStatus = errors.New("member: unrecognised status")
+	// ErrInvalidDateOfBirth means the date was not YYYY-MM-DD.
+	ErrInvalidDateOfBirth = errors.New("member: date of birth must be YYYY-MM-DD")
 	// ErrDuplicate means a member with that phone already exists in the
 	// church.
 	ErrDuplicate = errors.New("member: a member with that phone number already exists")
@@ -84,6 +86,11 @@ type Member struct {
 	Email       string     `bson:"email,omitempty"     json:"email,omitempty"`
 	Gender      string     `bson:"gender,omitempty"    json:"gender,omitempty"`
 	DateOfBirth *time.Time `bson:"dateOfBirth,omitempty" json:"dateOfBirth,omitempty"`
+	// Address is read and written by the legacy TypeScript API into this same
+	// collection (ADR-005). Go omitted it entirely, so every member created
+	// over there lost their address the moment this API returned them, and the
+	// dashboard's address field — which collects one — had nowhere to put it.
+	Address string `bson:"address,omitempty" json:"address,omitempty"`
 	// HouseholdID links family members, which the spec calls family linking.
 	HouseholdID mongodb.ID `bson:"householdId,omitempty" json:"householdId,omitempty"`
 	// DepartmentIDs and GroupIDs are the ministries and cells a person belongs
@@ -249,6 +256,12 @@ type Input struct {
 	Gender      string
 	Status      Status
 	HouseholdID string
+	Address     string
+	// DateOfBirth as the client sends it: YYYY-MM-DD. Kept as a string here
+	// so a malformed date is rejected with the rest of the input rather than
+	// silently becoming the zero time, which would file a member under the
+	// year 1.
+	DateOfBirth string
 }
 
 // Create adds a member.
@@ -390,6 +403,16 @@ func (s *Service) buildDoc(in Input) (bson.M, error) {
 	}
 	if h := strings.TrimSpace(in.HouseholdID); h != "" {
 		doc["householdId"] = h
+	}
+	if a := strings.TrimSpace(in.Address); a != "" {
+		doc["address"] = a
+	}
+	if d := strings.TrimSpace(in.DateOfBirth); d != "" {
+		parsed, err := time.Parse("2006-01-02", d)
+		if err != nil {
+			return nil, fmt.Errorf("%w: %q", ErrInvalidDateOfBirth, d)
+		}
+		doc["dateOfBirth"] = parsed
 	}
 	return doc, nil
 }
@@ -773,7 +796,18 @@ func (s *Service) Update(ctx context.Context, id string, in Input) (*Member, err
 
 	// Carry the current status through so buildDoc validates against a real
 	// value rather than defaulting a long-standing member back to visitor.
-	in.Status = existing.Status
+	//
+	// Unless it is one this package does not recognise. The legacy TypeScript
+	// API writes to this same collection (ADR-005) and its vocabulary is not
+	// identical, so validating an untouched legacy value here would refuse the
+	// edit outright — leaving a church unable to correct the phone number of
+	// exactly the members it imported. The status is stripped below either
+	// way, so this only has to satisfy the validator.
+	if existing.Status.Valid() {
+		in.Status = existing.Status
+	} else {
+		in.Status = StatusVisitor
+	}
 	doc, err := s.buildDoc(in)
 	if err != nil {
 		return nil, err
