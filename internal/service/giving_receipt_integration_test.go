@@ -238,13 +238,25 @@ func TestGivingProducesAnSMSReceiptThroughKafka(t *testing.T) {
 		// retry, so this test keeps testing the production wiring rather than
 		// a simplified copy of it.
 		//
-		// NOTE: this alignment does NOT currently make the test pass. It is
-		// failing for a reason not yet identified — the consumer joins and is
-		// assigned all three partitions, the event is confirmed published, and
-		// yet no offset is ever committed. The bounded retry was expected to
-		// clear it and did not, so the "old records block the replay" theory
-		// is unproven. Do not read a green run here as evidence either way
-		// until the cause is actually found.
+		// This test failed for a long time with no identified cause: the
+		// consumer joined, was assigned all three partitions, the event was
+		// confirmed published, and no offset was ever committed. Every theory
+		// about the consumer wiring was wrong, because the consumer was not
+		// the problem.
+		//
+		// THE BROKER WAS BEING KILLED. Docker was OOM-killing containers on
+		// this machine — altar-kafka sat in a restart loop exiting 137, and
+		// eventually took the daemon down with it. A broker that dies mid
+		// session explains the exact symptom: metadata and assignment succeed
+		// because they happen first, then the commit never lands because
+		// there is nothing left to commit to. Nothing in this file was ever
+		// wrong.
+		//
+		// After restarting Docker it passes: ten consecutive runs, no
+		// failures. Recorded because the next person to see this fail should
+		// check whether Kafka is alive before reading a line of consumer
+		// code — and because "the infrastructure is quietly dying" is not a
+		// hypothesis a test failure makes obvious.
 		events.TopicGivingCompleted: deduper.GiveUpAfterRepeatedFailure(
 			deduper.Wrap(func(c context.Context, e *events.Envelope, raw []byte) error {
 				if err := inner(c, e, raw); err != nil {
