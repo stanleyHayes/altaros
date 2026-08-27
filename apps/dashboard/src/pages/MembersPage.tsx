@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import {
   Box,
   Typography,
@@ -8,6 +8,9 @@ import {
   Tooltip,
   MenuItem,
   TextField,
+  Alert,
+  CircularProgress,
+  Snackbar,
 } from "@mui/material";
 import {
   Add as AddIcon,
@@ -21,6 +24,7 @@ import MemberFormDialog, {
   type MemberFormData,
 } from "@/components/members/MemberFormDialog";
 import MemberDetailDrawer from "@/components/members/MemberDetailDrawer";
+import MemberService, { type Member } from "@/services/member.service";
 
 interface MemberRow {
   id: string;
@@ -36,91 +40,57 @@ interface MemberRow {
   [key: string]: unknown;
 }
 
-// TODO: Replace with real API data from MemberService
-const sampleRows: MemberRow[] = [
-  {
-    id: "1",
-    firstName: "John",
-    lastName: "Smith",
-    email: "john@example.com",
-    phone: "(555) 123-4567",
-    status: "active",
-    memberSince: "2023-01-15",
-    dateOfBirth: "1985-06-20",
-    address: "123 Main St, Springfield",
-    groups: ["Choir", "Ushering"],
-  },
-  {
-    id: "2",
-    firstName: "Sarah",
-    lastName: "Johnson",
-    email: "sarah@example.com",
-    phone: "(555) 234-5678",
-    status: "active",
-    memberSince: "2022-06-20",
-    dateOfBirth: "1990-03-15",
-    address: "456 Oak Ave, Springfield",
-    groups: ["Youth Ministry"],
-  },
-  {
-    id: "3",
-    firstName: "Michael",
-    lastName: "Williams",
-    email: "michael@example.com",
-    phone: "(555) 345-6789",
-    status: "visitor",
-    memberSince: "2024-03-10",
-  },
-  {
-    id: "4",
-    firstName: "Grace",
-    lastName: "Adekunle",
-    email: "grace@example.com",
-    phone: "(555) 456-7890",
-    status: "active",
-    memberSince: "2021-11-02",
-    dateOfBirth: "1988-12-25",
-    address: "789 Elm Dr, Springfield",
-    groups: ["Worship Team", "Women's Fellowship"],
-  },
-  {
-    id: "5",
-    firstName: "David",
-    lastName: "Okafor",
-    email: "david@example.com",
-    phone: "(555) 567-8901",
-    status: "active",
-    memberSince: "2023-08-14",
-    groups: ["Men's Fellowship"],
-  },
-  {
-    id: "6",
-    firstName: "Emily",
-    lastName: "Brown",
-    email: "emily@example.com",
-    phone: "(555) 678-9012",
-    status: "inactive",
-    memberSince: "2020-05-30",
-  },
-  {
-    id: "7",
-    firstName: "James",
-    lastName: "Taylor",
-    email: "james@example.com",
-    phone: "(555) 789-0123",
-    status: "active",
-    memberSince: "2024-01-20",
-    groups: ["Choir"],
-  },
-];
+/**
+ * A member as this table renders it.
+ *
+ * Mapped from the API's Member rather than used directly, because the table
+ * wants flat non-optional strings and the wire type has optionals. Doing the
+ * narrowing once here keeps every cell from having to guard.
+ */
+function toRow(m: Member): MemberRow {
+  return {
+    id: m.id,
+    firstName: m.firstName,
+    lastName: m.lastName,
+    email: m.email ?? "",
+    phone: m.phone ?? "",
+    status: m.status,
+    memberSince: (m.memberSince ?? m.createdAt ?? "").slice(0, 10),
+    dateOfBirth: m.dateOfBirth,
+    address: m.address,
+    groups: m.groups,
+  };
+}
 
 export default function MembersPage() {
-  const [members, setMembers] = useState<MemberRow[]>(sampleRows);
+  const [members, setMembers] = useState<MemberRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [formOpen, setFormOpen] = useState(false);
   const [editMember, setEditMember] = useState<MemberRow | null>(null);
   const [drawerMember, setDrawerMember] = useState<MemberRow | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<MemberRow | null>(null);
   const [statusFilter, setStatusFilter] = useState<string>("all");
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setLoadError(null);
+    try {
+      setMembers((await MemberService.getAll()).map(toRow));
+    } catch {
+      // The list stays empty and SAYS so. Falling back to placeholder people
+      // here would be worse than an error: a church cannot tell invented
+      // members from real ones, and this screen is the roster of record.
+      setLoadError("We could not load your members. Check your connection and try again.");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
 
   const filteredMembers =
     statusFilter === "all"
@@ -139,36 +109,65 @@ export default function MembersPage() {
 
   const handleFormSubmit = useCallback(
     async (data: MemberFormData) => {
-      // TODO: Call MemberService.create or MemberService.update
-      if (editMember) {
-        setMembers((prev) =>
-          prev.map((m) =>
-            m.id === editMember.id ? { ...m, ...data } : m,
-          ),
-        );
-      } else {
-        const newMember: MemberRow = {
-          id: String(Date.now()),
-          firstName: data.firstName,
-          lastName: data.lastName,
-          email: data.email ?? "",
-          phone: data.phone ?? "",
-          status: data.status,
-          memberSince: new Date().toISOString().split("T")[0],
-          dateOfBirth: data.dateOfBirth,
-          address: data.address,
-        };
-        setMembers((prev) => [newMember, ...prev]);
+      try {
+        if (editMember) {
+          const updated = await MemberService.update(editMember.id, {
+            firstName: data.firstName,
+            lastName: data.lastName,
+            email: data.email,
+            phone: data.phone,
+            address: data.address,
+            dateOfBirth: data.dateOfBirth,
+          });
+          setMembers((prev) =>
+            prev.map((m) => (m.id === updated.id ? toRow(updated) : m)),
+          );
+          setNotice(`${updated.firstName} ${updated.lastName} updated.`);
+        } else {
+          const created = await MemberService.create({
+            firstName: data.firstName,
+            lastName: data.lastName,
+            email: data.email,
+            phone: data.phone,
+            address: data.address,
+            dateOfBirth: data.dateOfBirth,
+            status: data.status,
+          });
+          setMembers((prev) => [toRow(created), ...prev]);
+          setNotice(`${created.firstName} ${created.lastName} added.`);
+        }
+        setFormOpen(false);
+      } catch {
+        // Left open with the values intact — closing the form on failure
+        // discards what someone just typed and implies it saved.
+        setNotice("That did not save. Please check the details and try again.");
       }
     },
     [editMember],
   );
 
-  const handleDelete = useCallback(() => {
+  /**
+   * Take someone off the active roll.
+   *
+   * Deactivation, not deletion. A church keeps six years of financial records
+   * (Act 915 s.28), so a giving history outlives a person's place on the
+   * roster; erasure is a data-subject right exercised through the privacy
+   * flow, not a row an admin drops from a table. The dialog says so plainly,
+   * because the button used to promise a permanent delete it never performed.
+   */
+  const handleDeactivate = useCallback(async () => {
     if (!deleteTarget) return;
-    // TODO: Call MemberService.remove
-    setMembers((prev) => prev.filter((m) => m.id !== deleteTarget.id));
+    const target = deleteTarget;
     setDeleteTarget(null);
+    try {
+      await MemberService.deactivate(target.id);
+      setMembers((prev) =>
+        prev.map((m) => (m.id === target.id ? { ...m, status: "inactive" } : m)),
+      );
+      setNotice(`${target.firstName} ${target.lastName} is now inactive.`);
+    } catch {
+      setNotice("We could not update that member. Please try again.");
+    }
   }, [deleteTarget]);
 
   const columns: Column<MemberRow>[] = [
@@ -232,7 +231,7 @@ export default function MembersPage() {
               <EditIcon fontSize="small" />
             </IconButton>
           </Tooltip>
-          <Tooltip title="Delete">
+          <Tooltip title="Mark inactive">
             <IconButton
               size="small"
               color="error"
@@ -271,6 +270,25 @@ export default function MembersPage() {
         </Button>
       </Box>
 
+      {loadError && (
+        <Alert
+          severity="error"
+          sx={{ mb: 2 }}
+          action={
+            <Button color="inherit" size="small" onClick={() => void load()}>
+              Retry
+            </Button>
+          }
+        >
+          {loadError}
+        </Alert>
+      )}
+
+      {loading ? (
+        <Box sx={{ display: "flex", justifyContent: "center", py: 8 }}>
+          <CircularProgress />
+        </Box>
+      ) : (
       <DataTable
         columns={columns}
         rows={filteredMembers}
@@ -293,6 +311,7 @@ export default function MembersPage() {
           </TextField>
         }
       />
+      )}
 
       {/* Add / Edit Dialog */}
       <MemberFormDialog
@@ -325,12 +344,23 @@ export default function MembersPage() {
       {/* Delete Confirmation */}
       <ConfirmDialog
         open={!!deleteTarget}
-        title="Delete Member"
-        message={`Are you sure you want to delete ${deleteTarget?.firstName} ${deleteTarget?.lastName}? This action cannot be undone.`}
-        confirmLabel="Delete"
-        confirmColor="error"
-        onConfirm={handleDelete}
+        title="Mark member inactive"
+        message={
+          `${deleteTarget?.firstName} ${deleteTarget?.lastName} will be moved off the ` +
+          `active roll. Their giving history is kept — a church must retain six years of ` +
+          `financial records — and you can make them active again at any time.`
+        }
+        confirmLabel="Mark inactive"
+        confirmColor="warning"
+        onConfirm={() => void handleDeactivate()}
         onCancel={() => setDeleteTarget(null)}
+      />
+
+      <Snackbar
+        open={!!notice}
+        autoHideDuration={5000}
+        onClose={() => setNotice(null)}
+        message={notice ?? ""}
       />
     </Box>
   );

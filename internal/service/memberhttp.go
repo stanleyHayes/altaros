@@ -54,6 +54,15 @@ func memberRoutes(d *deps.Deps) routeSet {
 			r.With(requirePermission(rbac.ResourceMember, rbac.ActionUpdate)).
 				Patch("/members/{id}/status", handleSetMemberStatus(svc))
 
+			// Correcting a record. Separate from the status route because they
+			// are different powers: fixing a misspelt surname is clerical work,
+			// marking someone inactive is a pastoral decision. They share the
+			// update permission today, but they are separate endpoints so the
+			// two can be told apart in an audit log and split later without
+			// moving a URL a client already calls.
+			r.With(requirePermission(rbac.ResourceMember, rbac.ActionUpdate)).
+				Patch("/members/{id}", handleUpdateMember(svc))
+
 			// A member may read their own record — ownership, checked in the
 			// handler, not a permission over the congregation.
 			r.Get("/members/{id}", handleGetMember(svc))
@@ -97,6 +106,41 @@ func handleGetMember(svc *member.Service) http.HandlerFunc {
 			return
 		}
 		httpx.JSON(w, http.StatusOK, m)
+	}
+}
+
+// handleUpdateMember corrects a member's details.
+func handleUpdateMember(svc *member.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			FirstName   string `json:"firstName"`
+			LastName    string `json:"lastName"`
+			Phone       string `json:"phone"`
+			Email       string `json:"email"`
+			Gender      string `json:"gender"`
+			HouseholdID string `json:"householdId"`
+		}
+		if err := decode(r, &req); err != nil {
+			httpx.Error(w, http.StatusBadRequest, "Malformed request body")
+			return
+		}
+
+		// Status is deliberately not read from the body. Accepting it here
+		// would route a pastoral decision through the clerical endpoint and
+		// silently bypass whatever guard the status route grows later.
+		updated, err := svc.Update(r.Context(), chi.URLParam(r, "id"), member.Input{
+			FirstName:   req.FirstName,
+			LastName:    req.LastName,
+			Phone:       req.Phone,
+			Email:       req.Email,
+			Gender:      req.Gender,
+			HouseholdID: req.HouseholdID,
+		})
+		if err != nil {
+			writeMemberError(w, err)
+			return
+		}
+		httpx.JSON(w, http.StatusOK, updated)
 	}
 }
 

@@ -742,3 +742,62 @@ func (s *Service) Count(ctx context.Context, status Status) (int64, error) {
 	}
 	return n, nil
 }
+
+// Update corrects a member's details.
+//
+// A congregation is not static: people change their phone number, marry into a
+// new surname, move house. Until this existed the only way to fix a record was
+// to re-upload a CSV and rely on Import's phone-match upsert — which meant a
+// church correcting one typo had to touch every row, and a member whose PHONE
+// was the thing that changed could not be corrected at all, because the phone
+// is what Import matches on.
+//
+// It reuses buildDoc, so a rule added to creation cannot quietly fail to apply
+// to editing. That matters most for phone normalisation: a number saved raw
+// here would never match at sign-in, and the member would be locked out of an
+// account the church believes it just fixed.
+//
+// Status is NOT settable here. It moves through SetStatus, which is guarded by
+// its own permission — the split exists so that someone who may correct a
+// spelling cannot also mark the congregation inactive.
+func (s *Service) Update(ctx context.Context, id string, in Input) (*Member, error) {
+	oid, err := bson.ObjectIDFromHex(id)
+	if err != nil {
+		return nil, ErrNotFound
+	}
+
+	existing, err := s.ByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+
+	// Carry the current status through so buildDoc validates against a real
+	// value rather than defaulting a long-standing member back to visitor.
+	in.Status = existing.Status
+	doc, err := s.buildDoc(in)
+	if err != nil {
+		return nil, err
+	}
+	delete(doc, "status")
+
+	// Fields absent from the input are CLEARED rather than left behind. An
+	// edit form that submits an empty email means "remove the email"; keeping
+	// the old value would leave a church unable to delete a wrong address it
+	// can plainly see on screen.
+	unset := bson.M{}
+	for _, f := range []string{"phoneE164", "email", "gender", "householdId"} {
+		if _, ok := doc[f]; !ok {
+			unset[f] = ""
+		}
+	}
+
+	update := bson.M{"$set": doc}
+	if len(unset) > 0 {
+		update["$unset"] = unset
+	}
+
+	if _, err := s.coll.UpdateOne(ctx, bson.M{"_id": oid}, update); err != nil {
+		return nil, fmt.Errorf("member: update: %w", err)
+	}
+	return s.ByID(ctx, id)
+}

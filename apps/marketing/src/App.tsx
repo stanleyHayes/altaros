@@ -25,6 +25,7 @@ import SolutionsDenominationsPage from "@/pages/SolutionsDenominationsPage";
 import ChangelogPage from "@/pages/ChangelogPage";
 import DocsPage from "@/pages/DocsPage";
 import PressPage from "@/pages/PressPage";
+import DirectoryPage from "@/pages/DirectoryPage";
 import NotFoundPage from "@/pages/NotFoundPage";
 import PricingPage from "@/pages/PricingPage";
 import GetStartedPage from "@/pages/GetStartedPage";
@@ -73,7 +74,8 @@ export default function App() {
               <Route path="/help" element={<HelpPage />} />
 
               {/* Company */}
-              <Route path="/about" element={<AboutPage />} />
+              <Route path="/directory" element={<DirectoryPage />} />
+          <Route path="/about" element={<AboutPage />} />
               <Route path="/careers" element={<CareersPage />} />
               <Route path="/contact" element={<ContactPage />} />
               <Route path="/press" element={<PressPage />} />

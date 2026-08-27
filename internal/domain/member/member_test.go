@@ -434,3 +434,79 @@ func TestImportRequiresTenantScope(t *testing.T) {
 		t.Fatalf("want ErrNoTenant, got %v", err)
 	}
 }
+
+// A member changes their phone number. Before Update existed the only way to
+// record that was Import, which MATCHES on phone — so the one correction a
+// church could not make was the one that mattered most: a member whose number
+// changed was unreachable, and would fail sign-in against the stale value.
+func TestUpdateNormalisesACorrectedPhoneNumber(t *testing.T) {
+	svc, _, ctx := newService(t)
+
+	created, err := svc.Create(ctx, Input{
+		FirstName: "Ama", LastName: "Mensah",
+		Phone: "0244000111", Email: "ama@example.org",
+		Status: StatusActive,
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	// Written the way a person types it, not the way it is stored.
+	updated, err := svc.Update(ctx, created.ID.String(), Input{
+		FirstName: "Ama", LastName: "Owusu",
+		Phone: "024 400 0222", Email: "ama@example.org",
+	})
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+
+	if updated.PhoneE164 != "+233244000222" {
+		t.Errorf("phone stored as %q, want E.164 — a raw number never matches at sign-in",
+			updated.PhoneE164)
+	}
+	if updated.LastName != "Owusu" {
+		t.Errorf("last name = %q, want Owusu", updated.LastName)
+	}
+	// Status is not settable through this path and must survive untouched.
+	if updated.Status != StatusActive {
+		t.Errorf("status = %q, want it carried through as active", updated.Status)
+	}
+}
+
+// An edit form that submits a blank email means "remove it". Leaving the old
+// value behind makes a church unable to delete a wrong address it can see.
+func TestUpdateClearsAFieldTheChurchEmptied(t *testing.T) {
+	svc, _, ctx := newService(t)
+
+	created, err := svc.Create(ctx, Input{
+		FirstName: "Kofi", LastName: "Boateng",
+		Email: "wrong@example.org", Phone: "0244000333",
+		Status: StatusActive,
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	updated, err := svc.Update(ctx, created.ID.String(), Input{
+		FirstName: "Kofi", LastName: "Boateng", Phone: "0244000333",
+	})
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if updated.Email != "" {
+		t.Errorf("email = %q, want it cleared", updated.Email)
+	}
+	if updated.PhoneE164 == "" {
+		t.Error("phone was cleared when it was submitted unchanged")
+	}
+}
+
+// A member id that does not belong to this church must not be editable.
+func TestUpdateRefusesAnUnknownMember(t *testing.T) {
+	svc, _, ctx := newService(t)
+	if _, err := svc.Update(ctx, bson.NewObjectID().Hex(), Input{
+		FirstName: "Nobody", LastName: "Here",
+	}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Update of an unknown member returned %v, want ErrNotFound", err)
+	}
+}
