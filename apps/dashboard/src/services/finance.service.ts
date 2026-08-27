@@ -80,14 +80,6 @@ export interface TransactionSearchParams {
   to?: string;
 }
 
-export interface PaginatedResponse<T> {
-  data: T[];
-  total: number;
-  page: number;
-  limit: number;
-  totalPages: number;
-}
-
 const FinanceService = {
   /** Summary of income, expenses, and fees over an optional window. */
   async getSummary(params?: {
