@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback } from "react";
 
 // Type for the actual response from the Go backend
 interface SpritualApiResponse<T> {
@@ -13,16 +13,11 @@ import Box from "@mui/material/Box";
 import Tabs from "@mui/material/Tabs";
 import Tab from "@mui/material/Tab";
 import Typography from "@mui/material/Typography";
-import Paper from "@mui/material/Paper";
-import TextField from "@mui/material/TextField";
-import IconButton from "@mui/material/IconButton";
 import CircularProgress from "@mui/material/CircularProgress";
 import Alert from "@mui/material/Alert";
-import SendIcon from "@mui/icons-material/Send";
 import DevotionalCard from "@/components/spiritual/DevotionalCard";
 import SermonCard from "@/components/spiritual/SermonCard";
 import PrayerRequestForm from "@/components/spiritual/PrayerRequestForm";
-import type { PrayerChatMessage } from "@altar-os/shared-types";
 import PageIntro from "@/components/ui/PageIntro";
 import { useSnackbar } from "notistack";
 import SpiritualService, { Devotional, Sermon } from "@/services/spiritual.service";

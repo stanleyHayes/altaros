@@ -18,11 +18,6 @@ interface GivingHistoryListProps {
   records: GivingRecord[];
 }
 
-const typeColors: Record<string, "primary" | "secondary" | "default"> = {
-  tithe: "primary",
-  offering: "secondary",
-  donation: "default",
-};
 
 export default function GivingHistoryList({ records }: GivingHistoryListProps) {
   if (records.length === 0) {
