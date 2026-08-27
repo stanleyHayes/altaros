@@ -110,7 +110,14 @@ export default function DirectoryPage() {
               An opt-in directory can legitimately be empty, and saying so
               plainly is better than an empty grid that reads as a broken page.
             */}
-            {!failed && churches.length === 0 && (
+            {/*
+              Both lists empty, not just the churches one. Listing a church
+              and listing a campaign are separate opt-ins, so a church can
+              publish an appeal here without adding itself — and saying "no
+              churches are listed" directly above appeals from named churches
+              reads as a broken page rather than an honest one.
+            */}
+            {!failed && churches.length === 0 && campaigns.length === 0 && (
               <Stack spacing={2} sx={{ py: 8, alignItems: "center" }}>
                 <ChurchRounded sx={{ fontSize: 48, color: "text.secondary", opacity: 0.5 }} />
                 <Typography variant="h6">No churches are listed yet</Typography>
